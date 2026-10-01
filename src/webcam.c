@@ -1,4 +1,6 @@
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include "media_internal.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -16,7 +18,8 @@
 struct CastCamera {
     int fd, w, h, stride;
     uint32_t format;
-    bool synthetic, streaming;
+    bool synthetic, streaming, failed;
+    uint64_t accept_after_ns;
     struct {
         void *ptr;
         size_t len;
@@ -275,10 +278,40 @@ static int decode(CastCamera *c, const void *data, size_t bytes, char *e, size_t
     c->cached.ts_ns = cast_now_ns();
     return 0;
 }
+bool camera_failed(CastCamera *c)
+{
+    return c && c->failed;
+}
+void camera_barrier(CastCamera *c)
+{
+    if (!c) {
+        return;
+    }
+    c->accept_after_ns = cast_now_ns();
+    frame_free(&c->cached);
+    if (c->synthetic) {
+        return;
+    }
+    /* Drain only buffers currently ready; never wait for hardware. Monotonic
+     * driver timestamps also reject old frames delivered after this boundary. */
+    for (unsigned i = 0; i < c->count; i++) {
+        struct v4l2_buffer b = {.type = V4L2_BUF_TYPE_VIDEO_CAPTURE, .memory = V4L2_MEMORY_MMAP};
+        if (xioctl(c->fd, VIDIOC_DQBUF, &b) < 0) {
+            break;
+        }
+        if (xioctl(c->fd, VIDIOC_QBUF, &b) < 0) {
+            break;
+        }
+    }
+}
 int camera_frame(CastCamera *c, Frame *out, char *e, size_t n)
 {
     if (!c) {
         snprintf(e, n, "camera unavailable");
+        return -1;
+    }
+    if (c->failed) {
+        snprintf(e, n, "webcam %s failed; explicitly select the camera device again", c->path);
         return -1;
     }
     if (c->synthetic) {
@@ -303,6 +336,7 @@ int camera_frame(CastCamera *c, Frame *out, char *e, size_t n)
     struct pollfd p = {.fd = c->fd, .events = POLLIN};
     int r = poll(&p, 1, 0);
     if (r < 0 || (p.revents & (POLLERR | POLLHUP | POLLNVAL))) {
+        c->failed = true;
         frame_free(&c->cached);
         snprintf(e, n, "webcam %s disappeared or stopped", c->path);
         return -1;
@@ -314,6 +348,7 @@ int camera_frame(CastCamera *c, Frame *out, char *e, size_t n)
             if (errno == EAGAIN) {
                 break;
             }
+            c->failed = true;
             frame_free(&c->cached);
             return error(e, n, "read webcam", c->path);
         }
@@ -321,8 +356,22 @@ int camera_frame(CastCamera *c, Frame *out, char *e, size_t n)
             snprintf(e, n, "invalid V4L2 webcam buffer");
             return -1;
         }
-        int ok = decode(c, c->bufs[b.index].ptr, b.bytesused, e, n);
+        uint64_t captured = cast_now_ns();
+        if ((b.flags & V4L2_BUF_FLAG_TIMESTAMP_MASK) == V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC &&
+            b.timestamp.tv_sec >= 0 && b.timestamp.tv_usec >= 0 && b.timestamp.tv_usec < 1000000) {
+            uint64_t stamp =
+                (uint64_t)b.timestamp.tv_sec * 1000000000 + (uint64_t)b.timestamp.tv_usec * 1000;
+            if (stamp <= captured) {
+                captured = stamp;
+            }
+        }
+        int ok =
+            captured < c->accept_after_ns ? 1 : decode(c, c->bufs[b.index].ptr, b.bytesused, e, n);
+        if (ok == 0) {
+            c->cached.ts_ns = captured;
+        }
         if (xioctl(c->fd, VIDIOC_QBUF, &b) < 0) {
+            c->failed = true;
             frame_free(&c->cached);
             return error(e, n, "requeue webcam", c->path);
         }
@@ -330,7 +379,7 @@ int camera_frame(CastCamera *c, Frame *out, char *e, size_t n)
             frame_free(&c->cached);
             return -1;
         }
-        got = true;
+        got |= ok == 0;
     }
     if (!c->cached.data || (!got && cast_now_ns() - c->cached.ts_ns > 500000000)) {
         snprintf(e, n, "waiting for fresh frames from webcam %s", c->path);

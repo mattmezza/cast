@@ -12,7 +12,7 @@ licenses of the dynamically linked libraries below.
 | inih r60 | INI parsing with source-line callbacks | BSD-3-Clause, bundled LICENSE.txt |
 | FFmpeg libavcodec/libavformat/libavutil/libswscale/libswresample | MJPEG decode, conversion, software encoding, audio resampling and muxing | LGPL-2.1-or-later baseline; GPL build options can change the effective license |
 | PipeWire | Audio capture/mix source and optional portal video | MIT for library core; distribution package carries notices for its other components |
-| Xlib, Xext, RandR, Xi, Xfixes | Optional Xorg capture/input/presentation | MIT/X11 family licenses from the distribution packages |
+| Xlib, Xext, RandR, Xi, Xfixes, XComposite | Optional Xorg capture/input/presentation | MIT/X11 family licenses from the distribution packages |
 | GLib/GIO/GObject | Optional Wayland async D-Bus portal and FD passing | LGPL-2.1-or-later |
 | v4l2loopback kernel module | Existing virtual camera device | GPL-2.0 kernel module; independently installed, not bundled or linked into cast |
 

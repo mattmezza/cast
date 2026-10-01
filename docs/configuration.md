@@ -15,6 +15,7 @@ is an error. Explicit file/recording paths may be relative; they are resolved by
 invoking process's working directory. No shell expressions, environment variables,
 backticks or tilde are expanded inside config values or command arguments.
 
+Assignments accept `key = value` or `key: value`.
 Syntax is ordinary INI parsed by vendored inih r60 (BSD-3-Clause). Sections and keys
 are case sensitive. Whitespace around names/values is trimmed. Only whole-line
 `;`/`#` comments are allowed. Values are literal single-line strings without quoting
@@ -23,7 +24,9 @@ Booleans are true/false (on/off aliases). Integers and finite decimal numbers ha
 unit suffix in configuration. Percent settings use percentage points (22 means 22%);
 audio gains use multipliers (0.8 means 80%). Milliseconds are explicit in key names.
 Lists use commas without spaces or empty elements; order/cycle lists reject duplicates.
-Navigation/filter lists contain XKB key names and rendered combinations. UTF-8 source
+Navigation/filter lists contain XKB key names and rendered combinations.
+Modifier order is Ctrl+Alt+Super+Shift; Space is rendered by name. The default filter
+excludes the supplied sxhkd bindings, including their shifted symbols. UTF-8 source
 names and paths are accepted; the bundled annotation bitmap font has limited glyphs.
 
 Maximum line length is 8190 bytes; section names are at most 49 bytes, and preset
@@ -128,7 +131,7 @@ The following table is the supported schema. `examples/cast.conf` includes every
 | keys | timeout_ms | `1800` | 100–30000 (integer) |
 | keys | color | `#ffffff` | #RRGGBB |
 | keys | background | `#20252b` | #RRGGBB |
-| keys | filter | `Super+Pause,Super+F9,Super+F10,Super+F11,Super+F12` | Literal string |
+| keys | filter | `Super+Pause,Super+F9,Super+F10,Super+F11,Super+F12,Super+Shift+P,Super+Shift+R,Super+P,Super+Shift+Space,Super+Shift+C,Super+=,Super+-,Super+Shift+A,Super+Shift+L,Super+Shift+D,Super+Shift+M,Super+Shift+S,Super+Z,Super+Shift++,Super+Shift+_,Super+Shift+K,Super+Shift+B,Super+Shift+V,Ctrl+Super+Shift+R,Ctrl+Super+Shift+S,Ctrl+Super+F,Ctrl+Super+Shift+F` | Literal string |
 | keys | navigation | `Left,Right,Up,Down,Home,End,Page_Up,Page_Down,Escape,Tab,Return,BackSpace,Delete` | Literal string |
 | annotations | live_keys | `true` | true / false |
 | annotations | live_clicks | `true` | true / false |

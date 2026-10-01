@@ -43,11 +43,41 @@ int main(void)
     load_test("[output]\nwidth=333\n", false, &c);
     load_test("[preset.bad]\nsecret=foo\n", false, &c);
     load_test("[zoom]\nmax=1\nfactor=2\n", false, &c);
+    load_test("[audio]\ndesktop=true\n", false, &c);
+    load_test("[composition]\nlayout_order=screen,screen\n", false, &c);
+    load_test("[preset.a_name_that_exceeds_the_parser_section_name_limit_without_truncation]"
+              "\nlayout=screen\n",
+              false, &c);
+    load_test("[keys]\nenabled=on\nmode: all\nfilter=Ctrl+Super+Shift+S\n", true, &c);
+    assert(c.keys && !strcmp(c.keys_mode, "all"));
     Config before = c;
     assert(config_load(&c, "/does/not/exist/cast.conf", true, e, sizeof e));
     assert(!memcmp(&c, &before, sizeof c));
     assert(!config_load(&c, "/does/not/exist/cast.conf", false, e, sizeof e));
     assert(c.camera_width_percent == 22);
+    /* Every initial output combination must survive idempotent group pause. */
+    for (int live_paused = 0; live_paused <= 1; live_paused++) {
+        for (int recording = 0; recording <= 1; recording++) {
+            for (int record_paused = 0; record_paused <= 1; record_paused++) {
+                State initial = {.live_paused = live_paused,
+                                 .recording = recording,
+                                 .record_paused = record_paused};
+                State actual = initial;
+                assert(!state_command(&actual, "pause", "", e, sizeof e));
+                assert(actual.live_paused);
+                if (recording) {
+                    assert(actual.record_paused);
+                }
+                assert(!state_command(&actual, "pause", "", e, sizeof e));
+                assert(!state_command(&actual, "resume", "", e, sizeof e));
+                assert(actual.live_paused == initial.live_paused);
+                assert(actual.recording == initial.recording);
+                assert(actual.record_paused == initial.record_paused);
+                assert(!actual.group_paused && !actual.group_live_restore &&
+                       !actual.group_record_restore);
+            }
+        }
+    }
     State s = {.live_paused = true};
     assert(state_command(&s, "record", "toggle", e, sizeof e));
     s.live_paused = false;

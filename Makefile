@@ -10,13 +10,13 @@ CFLAGS = -O2 -g
 WARN = -Wall -Wextra -Wformat=2 -Wstrict-prototypes -Wmissing-prototypes
 BASE_PACKAGES = libavcodec libavformat libavutil libswscale libswresample libpipewire-0.3
 PACKAGES = $(BASE_PACKAGES)
-SOURCES = src/main.c src/config.c src/state.c src/compositor.c src/platform.c src/media.c src/webcam.c src/audio.c src/record.c vendor/inih/ini.c
+SOURCES = src/main.c src/commands.c src/config.c src/state.c src/compositor.c src/platform.c src/media.c src/webcam.c src/audio.c src/record.c vendor/inih/ini.c
 INI_FLAGS = -DINI_HANDLER_LINENO=1 -DINI_CALL_HANDLER_ON_NEW_SECTION=1 -DINI_ALLOW_MULTILINE=0 -DINI_ALLOW_INLINE_COMMENTS=0 -DINI_STOP_ON_FIRST_ERROR=1 -DINI_MAX_LINE=8192
 CPPFLAGS += -Isrc -Ivendor/inih $(INI_FLAGS) -D_GNU_SOURCE
 LDLIBS += -lm -lpthread
 # GNU make conditionals keep backend dependency lists completely removable.
 ifeq ($(X11),1)
-PACKAGES += x11 xext xrandr xi xfixes
+PACKAGES += x11 xext xrandr xi xfixes xcomposite
 SOURCES += src/x11.c
 CPPFLAGS += -DWITH_X11
 endif
@@ -44,21 +44,50 @@ $(BUILD)/%.o: %.c src/cast.h
 $(BUILD)/test_core: tests/test_core.c $(CORE_SOURCES) src/cast.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_core.c $(CORE_SOURCES) -lm
-$(BUILD)/test_visual: tests/test_visual.c src/compositor.c src/state.c src/config.c vendor/inih/ini.c
+$(BUILD)/test_visual: tests/test_visual.c src/compositor.c src/cast.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ $^ -lm
-$(BUILD)/test_media: tests/test_media.c $(MEDIA_SOURCES) src/config.c vendor/inih/ini.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ $(filter %.c,$^) -lm
+$(BUILD)/test_media: tests/test_media.c $(MEDIA_SOURCES) src/config.c vendor/inih/ini.c src/cast.h src/media_internal.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -DCAST_TEST -o $@ $^ $(PKG_LIBS) $(LDLIBS)
-$(BUILD)/test_wayland: tests/test_wayland.c src/wayland.c src/compositor.c src/state.c
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -DCAST_TEST -o $@ $(filter %.c,$^) $(PKG_LIBS) $(LDLIBS)
+$(BUILD)/test_wayland: tests/test_wayland.c src/wayland.c src/compositor.c src/state.c src/cast.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_wayland.c src/compositor.c src/state.c $(PKG_LIBS) $(LDLIBS)
-check: cast $(BUILD)/test_core $(BUILD)/test_visual $(BUILD)/test_media
+$(BUILD)/test_commands: tests/test_commands.c $(SOURCES) src/app_internal.h src/cast.h src/media_internal.h src/platform_backend.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_commands.c $(filter-out src/main.c,$(SOURCES)) $(PKG_LIBS) $(LDLIBS)
+$(BUILD)/benchmark: tests/benchmark.c src/compositor.c $(CORE_SOURCES) src/cast.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ $(filter %.c,$^) -lm
+benchmark: $(BUILD)/benchmark
+	$(BUILD)/benchmark
+ifeq ($(X11),1)
+XORG_TEST_SOURCES = tests/x11_smoke.c src/compositor.c src/platform.c src/x11.c
+ifeq ($(WAYLAND),1)
+XORG_TEST_SOURCES += src/wayland.c
+endif
+$(BUILD)/test_xorg: $(XORG_TEST_SOURCES) src/cast.h src/platform_backend.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(shell $(PKG_CONFIG) --cflags xtst) $(CFLAGS) $(WARN) -std=gnu11 -o $@ $(XORG_TEST_SOURCES) $(PKG_LIBS) $(shell $(PKG_CONFIG) --libs xtst) $(LDLIBS)
+check-xorg: $(BUILD)/test_xorg
+	timeout 30s xvfb-run -a -s '-screen 0 800x600x24' $(BUILD)/test_xorg --exercise
+else
+check-xorg:
+	@echo 'check-xorg requires X11=1 and optional Xvfb/libXtst test dependencies' >&2
+	@exit 1
+endif
+check-unit: $(BUILD)/test_core $(BUILD)/test_visual $(BUILD)/test_media $(BUILD)/test_commands
 	$(BUILD)/test_core
 	$(BUILD)/test_visual
 	$(BUILD)/test_media
+	$(BUILD)/test_commands > $(BUILD)/commands-status.json
+	python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["record"]["state"] == "stopped" and not s["record"]["finalizing"]; assert s["audio"]["mic"]["source"] == "mic \"quoted\" \\ route\n"; assert s["audio"]["desktop"]["source"] == "desktop café"; assert s["audio"]["virtual"]["name"] == "cast\tvirtual"; assert "\xff" in s["record"]["path"]' $(BUILD)/commands-status.json
+check: cast check-unit
 	python3 tests/test_ipc.py
 ifeq ($(WAYLAND),1)
+check-unit: check-wayland-unit
+check-wayland-unit: $(BUILD)/test_wayland
+	$(BUILD)/test_wayland --unit-only
 check: check-wayland
 check-wayland: $(BUILD)/test_wayland
 	$(BUILD)/test_wayland
@@ -86,8 +115,8 @@ package: cast
 	$(MAKE) X11=$(X11) WAYLAND=$(WAYLAND) DESTDIR='$(CURDIR)/dist/stage' PREFIX=/usr install
 	@{ echo 'cast $(VERSION)'; echo 'Architecture:'; uname -m; echo 'Backend features: X11=$(X11) WAYLAND=$(WAYLAND)'; echo 'Runtime dynamic libraries:'; ldd cast; } > dist/stage/usr/share/doc/cast/build-info.txt
 	tar -C dist/stage -czf dist/cast-$(VERSION)-linux-$$(uname -m).tar.gz .
-	tar --transform='s,^,cast-$(VERSION)/,' -czf dist/cast-$(VERSION)-source.tar.gz Makefile README.md LICENSE licenses src vendor tests docs examples packaging
+	tar --transform='s,^,cast-$(VERSION)/,' -czf dist/cast-$(VERSION)-source.tar.gz Makefile .clang-format cast-build-prompt.md README.md LICENSE licenses src vendor tests docs examples packaging
 	cd dist && sha256sum cast-$(VERSION)-linux-*.tar.gz cast-$(VERSION)-source.tar.gz > SHA256SUMS
 clean:
 	rm -rf build cast
-.PHONY: FORCE all check check-wayland sanitize install uninstall package clean
+.PHONY: FORCE all check check-unit check-wayland check-wayland-unit check-xorg benchmark sanitize install uninstall package clean

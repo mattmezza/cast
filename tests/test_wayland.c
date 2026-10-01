@@ -1,8 +1,32 @@
 /* Exercise private portal buffer handling without a compositor or permissions. */
 #include "../src/wayland.c"
 #include <assert.h>
+#include <errno.h>
+#include <poll.h>
 #include <signal.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <sys/wait.h>
+
+typedef struct {
+    GDBusConnection *connection;
+    char *sender, *request;
+} MockResponse;
+static gboolean mock_cancel(gpointer data)
+{
+    MockResponse *response = data;
+    GVariantBuilder b;
+    g_variant_builder_init(&b, G_VARIANT_TYPE_VARDICT);
+    GError *error = NULL;
+    assert(g_dbus_connection_emit_signal(response->connection, response->sender, response->request,
+                                         "org.freedesktop.portal.Request", "Response",
+                                         g_variant_new("(ua{sv})", 1, &b), &error));
+    g_object_unref(response->connection);
+    g_free(response->sender);
+    g_free(response->request);
+    g_free(response);
+    return G_SOURCE_REMOVE;
+}
 
 static const char introspection[] =
     "<node><interface name='org.freedesktop.portal.ScreenCast'>"
@@ -17,7 +41,8 @@ static const char introspection[] =
     "<property name='version' type='u' access='read'/></interface></node>";
 static GVariant *mock_property(GDBusConnection *connection, const gchar *sender, const gchar *path,
                                const gchar *interface, const gchar *property, GError **error,
-                               gpointer data) {
+                               gpointer data)
+{
     (void)connection;
     (void)sender;
     (void)path;
@@ -30,7 +55,8 @@ static GVariant *mock_property(GDBusConnection *connection, const gchar *sender,
 }
 static void mock_method(GDBusConnection *connection, const gchar *sender, const gchar *path,
                         const gchar *interface, const gchar *method, GVariant *parameters,
-                        GDBusMethodInvocation *invocation, gpointer data) {
+                        GDBusMethodInvocation *invocation, gpointer data)
+{
     (void)path;
     (void)interface;
     (void)data;
@@ -54,18 +80,27 @@ static void mock_method(GDBusConnection *connection, const gchar *sender, const 
         g_variant_builder_add(&b, "{sv}", "session_handle",
                               g_variant_new_string(PORTAL_PATH "/session/mock"));
     }
-    /* Start cancellation is intentional; no compositor/permission is requested. */
+    /* Keep Start consent pending after its method returns, then cancel it. */
     GError *error = NULL;
-    assert(g_dbus_connection_emit_signal(
-        connection, sender, request, "org.freedesktop.portal.Request", "Response",
-        g_variant_new("(ua{sv})", index == 2 ? 1 : 0, &b), &error));
+    if (index == 2) {
+        MockResponse *response = g_new0(MockResponse, 1);
+        response->connection = g_object_ref(connection);
+        response->sender = g_strdup(sender);
+        response->request = g_strdup(request);
+        g_timeout_add(150, mock_cancel, response);
+    } else {
+        assert(g_dbus_connection_emit_signal(connection, sender, request,
+                                             "org.freedesktop.portal.Request", "Response",
+                                             g_variant_new("(ua{sv})", 0, &b), &error));
+    }
     g_free(request);
     g_free(unique);
     g_variant_unref(dict);
 }
 static const GDBusInterfaceVTable mock_vtable = {.method_call = mock_method,
                                                  .get_property = mock_property};
-static void mock_portal(int ready) {
+static void mock_portal(int ready)
+{
     GError *error = NULL;
     GDBusConnection *bus = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, &error);
     assert(bus);
@@ -85,7 +120,8 @@ static void mock_portal(int ready) {
     g_main_loop_run(loop);
     _exit(0);
 }
-static void test_consent_lifecycle(void) {
+static void test_consent_lifecycle(void)
+{
     GTestDBus *testbus = g_test_dbus_new(G_TEST_DBUS_NONE);
     g_test_dbus_up(testbus);
     int ready[2];
@@ -97,6 +133,13 @@ static void test_consent_lifecycle(void) {
         mock_portal(ready[1]);
     }
     close(ready[1]);
+    struct pollfd ready_fd = {ready[0], POLLIN, 0};
+    if (poll(&ready_fd, 1, 3000) <= 0) {
+        kill(child, SIGTERM);
+        waitpid(child, NULL, 0);
+        fprintf(stderr, "Mock portal failed to start within three seconds\n");
+        abort();
+    }
     char marker;
     assert(read(ready[0], &marker, 1) == 1);
     close(ready[0]);
@@ -109,15 +152,22 @@ static void test_consent_lifecycle(void) {
     Frame frame = {0};
     Cursor cursor = {0};
     uint64_t deadline = cast_now_ns() + UINT64_C(3000000000);
+    bool checked_pending = false;
+    char *args[] = {"capture", "monitor"};
     while (!w->failed && cast_now_ns() < deadline) {
         wayland_capture(platform, &frame, &cursor, err, sizeof err);
+        if (w->stage == 3 && w->awaiting_response && !w->pending) {
+            assert(wayland_command(platform, &c, 2, args, err, sizeof err) < 0);
+            assert(strstr(err, "pending"));
+            checked_pending = true;
+        }
         g_usleep(1000);
     }
-    assert(w->failed && strstr(w->error, "cancelled") && !w->latest.data);
+    assert(checked_pending && w->failed && strstr(w->error, "cancelled") && !w->latest.data);
+    assert(w->generation == 0);
     while (w->pending) {
         g_main_context_iteration(NULL, TRUE);
     }
-    char *args[] = {"capture", "monitor"};
     assert(wayland_command(platform, &c, 2, args, err, sizeof err) == 0);
     assert(!w->failed);
     deadline = cast_now_ns() + UINT64_C(3000000000);
@@ -126,6 +176,11 @@ static void test_consent_lifecycle(void) {
         g_usleep(1000);
     }
     assert(w->failed && strstr(w->error, "cancelled"));
+    /* Closing cast during a new request must drain callbacks without dangling userdata. */
+    while (w->pending) {
+        g_main_context_iteration(NULL, TRUE);
+    }
+    assert(wayland_command(platform, &c, 2, args, err, sizeof err) == 0);
     wayland_close(platform);
     frame_free(&frame);
     kill(child, SIGTERM);
@@ -134,7 +189,37 @@ static void test_consent_lifecycle(void) {
     g_object_unref(testbus);
     puts("Mock portal asynchronous consent/cancellation/reselection passed");
 }
-int main(void) {
+static bool private_socket_available(void)
+{
+    char directory[] = "/tmp/cast-wayland-socket-XXXXXX";
+    if (!mkdtemp(directory)) {
+        return false;
+    }
+    struct sockaddr_un address = {.sun_family = AF_UNIX};
+    snprintf(address.sun_path, sizeof address.sun_path, "%s/probe", directory);
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    bool available = fd >= 0 && bind(fd, (void *)&address, sizeof address) == 0;
+    int saved = errno;
+    if (fd >= 0) {
+        close(fd);
+    }
+    unlink(address.sun_path);
+    rmdir(directory);
+    if (!available) {
+        fprintf(stderr,
+                "Private D-Bus test needs local Unix sockets: %s. Run --unit-only for "
+                "CPU buffer/capability tests in this environment.\n",
+                strerror(saved));
+    }
+    return available;
+}
+int main(int argc, char **argv)
+{
+    bool unit_only = argc == 2 && !strcmp(argv[1], "--unit-only");
+    if (argc != 1 && !unit_only) {
+        fprintf(stderr, "usage: %s [--unit-only]\n", argv[0]);
+        return 1;
+    }
     Wayland w = {0};
     w.format.size = SPA_RECTANGLE(2, 2);
     w.format.format = SPA_VIDEO_FORMAT_BGRx;
@@ -165,7 +250,9 @@ int main(void) {
     assert(w.failed && !w.latest.data && !w.cursor.valid);
     assert(strstr(w.error, "revoked"));
     w.failed = false;
-    owner_changed(NULL, NULL, NULL, NULL, NULL, g_variant_new("(sss)", PORTAL, ":1.2", ""), &w);
+    GVariant *owner = g_variant_ref_sink(g_variant_new("(sss)", PORTAL, ":1.2", ""));
+    owner_changed(NULL, NULL, NULL, NULL, NULL, owner, &w);
+    g_variant_unref(owner);
     assert(w.failed);
     w.cursor_mode = 4;
     Capabilities cap = wayland_capabilities((Platform *)&w);
@@ -180,7 +267,12 @@ int main(void) {
     assert(wayland_reconfigure((Platform *)&w, &c, error, sizeof error) < 0);
     char *args[] = {"capture", "region", "select"};
     assert(wayland_command((Platform *)&w, &c, 3, args, error, sizeof error) < 0);
-    test_consent_lifecycle();
     puts("Wayland buffer, revocation and capability tests passed");
+    if (!unit_only) {
+        if (!private_socket_available()) {
+            return 1;
+        }
+        test_consent_lifecycle();
+    }
     return 0;
 }

@@ -311,32 +311,53 @@ static void screen_blit(Frame *dst, const Frame *src, Transform t)
     x1 = (int)clampd(x1, 0, dst->width);
     y0 = (int)clampd(y0, 0, dst->height);
     y1 = (int)clampd(y1, 0, dst->height);
+    if (src->width == dst->width && src->height == dst->height && t.sx == 0 && t.sy == 0 &&
+        t.dx == 0 && t.dy == 0 && t.sw == src->width && t.sh == src->height && t.dw == dst->width &&
+        t.dh == dst->height) {
+        for (int y = 0; y < dst->height; y++) {
+            uint8_t *d = dst->data + (size_t)y * dst->stride;
+            memcpy(d, src->data + (size_t)y * src->stride, (size_t)dst->width * 4);
+            for (int x = 0; x < dst->width; x++) {
+                d[x * 4 + 3] = 255;
+            }
+        }
+        return;
+    }
+    /* Compute the separable horizontal mapping once, not once per output pixel. */
+    int columns[16384];
+    for (int x = x0; x < x1; x++) {
+        columns[x] = (int)clampd(floor(t.sx + ((x + .5 - t.dx) / t.dw) * t.sw), 0, src->width - 1);
+    }
     for (int y = y0; y < y1; y++) {
         int sy = (int)clampd(floor(t.sy + ((y + .5 - t.dy) / t.dh) * t.sh), 0, src->height - 1);
         uint8_t *d = dst->data + (size_t)y * dst->stride + x0 * 4;
+        const uint8_t *row = src->data + (size_t)sy * src->stride;
         for (int x = x0; x < x1; x++, d += 4) {
-            int sx = (int)clampd(floor(t.sx + ((x + .5 - t.dx) / t.dw) * t.sw), 0, src->width - 1);
-            const uint8_t *s = src->data + (size_t)sy * src->stride + sx * 4;
+            const uint8_t *s = row + columns[x] * 4;
             memcpy(d, s, 4);
             d[3] = 255;
         }
     }
 }
-static bool mask_at(const Config *cfg, double x, double y, double w, double h, double inset)
+typedef struct {
+    int kind; /* rectangle, rounded, circle */
+    double w, h, radius;
+} Mask;
+static bool mask_at(Mask mask, double x, double y)
 {
-    x -= inset;
-    y -= inset;
-    w -= 2 * inset;
-    h -= 2 * inset;
+    double w = mask.w, h = mask.h;
     if (w <= 0 || h <= 0 || x < 0 || y < 0 || x >= w || y >= h) {
         return false;
     }
-    if (!strcmp(cfg->shape, "circle")) {
+    if (mask.kind == 2) {
         double dx = (x - w / 2) / (w / 2), dy = (y - h / 2) / (h / 2);
         return dx * dx + dy * dy <= 1;
     }
-    if (!strcmp(cfg->shape, "rounded")) {
-        double r = fmin(fmax(0, cfg->radius - inset), fmin(w, h) / 2);
+    if (mask.kind == 1) {
+        double r = mask.radius;
+        if ((x >= r && x <= w - r) || (y >= r && y <= h - r)) {
+            return true;
+        }
         double dx = fmax(r - x, fmax(0, x - (w - r))), dy = fmax(r - y, fmax(0, y - (h - r)));
         return dx * dx + dy * dy <= r * r;
     }
@@ -359,23 +380,31 @@ static void camera_blit(Frame *dst, const Frame *src, const Config *cfg, int x, 
     if (border < 0) {
         border = 0;
     }
+    int kind = !strcmp(cfg->shape, "circle") ? 2 : !strcmp(cfg->shape, "rounded") ? 1 : 0;
+    Mask outer = {kind, w, h, fmin(fmax(0, cfg->radius), fmin(w, h) / 2)};
+    Mask inner = {kind, w - 2 * border, h - 2 * border,
+                  fmin(fmax(0, cfg->radius - border), fmin(w - 2 * border, h - 2 * border) / 2)};
+    int columns[16384];
+    for (int i = 0; i < w; i++) {
+        double u = (i + .5 - border) / (w - 2 * border);
+        if (cfg->mirror) {
+            u = 1 - u;
+        }
+        columns[i] = (int)clampd(floor(sx + u * cw), 0, src->width - 1);
+    }
     for (int j = 0; j < h; j++) {
+        double v = (j + .5 - border) / (h - 2 * border);
+        int iy = (int)clampd(floor(sy + v * ch), 0, src->height - 1);
+        const uint8_t *row = src->data + (size_t)iy * src->stride;
         for (int i = 0; i < w; i++) {
-            if (mask_at(cfg, i + .5, j + .5, w, h, 0)) {
-                if (!mask_at(cfg, i + .5, j + .5, w, h, border)) {
+            if (mask_at(outer, i + .5, j + .5)) {
+                if (!mask_at(inner, i + .5 - border, j + .5 - border)) {
                     pixel(dst, x + i, y + j, cfg->border_color, 1);
                     continue;
                 }
-                double u = (i + .5 - border) / (w - 2 * border),
-                       v = (j + .5 - border) / (h - 2 * border);
-                if (cfg->mirror) {
-                    u = 1 - u;
-                }
-                int ix = (int)clampd(floor(sx + u * cw), 0, src->width - 1),
-                    iy = (int)clampd(floor(sy + v * ch), 0, src->height - 1);
                 if (x + i >= 0 && x + i < dst->width && y + j >= 0 && y + j < dst->height) {
                     uint8_t *d = dst->data + (size_t)(y + j) * dst->stride + (x + i) * 4;
-                    memcpy(d, src->data + (size_t)iy * src->stride + ix * 4, 4);
+                    memcpy(d, row + columns[i] * 4, 4);
                     d[3] = 255;
                 }
             }
@@ -454,7 +483,9 @@ static Transform screen_transform(Compositor *c, const Config *cfg, const Frame 
     p = p * p * (3 - 2 * p);
     c->zoom = c->from + (c->target - c->from) * p;
     double vw = s->width / c->zoom, vh = s->height / c->zoom;
-    if (cfg->zoom_follow && valid && c->zoom > 1) {
+    /* Live and recording render the same capture timestamp with different annotation
+     * switches. Advance following once so their screen pixels remain identical. */
+    if (cfg->zoom_follow && valid && c->zoom > 1 && (!c->last || now > c->last)) {
         double dt = c->last && now > c->last ? (double)(now - c->last) / 1e9 : 1.0 / cfg->fps;
         double alpha = cfg->zoom_smoothing >= 1
                            ? 1

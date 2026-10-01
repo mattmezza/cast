@@ -11,7 +11,7 @@ with `exclusive_caps=1`, consumers may only see the device after cast opens it.
 These commands are examples for the user to run; the build does not run them:
 
 ```sh
-sudo pacman -S --needed base-devel pkgconf ffmpeg pipewire libx11 libxext libxrandr libxi libxfixes
+sudo pacman -S --needed base-devel pkgconf ffmpeg pipewire libx11 libxext libxrandr libxi libxfixes libxcomposite
 sudo pacman -S --needed v4l2loopback-dkms linux-headers
 sudo modprobe v4l2loopback devices=1 video_nr=10 card_label=cast exclusive_caps=1
 ```
@@ -64,7 +64,9 @@ failure stops recording while the control/live loop remains operational. Keep
 partial recordings: Matroska is the default for recoverability; recovery depends
 on which packets and indexes reached storage. Try remuxing a copy with
 `ffmpeg -i partial.mkv -c copy recovered.mkv`; successful recovery is not guaranteed.
-A filename that already exists is rejected. Check free space and output directory
+`record stop` acknowledges finalization initiation with the filename; poll
+record.finalizing until false before using it. Completion/errors also appear in
+the foreground daemon. A filename that already exists is rejected. Check free space and output directory
 permissions before long captures.
 
 A conferencing application may restrict resolution or heavily compress camera
@@ -83,3 +85,7 @@ If commands cannot connect, check the selected runtime socket and ensure daemon
 and CLI use the same user and instance. XDG_RUNTIME_DIR must be absolute, owned
 by you and private. Do not manually remove a socket belonging to a live daemon.
 Only stale sockets safely owned by the current user are cleaned automatically.
+
+If an invalid edited config prevents routing, use `cast --socket /absolute/path/cast.sock
+status --json` or the same explicit socket for config reload. Daemon startup and local
+configuration checks remain strict.

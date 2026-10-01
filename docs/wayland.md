@@ -6,6 +6,8 @@ PipeWire implement the optional backend; FFmpeg and PipeWire audio remain shared
 Start `cast --backend wayland`. A desktop consent dialog chooses one screen.
 The daemon continues servicing controls while consent is pending. Live output
 starts privacy paused, including after source selection; explicitly resume it.
+Another selection request is rejected while the dialog is pending. A source
+commits when its first valid frame arrives; only then are zoom and annotations reset.
 If the portal does not advertise cursor metadata, cast disables default zoom follow
 and reports the missing capability. Explicitly enabling follow then returns an error.
 Keep the default monitor capture and empty monitor setting, and keys/clicks/preview off.
@@ -55,3 +57,10 @@ your compositor configuration; sxhkd is for Xorg. A Sway binding can use
 `bind = SUPER SHIFT, P, exec, cast pause`. Consult your compositor version's
 keybinding documentation if its syntax differs. Wayland selection and preview
 commands return actionable unsupported errors rather than success.
+
+`make X11=0 WAYLAND=1 check-unit` exercises CPU buffer bounds, pixel conversion,
+revocation and capability behavior without a compositor or a private D-Bus server.
+The full `make X11=0 WAYLAND=1 check` additionally starts an isolated mock portal
+to check asynchronous consent, delayed cancellation, reselection and shutdown.
+It requires permission to create local Unix sockets and fails promptly if that
+permission is unavailable. These tests do not replace compositor acceptance.

@@ -1,5 +1,6 @@
 #include "cast.h"
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -250,6 +251,70 @@ static void test_neutral(void)
     frame_free(&out);
 }
 
+static void test_follow_lane_consistency(void)
+{
+    Config cfg = config(100, 50);
+    strcpy(cfg.layout, "screen");
+    cfg.zoom_factor = 2;
+    cfg.zoom_follow = true;
+    cfg.zoom_smoothing = .25;
+    Cursor cursor = {75, 25, true, now};
+    Frame screen = source(100, 50, 0, true), live = {0}, record = {0};
+    Compositor *c = compositor_create();
+    render(c, &cfg, &screen, NULL, &cursor, false, &live);
+    cursor.x = 20;
+    now += 34000000;
+    render(c, &cfg, &screen, NULL, &cursor, false, &live);
+    render(c, &cfg, &screen, NULL, &cursor, true, &record);
+    assert(memcmp(live.data, record.data, (size_t)live.stride * live.height) == 0);
+    now += 34000000;
+    render(c, &cfg, &screen, NULL, &cursor, true, &record);
+    render(c, &cfg, &screen, NULL, &cursor, false, &live);
+    assert(memcmp(live.data, record.data, (size_t)live.stride * live.height) == 0);
+    compositor_destroy(c);
+    frame_free(&screen);
+    frame_free(&live);
+    frame_free(&record);
+}
+
+static void test_screen_sampling(void)
+{
+    Config cfg = config(123, 79);
+    strcpy(cfg.layout, "screen");
+    Frame screen = source(317, 113, 0, true), out = {0};
+    Compositor *c = compositor_create();
+    for (int cover = 0; cover <= 1; cover++) {
+        strcpy(cfg.fit, cover ? "cover" : "contain");
+        render(c, &cfg, &screen, NULL, NULL, false, &out);
+        double scale = cover ? fmax(123.0 / 317, 79.0 / 113) : fmin(123.0 / 317, 79.0 / 113);
+        double sw = cover ? 123 / scale : 317, sh = cover ? 79 / scale : 113;
+        double sx = (317 - sw) / 2, sy = (113 - sh) / 2;
+        double dw = cover ? 123 : sw * scale, dh = cover ? 79 : sh * scale;
+        double dx = (123 - dw) / 2, dy = (79 - dh) / 2;
+        for (int y = 0; y < out.height; y++) {
+            for (int x = 0; x < out.width; x++) {
+                uint32_t expected = 0;
+                if (x >= ceil(dx) && x < ceil(dx + dw) && y >= ceil(dy) && y < ceil(dy + dh)) {
+                    int ix = (int)floor(sx + (x + .5 - dx) / dw * sw);
+                    int iy = (int)floor(sy + (y + .5 - dy) / dh * sh);
+                    ix = ix < 0 ? 0 : ix > 316 ? 316 : ix;
+                    iy = iy < 0 ? 0 : iy > 112 ? 112 : iy;
+                    expected = (uint32_t)(uint8_t)ix << 16 | (uint32_t)(uint8_t)iy << 8;
+                }
+                assert(at(&out, x, y) == expected);
+            }
+        }
+    }
+    frame_free(&screen);
+    screen = source(123, 79, 0x123456, false);
+    screen.data[3] = 7;
+    render(c, &cfg, &screen, NULL, NULL, false, &out);
+    assert(at(&out, 0, 0) == 0x123456 && out.data[3] == 255);
+    compositor_destroy(c);
+    frame_free(&screen);
+    frame_free(&out);
+}
+
 int main(void)
 {
     test_frames();
@@ -257,6 +322,8 @@ int main(void)
     test_layout_and_masks();
     test_crop_and_fit();
     test_zoom_and_annotations();
+    test_follow_lane_consistency();
+    test_screen_sampling();
     test_neutral();
     puts("visual: owned frames, geometry, masks, fitting, crop/mirror, zoom transforms and lane "
          "privacy passed");

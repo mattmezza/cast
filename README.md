@@ -27,7 +27,9 @@ make -j
 
 `make X11=1 WAYLAND=1` enables both backends. `make X11=0 WAYLAND=1` omits Xorg
 libraries entirely. `make check`, `make sanitize` and `make package` run verification,
-sanitizers and binary/source packaging respectively. Test dependencies (Python, Xvfb,
+sanitizers and binary/source packaging respectively. `make check-unit` runs independent
+tests without needing socket bind/display permissions; `make check-xorg` runs the
+isolated Xvfb smoke, and `make benchmark` measures composition alone. Test dependencies (Python, Xvfb,
 optional XTest and FFmpeg tools for inspection) are not normal runtime dependencies.
 
 Before live output, create an existing loopback device. These commands are for an

@@ -1,0 +1,171 @@
+# Capture, composition and presentation
+
+`cast` keeps the configured output dimensions and cadence when its capture source
+changes. Screen, camera and annotations are composed as owned RGBA8 frames; capture
+errors use the configured neutral frame and report an error in status. A destroyed
+window, disconnected monitor or invalidated region never selects a broader source.
+Camera-only composition can continue without a desktop source.
+
+## Coordinates and fitting
+
+Xorg monitor names and rectangles come from XRandR. Region `X Y WIDTH HEIGHT`
+coordinates are relative to the selected monitor, including monitors whose desktop
+origin is negative. Window capture contains the client drawable, excluding window
+manager decorations. Moving the window updates its desktop origin; resizing changes
+the source dimensions. The X server already presents monitor rotation in root
+coordinates, so cast does not apply a second rotation to Xorg pixels.
+
+At the platform boundary, cursor and click coordinates become source-local pixels
+by subtracting the source's desktop origin. Composition crops a zoom viewport from
+that source, then fits it to the screen's output rectangle. `contain` preserves all
+viewport content with neutral-colored letterboxes; `cover` centers a crop that fills
+the rectangle. A source point `(x,y)` maps to
+`(dx + (x-sx)*dw/sw, dy + (y-sy)*dh/sh)` for the final source/output rectangles.
+Cursor highlighting and click centers use that same transform; points outside the
+visible source crop are ignored. Cursor/label sizes and ring radii use output pixels.
+Screen scaling currently uses nearest-neighbor sampling.
+
+Overlay puts the screen across the canvas and the camera over it. Split reserves
+the configured width percentage on the left or right for the camera and fits the
+screen to the remainder. Hiding the camera retains that split allocation and camera
+geometry. Screen and camera layouts show one source. Camera content in split/camera
+layouts fits inside its allocation; overlay geometry remains available when returning
+to overlay.
+
+## Camera geometry
+
+Camera width is a percentage of canvas width; `+5%` adds five percentage points.
+Corner anchoring fixes the chosen corner at the configured margin. Free positioning
+uses top-left output coordinates, and the size command preserves its center where
+bounds permit. Geometry is clamped to the canvas and its margins; impossible geometry
+is rejected. Corner cycling follows `[camera] corner_order`.
+
+Native, 16:9, 4:3 and 1:1 select a centered camera crop, with offsets measured in
+camera source pixels and clamped at crop edges. Circle always uses a square crop.
+Rectangle, rounded rectangle and circle determine the output mask independently
+of crop aspect. Rounded radius and border width use output pixels. Mirroring changes
+camera content only. Defaults are overlay, rounded, bottom-right, 22% width and a
+24-pixel margin. Camera hide and layout changes preserve the stored overlay geometry.
+
+## Selection and unavailable sources
+
+On Xorg, `capture region select` temporarily grabs the pointer and keyboard while
+the user drags within the selected monitor; `capture window select` uses a click.
+Ordinary annotation observation uses passive XI2 events and does not grab input.
+Escape releases selection grabs and retains the prior source and zoom. A successful
+selection commits to the daemon's stable configuration object and increments the
+source generation. Invalid numeric requests leave the current source unchanged.
+Successful source changes clear annotations and queued media, and reset zoom;
+starting or cancelling selection does not commit a source change.
+
+Window capture uses an XComposite named pixmap so overlap by other windows does not
+select or capture those windows. Resizing and remapping reacquire the backing pixmap.
+Minimization/unmapping and destruction produce neutral output with actionable errors.
+Monitor availability and region bounds are checked on each acquisition. Interactive
+selection and capture do not change either output's privacy or recording state.
+
+## Zoom and cursor
+
+Zoom changes the screen layer only. The default easing is a 250 ms smoothstep
+transition, with configured limits and steps. Locked mode targets the cursor when
+the zoom factor changes, then holds that viewport. Follow mode uses a dead zone and
+time-adjusted exponential smoothing; both clamp the viewport at source edges.
+Leaving the source holds the view until valid cursor metadata returns. Following
+advances once for a capture timestamp so live and recording retain identical screen
+pixels even when their annotation switches differ.
+
+Xorg root/pixmap capture excludes the server cursor; cast draws a simple arrow using
+the separately queried pointer position. Cursor size/color and highlighting are
+configurable. It does not reproduce each application's themed cursor shape. Backend
+capabilities determine whether metadata is available or the cursor is embedded;
+embedded cursor capture disables the separate arrow to avoid duplication. Refer to
+[wayland.md](wayland.md) for portal-specific restrictions.
+
+## Clicks and keys
+
+Left/right click rings expand and fade, with independent colors; middle clicks are
+optional. Xorg raw button events contain no desktop position, so cast queries the
+pointer when draining the event. Very fast pointer motion before the drain can shift
+the ring relative to the original click. Coordinates outside the selected source are
+ignored. At most 32 animations are retained in memory.
+
+Keys default off; enabling them defaults to shortcuts mode. That mode displays
+Ctrl/Alt/Super combinations and configured navigation keys. All mode also displays
+printable key symbols and can expose sensitive typing. Translation follows XKB map,
+group and modifier notifications; repeats flagged by XI2 are ignored rather than
+refreshing the label. Combination order is `Ctrl+Alt+Super+Shift+Key`; alphabetic
+labels use uppercase and space is `Space`. `[keys] filter` accepts complete labels
+such as `Super+Shift+Space`, or individual key labels. Configure it for cast's own
+bindings and any other shortcuts that should not be shown.
+
+The overlay retains only the current bounded label and timestamp, never a raw input
+log. The bundled original bitmap font covers ASCII; other XKB key symbols use their
+symbol names or a `U+...` label. Compose/dead-key sequences and IMEs are not committed
+text observation. All mode is not a faithful transcript of text entered by an app,
+and cast does not inspect password fields.
+
+Privacy/source boundaries synchronize and drain pending Xorg input, clear labels
+and rings, and discard input on the resume boundary. Modifier state notifications
+continue to be consumed while paused. If one independent output remains active,
+annotations can continue for that output; privacy-paused output frames remain neutral.
+Live and recording key/click switches are independently configurable. `keys clear`
+clears existing annotation memory without changing the enabled switch.
+
+## Preview and recursion
+
+The Xorg preview shows the selected live/record target with a local header containing
+LIVE/PAUSED/FROZEN and recording state. Its header is drawn in its X window after
+composition and is not added to the output frame. The preview is limited to about
+15 updates per second. Painting and its X server synchronization run on a dedicated
+connection/thread with one replaceable pending frame; a busy worker loses preview
+updates instead of delaying the virtual camera or controls. Closing it hides it
+until `preview off` followed by `preview on`, or a reconfiguration, enables it again.
+An output/source/privacy boundary hides the old preview until a newly painted frame
+for that state is ready. Window creation, source acquisition and shutdown still
+depend on a responsive X server.
+
+Cast prefers preview placement on a monitor outside the captured root rectangle.
+Otherwise it unmaps its preview around root readback, synchronizes the server, then
+maps it again. The region outline is similarly unmapped during acquisition. An
+XComposite application-window capture excludes cast's separate preview drawable.
+There is no universal Xorg mechanism to invisibly exclude arbitrary windows from
+root capture. Temporary unmapping may flicker or cause focus/layout reactions, and
+a compositing window manager can retain an animation/shadow while responding to
+unmapping. Place the preview outside the source or disable it when these effects
+matter. Inspect actual virtual-camera or recording pixels on the target desktop.
+
+## Verification limits and commands
+
+`tests/test_visual.c` checks actual synthetic frame pixels for geometry, layouts,
+masks/borders, aspect crop/mirror, contain/cover, zoom, click transforms, key expiry,
+annotation lane switches, neutral content and consistent dual-output following.
+The visual suite passes address/undefined sanitizers in this workspace with
+`ASAN_OPTIONS=detect_leaks=0`; LeakSanitizer cannot run under its ptrace restrictions.
+
+`tests/x11_smoke.c --exercise` is an acceptance test for a disposable Xvfb server.
+It creates application windows and injects keys/clicks only into that isolated
+display. It checks root/window pixels, resize/remap/minimize/destruction, numeric
+and interactive regions, Escape cancellation, keymap/modifier/repeat/filter behavior,
+input privacy, unrelated click rejection and preview exclusion. It compiles with
+the project's warning flags. The current managed workspace blocks X server socket
+creation and cannot connect to its advertised `DISPLAY=:0`, so this final suite has
+not run here. Do not run `--exercise` on the user's desktop.
+
+To run on a system permitting a disposable X server, install Xvfb and the XTest
+development package, then run `make X11=1 WAYLAND=1 check-xorg`, or compile the
+Xorg-only smoke test directly:
+
+```sh
+cc -Isrc -D_GNU_SOURCE -DWITH_X11 -O2 -g -Wall -Wextra \
+  -Wformat=2 -Wstrict-prototypes -Wmissing-prototypes -std=gnu11 \
+  tests/x11_smoke.c src/x11.c src/platform.c src/compositor.c \
+  $(pkg-config --cflags --libs x11 xext xrandr xi xfixes xcomposite xtst) \
+  -lm -lpthread -o /tmp/cast-x11-smoke
+xvfb-run -a -s '-screen 0 1024x768x24' /tmp/cast-x11-smoke --exercise
+```
+
+With no arguments, the smoke program performs only capture/capability readback,
+saves no pixels and injects no input. Real conferencing, loopback consumers,
+compositor-specific preview behavior and hardware capture performance remain
+subject to [hardware-acceptance.md](hardware-acceptance.md). No 1080p30 CPU, memory,
+latency or frame-drop measurements are asserted without a usable capture session.

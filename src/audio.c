@@ -1,4 +1,6 @@
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include "media_internal.h"
 #include <errno.h>
 #include <math.h>
@@ -37,6 +39,7 @@ struct CastAudio {
     struct spa_hook core_listener, registry_listener, metadata_listener;
     struct AudioNode nodes[AUDIO_NODES];
     int count, seq;
+    uint64_t accept_after;
     bool done, server_dead, started, live_silent;
     char default_mic[256], error[CAST_ERR];
     Config cfg;
@@ -53,7 +56,7 @@ static uint64_t sample_time(uint64_t ns)
 }
 static const char *prop(const struct spa_dict *d, const char *key)
 {
-    const char *v = spa_dict_lookup(d, key);
+    const char *v = d ? spa_dict_lookup(d, key) : NULL;
     return v ? v : "";
 }
 static void clear_lane(struct AudioLane *l)
@@ -221,6 +224,15 @@ static void lane_format(void *data, uint32_t id, const struct spa_pod *param)
 static void put_samples(struct AudioLane *l, uint64_t ns, const float *src, int count)
 {
     uint64_t start = sample_time(ns);
+    if (start < l->owner->accept_after) {
+        uint64_t stale = l->owner->accept_after - start;
+        if (stale >= (uint64_t)count) {
+            return;
+        }
+        src += (size_t)stale * 2;
+        start += stale;
+        count -= (int)stale;
+    }
     if (count > AUDIO_RING) {
         int skip = count - AUDIO_RING;
         src += (size_t)skip * 2;
@@ -295,6 +307,14 @@ static void read_locked(CastAudio *a, uint64_t ns, float *dst, int count)
         dst[i] = fmaxf(-1.f, fminf(1.f, dst[i]));
     }
 }
+static void read_live_locked(CastAudio *a, uint64_t ns, float *dst, int count)
+{
+    if (a->live_silent || a->virtual_lane.dead) {
+        memset(dst, 0, (size_t)count * 2 * sizeof(float));
+    } else {
+        read_locked(a, ns, dst, count);
+    }
+}
 static void virtual_process(void *data)
 {
     struct AudioLane *l = data;
@@ -312,10 +332,10 @@ static void virtual_process(void *data)
         }
         float *p = d->data;
         uint64_t now = cast_now_ns(), span = (uint64_t)count * 1000000000 / AUDIO_RATE;
-        if (a->live_silent || l->dead || now < span) {
+        if (now < span) {
             memset(p, 0, (size_t)count * 2 * sizeof(float));
         } else {
-            read_locked(a, now - span, p, (int)count);
+            read_live_locked(a, now - span, p, (int)count);
         }
         d->chunk->offset = 0;
         d->chunk->size = count * sizeof(float) * 2;
@@ -598,14 +618,14 @@ int audio_configure(CastAudio *a, const Config *cfg, char *e, size_t n)
     /* Create every changed lane before replacing any old lane. Candidate callbacks
      * write candidate rings only; failing one connection leaves the old routes intact. */
     struct AudioLane *candidate[3] = {NULL, NULL, NULL};
-    bool change[3] = {cfg->mic != a->cfg.mic || strcmp(cfg->mic_source, a->cfg.mic_source) ||
-                          (cfg->mic && !a->lane[0].stream),
-                      cfg->desktop != a->cfg.desktop ||
-                          strcmp(cfg->desktop_source, a->cfg.desktop_source) ||
-                          (cfg->desktop && !a->lane[1].stream),
-                      cfg->virtual_audio != a->cfg.virtual_audio ||
-                          strcmp(cfg->virtual_name, a->cfg.virtual_name) ||
-                          (cfg->virtual_audio && !a->virtual_lane.stream)};
+    bool change[3] = {
+        cfg->mic != a->cfg.mic || strcmp(cfg->mic_source, a->cfg.mic_source) ||
+            (cfg->mic && (!a->lane[0].stream || a->lane[0].dead)),
+        cfg->desktop != a->cfg.desktop || strcmp(cfg->desktop_source, a->cfg.desktop_source) ||
+            (cfg->desktop && (!a->lane[1].stream || a->lane[1].dead)),
+        cfg->virtual_audio != a->cfg.virtual_audio ||
+            strcmp(cfg->virtual_name, a->cfg.virtual_name) ||
+            (cfg->virtual_audio && (!a->virtual_lane.stream || a->virtual_lane.dead))};
     for (int i = 0; i < 3; i++) {
         if (change[i] && (i == 0 ? cfg->mic : i == 1 ? cfg->desktop : cfg->virtual_audio)) {
             candidate[i] = calloc(1, sizeof(**candidate));
@@ -636,12 +656,13 @@ int audio_configure(CastAudio *a, const Config *cfg, char *e, size_t n)
         for (int i = 0; i < 3; i++) {
             if (change[i]) {
                 struct AudioLane *old = i < 2 ? &a->lane[i] : &a->virtual_lane;
+                float *previous_samples = old->samples;
                 destroy_lane(old);
-                free(old->samples);
                 old->samples = NULL;
                 /* Listener userdata points to stable allocated candidates, so move callback
                  * registration after copying the lane to its permanent address. */
                 if (candidate[i]) {
+                    free(previous_samples);
                     spa_hook_remove(&candidate[i]->listener);
                     *old = *candidate[i];
                     pw_stream_add_listener(old->stream, &old->listener,
@@ -651,9 +672,7 @@ int audio_configure(CastAudio *a, const Config *cfg, char *e, size_t n)
                 } else {
                     memset(old, 0, sizeof(*old));
                     old->owner = a;
-                    if (i < 2) {
-                        old->samples = calloc(AUDIO_RING * 2, sizeof(float));
-                    }
+                    old->samples = previous_samples;
                 }
             }
         }
@@ -678,6 +697,7 @@ void audio_barrier(CastAudio *a, bool silent)
         pw_thread_loop_lock(a->loop);
     }
     a->live_silent = silent;
+    a->accept_after = sample_time(cast_now_ns());
     for (int i = 0; i < 2; i++) {
         clear_lane(&a->lane[i]);
         if (a->lane[i].stream) {
@@ -768,13 +788,26 @@ void audio_error(CastAudio *a, char *out, size_t n)
     }
 }
 #ifdef CAST_TEST
+void audio_test_virtual_read(CastAudio *a, uint64_t ns, float *dst, int count)
+{
+    if (a->started) {
+        pw_thread_loop_lock(a->loop);
+    }
+    read_live_locked(a, ns, dst, count);
+    if (a->started) {
+        pw_thread_loop_unlock(a->loop);
+    }
+}
 void audio_test_push(CastAudio *a, int lane, uint64_t ns, const float *src, int count)
 {
     if (a->started) {
         pw_thread_loop_lock(a->loop);
     }
-    a->cfg.mic = lane == 0 ? a->cfg.mic | true : a->cfg.mic;
-    a->cfg.desktop = lane == 1 ? a->cfg.desktop | true : a->cfg.desktop;
+    if (lane == 0) {
+        a->cfg.mic = true;
+    } else {
+        a->cfg.desktop = true;
+    }
     put_samples(&a->lane[lane], ns, src, count);
     if (a->started) {
         pw_thread_loop_unlock(a->loop);

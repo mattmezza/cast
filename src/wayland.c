@@ -19,9 +19,9 @@ typedef struct {
     char *session, *request;
     guint response_sub, closed_sub, owner_sub;
     int stage, pending;
-    bool shutting, failed;
+    bool shutting, failed, awaiting_response, committed;
     uint32_t cursor_mode, source_types, node;
-    uint64_t serial;
+    uint64_t serial, generation;
     char error[CAST_ERR];
     Config config;
     struct pw_main_loop *loop;
@@ -34,13 +34,17 @@ typedef struct {
     Cursor cursor;
 } Wayland;
 static void begin_request(Wayland *w, int stage);
-static void fail(Wayland *w, const char *why) {
+static void fail(Wayland *w, const char *why)
+{
     w->failed = true;
+    w->awaiting_response = false;
     snprintf(w->error, sizeof w->error, "%s", why);
     frame_free(&w->latest);
     w->cursor.valid = false;
+    w->committed = false;
 }
-static void stop_pw(Wayland *w) {
+static void stop_pw(Wayland *w)
+{
     if (w->stream) {
         pw_stream_destroy(w->stream);
     }
@@ -60,9 +64,11 @@ static void stop_pw(Wayland *w) {
     frame_free(&w->latest);
     memset(&w->format, 0, sizeof w->format);
     w->cursor.valid = false;
+    w->committed = false;
 }
 /* Accept only explicitly negotiated packed CPU formats. Never dereference DMA-BUF. */
-static int copy_pixels(Wayland *w, const struct spa_data *d) {
+static int copy_pixels(Wayland *w, const struct spa_data *d)
+{
     unsigned width = w->format.size.width, height = w->format.size.height;
     int channels =
         (w->format.format == SPA_VIDEO_FORMAT_RGB || w->format.format == SPA_VIDEO_FORMAT_BGR) ? 3
@@ -106,7 +112,8 @@ static int copy_pixels(Wayland *w, const struct spa_data *d) {
     w->latest.ts_ns = cast_now_ns();
     return 0;
 }
-static void on_process(void *data) {
+static void on_process(void *data)
+{
     Wayland *w = data;
     struct pw_buffer *b, *newest = NULL;
     /* Keep only the newest frame, always return every dequeued buffer. */
@@ -121,6 +128,12 @@ static void on_process(void *data) {
     }
     struct spa_buffer *buf = newest->buffer;
     if (!w->failed && buf->n_datas && copy_pixels(w, &buf->datas[0]) == 0) {
+        if (!w->committed) {
+            w->committed = true;
+            w->generation++;
+        }
+        w->error[0] = 0;
+        w->cursor.valid = false;
         struct spa_meta_cursor *m = spa_buffer_find_meta_data(buf, SPA_META_Cursor, sizeof *m);
         if (m) {
             w->cursor.valid = spa_meta_cursor_is_valid(m);
@@ -130,12 +143,14 @@ static void on_process(void *data) {
         }
     } else {
         frame_free(&w->latest);
+        w->cursor.valid = false;
         snprintf(w->error, sizeof w->error,
                  "Wayland stream delivered invalid/unmappable frame; waiting for valid CPU buffer");
     }
     pw_stream_queue_buffer(w->stream, newest);
 }
-static void on_format(void *data, uint32_t id, const struct spa_pod *param) {
+static void on_format(void *data, uint32_t id, const struct spa_pod *param)
+{
     Wayland *w = data;
     if (id != SPA_PARAM_Format) {
         return;
@@ -180,7 +195,8 @@ static void on_format(void *data, uint32_t id, const struct spa_pod *param) {
     pw_stream_update_params(w->stream, p, 3);
 }
 static void on_stream_state(void *data, enum pw_stream_state old, enum pw_stream_state state,
-                            const char *error) {
+                            const char *error)
+{
     (void)old;
     Wayland *w = data;
     if (state == PW_STREAM_STATE_ERROR) {
@@ -193,7 +209,8 @@ static void on_stream_state(void *data, enum pw_stream_state old, enum pw_stream
 static const struct pw_stream_events stream_events = {
     PW_VERSION_STREAM_EVENTS, .state_changed = on_stream_state, .param_changed = on_format,
     .process = on_process};
-static int start_pw(Wayland *w, int fd) {
+static int start_pw(Wayland *w, int fd)
+{
     pw_init(NULL, NULL);
     w->loop = pw_main_loop_new(NULL);
     if (!w->loop) {
@@ -238,14 +255,15 @@ static int start_pw(Wayland *w, int fd) {
     return pw_stream_connect(w->stream, PW_DIRECTION_INPUT, w->serial ? PW_ID_ANY : w->node,
                              PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS, &p, 1);
 }
-static void remote_done(GObject *object, GAsyncResult *result, gpointer data) {
+static void remote_done(GObject *object, GAsyncResult *result, gpointer data)
+{
     Wayland *w = data;
     GError *error = NULL;
     GUnixFDList *fds = NULL;
     GVariant *reply = g_dbus_connection_call_with_unix_fd_list_finish(G_DBUS_CONNECTION(object),
                                                                       &fds, result, &error);
     w->pending--;
-    if (w->shutting) {
+    if (w->shutting || w->failed) {
         goto done;
     }
     if (!reply) {
@@ -274,7 +292,8 @@ done:
 }
 static void session_closed(GDBusConnection *bus, const gchar *sender, const gchar *path,
                            const gchar *interface, const gchar *signal, GVariant *parameters,
-                           gpointer data) {
+                           gpointer data)
+{
     (void)bus;
     (void)sender;
     (void)path;
@@ -286,7 +305,8 @@ static void session_closed(GDBusConnection *bus, const gchar *sender, const gcha
 }
 static void owner_changed(GDBusConnection *bus, const gchar *sender, const gchar *path,
                           const gchar *interface, const gchar *signal, GVariant *parameters,
-                          gpointer data) {
+                          gpointer data)
+{
     (void)bus;
     (void)sender;
     (void)path;
@@ -303,15 +323,18 @@ static void owner_changed(GDBusConnection *bus, const gchar *sender, const gchar
 }
 static void response(GDBusConnection *bus, const gchar *sender, const gchar *path,
                      const gchar *interface, const gchar *signal, GVariant *parameters,
-                     gpointer data) {
+                     gpointer data)
+{
     (void)bus;
     (void)sender;
     (void)interface;
     (void)signal;
     Wayland *w = data;
-    if (w->shutting || w->failed || !w->request || strcmp(path, w->request)) {
+    if (w->shutting || w->failed || !w->awaiting_response || !w->request ||
+        strcmp(path, w->request)) {
         return;
     }
+    w->awaiting_response = false;
     guint code;
     GVariant *dict;
     g_variant_get(parameters, "(u@a{sv})", &code, &dict);
@@ -357,25 +380,44 @@ static void response(GDBusConnection *bus, const gchar *sender, const gchar *pat
 done:
     g_variant_unref(dict);
 }
-static void request_done(GObject *object, GAsyncResult *result, gpointer data) {
-    Wayland *w = data;
+typedef struct {
+    Wayland *wayland;
+    char *request;
+} RequestCall;
+static void request_done(GObject *object, GAsyncResult *result, gpointer data)
+{
+    RequestCall *call = data;
+    Wayland *w = call->wayland;
     GError *error = NULL;
     GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(object), result, &error);
     w->pending--;
-    if (!w->shutting && !reply) {
+    bool current = !g_strcmp0(w->request, call->request);
+    if (!w->shutting && !w->failed && current && !reply) {
         fail(w, error ? error->message : "ScreenCast method failed");
     }
     if (reply) {
+        if (!w->shutting && current && w->awaiting_response) {
+            const char *handle;
+            g_variant_get(reply, "(&o)", &handle);
+            /* The wildcard response subscription also covers older portal handles. */
+            if (strcmp(handle, w->request)) {
+                g_free(w->request);
+                w->request = g_strdup(handle);
+            }
+        }
         g_variant_unref(reply);
     }
     if (error) {
         g_error_free(error);
     }
+    g_free(call->request);
+    g_free(call);
 }
-static void begin_request(Wayland *w, int stage) {
+static void begin_request(Wayland *w, int stage)
+{
     static unsigned sequence;
     char token[64];
-    snprintf(token, sizeof token, "cast_%ld_%u", (long)getpid(), ++sequence);
+    snprintf(token, sizeof token, "cast_%ld_%u_%u", (long)getpid(), ++sequence, g_random_int());
     char *sender = g_strdup(g_dbus_connection_get_unique_name(w->bus) + 1);
     for (char *p = sender; *p; p++) {
         if (*p == '.') {
@@ -386,6 +428,7 @@ static void begin_request(Wayland *w, int stage) {
     w->request = g_strdup_printf(PORTAL_PATH "/request/%s/%s", sender, token);
     g_free(sender);
     w->stage = stage;
+    w->awaiting_response = true;
     GVariantBuilder b;
     g_variant_builder_init(&b, G_VARIANT_TYPE_VARDICT);
     g_variant_builder_add(&b, "{sv}", "handle_token", g_variant_new_string(token));
@@ -407,17 +450,22 @@ static void begin_request(Wayland *w, int stage) {
         args = g_variant_new("(osa{sv})", w->session, "", &b);
     }
     w->pending++;
+    RequestCall *call = g_new0(RequestCall, 1);
+    call->wayland = w;
+    call->request = g_strdup(w->request);
     g_dbus_connection_call(w->bus, PORTAL, PORTAL_PATH, SCREENCAST, method, args,
                            G_VARIANT_TYPE("(o)"), G_DBUS_CALL_FLAGS_NONE, 5000, w->cancel,
-                           request_done, w);
+                           request_done, call);
 }
-static GVariant *portal_properties(GDBusConnection *bus, GError **error) {
+static GVariant *portal_properties(GDBusConnection *bus, GError **error)
+{
     return g_dbus_connection_call_sync(bus, PORTAL, PORTAL_PATH, "org.freedesktop.DBus.Properties",
                                        "GetAll", g_variant_new("(s)", SCREENCAST),
                                        G_VARIANT_TYPE("(a{sv})"), G_DBUS_CALL_FLAGS_NONE, 2000,
                                        NULL, error);
 }
-Platform *wayland_open(const Config *c, char *err, size_t n) {
+Platform *wayland_open(const Config *c, char *err, size_t n)
+{
     Wayland *w = calloc(1, sizeof *w);
     if (!w) {
         snprintf(err, n, "Out of memory");
@@ -487,7 +535,8 @@ Platform *wayland_open(const Config *c, char *err, size_t n) {
     begin_request(w, 1);
     return (Platform *)w;
 }
-void wayland_close(Platform *p) {
+void wayland_close(Platform *p)
+{
     Wayland *w = (Wayland *)p;
     if (!w) {
         return;
@@ -522,7 +571,8 @@ void wayland_close(Platform *p) {
     g_object_unref(w->bus);
     free(w);
 }
-Capabilities wayland_capabilities(Platform *p) {
+Capabilities wayland_capabilities(Platform *p)
+{
     Wayland *w = (Wayland *)p;
     Capabilities c = {.capture = true,
                       .cursor_metadata = w->cursor_mode == 4,
@@ -535,7 +585,8 @@ Capabilities wayland_capabilities(Platform *p) {
                                    : "hidden");
     return c;
 }
-int wayland_capture(Platform *p, Frame *frame, Cursor *cursor, char *err, size_t n) {
+int wayland_capture(Platform *p, Frame *frame, Cursor *cursor, char *err, size_t n)
+{
     Wayland *w = (Wayland *)p;
     for (int i = 0; i < 64 && g_main_context_pending(NULL); i++) {
         g_main_context_iteration(NULL, FALSE);
@@ -551,7 +602,7 @@ int wayland_capture(Platform *p, Frame *frame, Cursor *cursor, char *err, size_t
     }
     if (w->failed || !w->latest.data) {
         snprintf(err, n, "%s",
-                 w->failed      ? w->error
+                 w->error[0]    ? w->error
                  : w->stage < 4 ? "Wayland portal consent/selection pending"
                                 : "Waiting for a valid Wayland frame");
         cursor->valid = false;
@@ -565,14 +616,15 @@ int wayland_capture(Platform *p, Frame *frame, Cursor *cursor, char *err, size_t
     *cursor = w->cursor;
     return frame_copy(frame, &w->latest);
 }
-int wayland_command(Platform *p, Config *c, int argc, char **argv, char *err, size_t n) {
+int wayland_command(Platform *p, Config *c, int argc, char **argv, char *err, size_t n)
+{
     Wayland *w = (Wayland *)p;
     if (argc == 2 && !strcmp(argv[0], "screen") && !strcmp(argv[1], "list")) {
         snprintf(err, n, "portal (select the monitor/window in the desktop consent dialog)");
         return 0;
     }
     if (argc == 2 && !strcmp(argv[0], "capture") && !strcmp(argv[1], "monitor")) {
-        if (w->pending) {
+        if (w->pending || w->awaiting_response) {
             snprintf(err, n,
                      "Portal consent already pending; cancel in the portal dialog or quit cast");
             return -1;
@@ -604,7 +656,8 @@ int wayland_command(Platform *p, Config *c, int argc, char **argv, char *err, si
              argc ? argv[0] : "selection");
     return -1;
 }
-int wayland_reconfigure(Platform *p, const Config *c, char *err, size_t n) {
+int wayland_reconfigure(Platform *p, const Config *c, char *err, size_t n)
+{
     Wayland *w = (Wayland *)p;
     if (c->keys || c->clicks || c->preview) {
         snprintf(err, n, "Wayland global keys/clicks and native preview unsupported");
@@ -626,7 +679,8 @@ int wayland_reconfigure(Platform *p, const Config *c, char *err, size_t n) {
     w->config = *c;
     return 0;
 }
-void wayland_doctor(const Config *c, char *out, size_t n) {
+void wayland_doctor(const Config *c, char *out, size_t n)
+{
     (void)c;
     GError *error = NULL;
     GDBusConnection *bus = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, &error);
@@ -663,4 +717,9 @@ void wayland_doctor(const Config *c, char *out, size_t n) {
         g_error_free(error);
     }
     g_object_unref(bus);
+}
+
+uint64_t wayland_source_generation(Platform *platform)
+{
+    return ((Wayland *)platform)->generation;
 }

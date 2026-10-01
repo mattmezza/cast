@@ -12,7 +12,9 @@ output scaling identically to screen pixels, cursor and click markers. Camera cr
 and mirroring are independent. Backend failures produce neutral content and errors.
 
 FFmpeg libraries provide camera MJPEG decoding, format conversion, codecs and muxing.
-Recording has a bounded worker queue and monotonic active-time timestamps. Pause
+Recording has a bounded worker queue, independent control/encoder locks and monotonic
+active-time timestamps. Status and frame admission never wait for codec work. Stop
+requests worker finalization; status exposes completion and shutdown waits for it. Pause
 flushes queued samples and excludes its interval, preserving one open container.
 PipeWire provides audio capture and an optional virtual source; no physical playback
 sink is created. Software encoding is the baseline. Matroska is the default container.

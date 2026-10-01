@@ -40,7 +40,11 @@ with tempfile.TemporaryDirectory(prefix='cast-test-') as directory:
 
     # An owned abandoned socket is safely removed while holding the instance lock.
     abandoned = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
-    abandoned.bind(str(sock))
+    try:
+        abandoned.bind(str(sock))
+    except PermissionError as error:
+        raise SystemExit('IPC integration requires Unix socket bind permission; '
+                         'this sandbox blocks it: ' + str(error))
     os.chmod(sock, 0o600)
     abandoned.close()
     process = subprocess.Popen([BINARY, *common, '--backend', 'synthetic',
@@ -149,6 +153,10 @@ with tempfile.TemporaryDirectory(prefix='cast-test-') as directory:
         config.write_text('[composition]\nlayout=screen\n[ipc]\ntimeout_ms=400\n')
         stopped = cmd('record', 'stop')
         assert str(path) in stopped.stdout
+        deadline = time.monotonic() + 10
+        while state()['record'].get('finalizing', False):
+            assert time.monotonic() < deadline, 'recording did not finalize'
+            time.sleep(0.02)
         assert path.exists() and path.stat().st_size > 1000
         cmd('record', 'start', path, ok=False)  # Never implicitly overwrite.
         assert state()['record']['state'] == 'stopped'

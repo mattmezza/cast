@@ -224,6 +224,7 @@ int platform_preview(Platform *p, const Frame *f, const State *s, const Config *
         return x11_preview(p->impl, f, s, cfg, e, n);
     }
 #else
+    (void)p;
     (void)f;
     (void)s;
 #endif

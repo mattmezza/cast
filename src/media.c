@@ -1,4 +1,6 @@
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include "media_internal.h"
 #include <errno.h>
 #include <libavcodec/avcodec.h>
@@ -105,14 +107,23 @@ int media_live(Media *m, const Frame *f, bool silent, char *e, size_t n)
 int media_record_start(Media *m, const Config *cfg, const char *path, char *e, size_t n)
 {
     audio_barrier(m->audio, m->live_paused || m->live_frozen);
-    return recorder_start(m->recorder, cfg, path, e, n);
+    int rc = recorder_start(m->recorder, cfg, path, e, n);
+    if (!rc) {
+        m->record_paused = false;
+    }
+    return rc;
 }
 int media_record_stop(Media *m, char *e, size_t n)
 {
-    return recorder_stop(m->recorder, e, n);
+    int rc = recorder_stop(m->recorder, e, n);
+    if (!rc) {
+        m->record_paused = false;
+    }
+    return rc;
 }
 int media_record_pause(Media *m, bool paused, char *e, size_t n)
 {
+    audio_barrier(m->audio, m->live_paused || m->live_frozen);
     int rc = recorder_pause(m->recorder, paused, e, n);
     if (!rc) {
         m->record_paused = paused;
@@ -127,6 +138,7 @@ int media_record_frame(Media *m, const Frame *f, char *e, size_t n)
 }
 void media_barrier(Media *m)
 {
+    camera_barrier(m->camera);
     audio_barrier(m->audio, m->live_paused || m->live_frozen);
     recorder_barrier(m->recorder);
 }
@@ -134,6 +146,7 @@ void media_privacy(Media *m, bool live_paused, bool live_frozen, bool record_pau
 {
     m->live_paused = live_paused;
     m->live_frozen = live_frozen;
+    audio_barrier(m->audio, live_paused || live_frozen);
     if (record_paused != m->record_paused) {
         char reply[CAST_ERR];
         recorder_pause(m->recorder, record_paused, reply, sizeof(reply));
@@ -166,7 +179,7 @@ int media_reconfigure(Media *m, const Config *cfg, bool recording, char *e, size
     }
     bool camera_change = m->cfg.camera_enabled != cfg->camera_enabled ||
                          strcmp(m->cfg.camera_device, cfg->camera_device) ||
-                         (cfg->camera_enabled && !m->camera);
+                         (cfg->camera_enabled && (!m->camera || camera_failed(m->camera)));
     CastCamera *candidate = NULL;
     if (camera_change && cfg->camera_enabled) {
         candidate = camera_open(cfg, e, n);
@@ -289,6 +302,16 @@ void media_status(Media *m, bool *active, bool *paused, uint64_t *drops, char *e
     if (!error[0] && m->live_error[0]) {
         snprintf(error, n, "%s", m->live_error);
     }
+}
+void media_record_error(Media *m, char *out, size_t n)
+{
+    bool active, paused;
+    uint64_t drops;
+    recorder_status(m->recorder, &active, &paused, &drops, out, n);
+}
+bool media_record_finalizing(Media *m)
+{
+    return recorder_finalizing(m->recorder);
 }
 uint64_t media_record_duration(Media *m)
 {

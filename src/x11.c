@@ -15,6 +15,8 @@
 #undef Cursor
 #include <errno.h>
 #include <limits.h>
+#include <math.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,19 +30,31 @@ typedef struct {
     bool primary;
 } Monitor;
 typedef struct {
+    pthread_t thread;
+    pthread_mutex_t mutex;
+    pthread_cond_t changed;
+    bool stop, pending;
+    Frame frame;
+    Window window;
+    int width, height;
+    char label[256], error[CAST_ERR];
+    unsigned long color;
+    uint64_t epoch, ready_epoch;
+} Preview;
+typedef struct {
     Display *d;
     Window root, selected, preview, selection;
-    GC preview_gc;
     Atom wm_delete, wm_state, active_window;
     int screen, xi_opcode, randr_base, xkb_base;
     bool xi, shm, composite, xkb, redirected, shm_attached, privacy, preview_disabled;
-    XImage *image, *preview_image;
+    bool window_unmapped;
+    XImage *image;
     XShmSegmentInfo segment;
     int image_depth;
     Visual *image_visual;
     Pixmap window_pixmap;
     int pixmap_w, pixmap_h;
-    unsigned generation, seen_generation;
+    uint64_t generation, seen_generation;
     char monitor[128], kind[16], source_error[CAST_ERR];
     int rx, ry, rw, rh, sx, sy, sw, sh;
     unsigned mods, group, alt_mask, super_mask;
@@ -52,8 +66,18 @@ typedef struct {
     X11Cursor crosshair;
     int preview_w, preview_h;
     uint64_t last_preview;
+    Preview *preview_worker;
+    uint64_t preview_epoch, preview_source;
+    unsigned preview_state;
+    bool preview_enabled;
 } Xorg;
-static int xerror;
+static _Thread_local int xerror;
+static pthread_once_t xlib_once = PTHREAD_ONCE_INIT;
+static void initialize_xlib(void)
+{
+    XInitThreads();
+}
+static void preview_stop(Xorg *p);
 static int on_error(Display *d, XErrorEvent *ev)
 {
     (void)d;
@@ -251,6 +275,7 @@ static void window_release(Xorg *p)
         end(p);
     }
     p->redirected = false;
+    p->window_unmapped = false;
     p->selected = 0;
     p->pixmap_w = p->pixmap_h = 0;
 }
@@ -401,6 +426,7 @@ static void modifier_masks(Xorg *p)
 }
 Platform *x11_open(const Config *cfg, char *e, size_t n)
 {
+    pthread_once(&xlib_once, initialize_xlib);
     Xorg *p = calloc(1, sizeof(*p));
     if (!p) {
         fail(e, n, "out of memory opening Xorg");
@@ -431,7 +457,7 @@ Platform *x11_open(const Config *cfg, char *e, size_t n)
     p->wm_state = XInternAtom(p->d, "WM_STATE", False);
     p->active_window = XInternAtom(p->d, "_NET_ACTIVE_WINDOW", False);
     p->wm_delete = XInternAtom(p->d, "WM_DELETE_WINDOW", False);
-    int xi_event, xi_error, major = 2, minor = 0;
+    int xi_event, xi_error, major = 2, minor = 2;
     if (XQueryExtension(p->d, "XInputExtension", &p->xi_opcode, &xi_event, &xi_error) &&
         XIQueryVersion(p->d, &major, &minor) == Success) {
         unsigned char bits[XIMaskLen(XI_LASTEVENT)] = {0};
@@ -494,14 +520,9 @@ void x11_close(Platform *platform)
     }
     if (p->d) {
         selection_stop(p);
+        preview_stop(p);
         image_free(p);
         window_release(p);
-        if (p->preview_image) {
-            XDestroyImage(p->preview_image);
-        }
-        if (p->preview_gc) {
-            XFreeGC(p->d, p->preview_gc);
-        }
         if (p->preview) {
             XDestroyWindow(p->d, p->preview);
         }
@@ -564,6 +585,8 @@ static int source_rect(Xorg *p, Drawable *drawable, Visual **visual, int *depth,
                         "capture monitor");
         }
         if (a.map_state != IsViewable) {
+            /* Remapping replaces the window backing pixmap, even without a resize. */
+            p->window_unmapped = true;
             return fail(e, n,
                         "selected window is minimized or unmapped; restore it or explicitly select "
                         "another source");
@@ -571,7 +594,8 @@ static int source_rect(Xorg *p, Drawable *drawable, Visual **visual, int *depth,
         if (a.width <= 0 || a.height <= 0 || a.width > 16384 || a.height > 16384) {
             return fail(e, n, "selected window dimensions are unsupported");
         }
-        if (a.width != p->pixmap_w || a.height != p->pixmap_h || !p->window_pixmap) {
+        if (p->window_unmapped || a.width != p->pixmap_w || a.height != p->pixmap_h ||
+            !p->window_pixmap) {
             if (p->window_pixmap) {
                 begin(p);
                 XFreePixmap(p->d, p->window_pixmap);
@@ -587,6 +611,7 @@ static int source_rect(Xorg *p, Drawable *drawable, Visual **visual, int *depth,
             }
             p->pixmap_w = a.width;
             p->pixmap_h = a.height;
+            p->window_unmapped = false;
             image_free(p);
         }
         p->sx = x;
@@ -823,7 +848,7 @@ int x11_command(Platform *platform, Config *cfg, int argc, char **argv, char *e,
             e[0] = 0;
             char row[320];
             for (int i = 0; i < count; i++) {
-                snprintf(row, sizeof(row), "%s%s %dx%d%+d%+d%s\n",
+                snprintf(row, sizeof(row), "%s%.127s %dx%d%+d%+d%s\n",
                          !strcmp(list[i].name, p->monitor) ? "* " : "  ", list[i].name, list[i].w,
                          list[i].h, list[i].x, list[i].y, list[i].primary ? " primary" : "");
                 append(e, n, row);
@@ -981,8 +1006,8 @@ static void selection_event(Xorg *p, XEvent *event)
             Window client = find_client(p, child, 0, &remaining);
             char error[CAST_ERR];
             if (window_select(p, client ? client : child, error, sizeof(error)) < 0) {
-                snprintf(p->source_error, sizeof(p->source_error), "window selection cancelled: %s",
-                         error);
+                snprintf(p->source_error, sizeof(p->source_error),
+                         "window selection cancelled: %.900s", error);
             } else if (cfg) {
                 snprintf(cfg->capture_kind, sizeof(cfg->capture_kind), "window");
                 cfg->zoom_factor = 1;
@@ -1016,7 +1041,7 @@ static void selection_event(Xorg *p, XEvent *event)
         candidate.zoom_factor = 1;
         char error[CAST_ERR];
         if (x11_reconfigure((Platform *)p, &candidate, error, sizeof(error)) < 0) {
-            snprintf(p->source_error, sizeof(p->source_error), "region selection cancelled: %s",
+            snprintf(p->source_error, sizeof(p->source_error), "region selection cancelled: %.900s",
                      error);
         } else {
             *cfg = candidate;
@@ -1072,7 +1097,9 @@ static void key_event(Xorg *p, const Config *cfg, Compositor *comp, const XIRawE
         snprintf(atom, sizeof(atom), "U+%04lX", sym >= 0x01000000 ? sym - 0x01000000 : sym);
         name = atom;
     }
-    if (sym >= XK_a && sym <= XK_z) {
+    if (sym == XK_space) {
+        name = "Space";
+    } else if (sym >= XK_a && sym <= XK_z) {
         atom[0] = (char)('A' + sym - XK_a);
         atom[1] = 0;
         name = atom;
@@ -1120,9 +1147,17 @@ void x11_events(Platform *platform, Compositor *comp, const Config *cfg, bool pr
     Xorg *p = (Xorg *)platform;
     bool drop_pending = privacy != p->privacy || p->generation != p->seen_generation;
     if (drop_pending) {
+        /* Round-trip before draining so input already queued at the server cannot
+         * cross a pause/resume or source boundary on the next iteration. */
+        XSync(p->d, False);
         compositor_clear(comp);
         p->last_keycode = 0;
         p->seen_generation = p->generation;
+        /* Rendering runs on another connection and never remaps this window. */
+        if (p->preview) {
+            XUnmapWindow(p->d, p->preview);
+        }
+        p->preview_epoch++;
     }
     p->privacy = privacy;
     while (XPending(p->d)) {
@@ -1156,7 +1191,9 @@ void x11_events(Platform *platform, Compositor *comp, const Config *cfg, bool pr
                 p->mods = k->state.mods;
                 p->group = (unsigned)k->state.group;
             } else {
-                XkbRefreshKeyboardMapping(&k->map);
+                if (k->any.xkb_type == XkbMapNotify) {
+                    XkbRefreshKeyboardMapping(&k->map);
+                }
                 modifier_masks(p);
                 p->last_keycode = 0;
             }
@@ -1172,6 +1209,9 @@ void x11_events(Platform *platform, Compositor *comp, const Config *cfg, bool pr
             XRRUpdateConfiguration(&ev);
             continue;
         }
+        if (ev.type == UnmapNotify && ev.xunmap.window == p->selected) {
+            p->window_unmapped = true;
+        }
         if (p->selecting) {
             selection_event(p, &ev);
         }
@@ -1182,10 +1222,6 @@ void x11_events(Platform *platform, Compositor *comp, const Config *cfg, bool pr
         }
         if (ev.type == DestroyNotify && ev.xdestroywindow.window == p->preview) {
             p->preview = 0;
-            if (p->preview_gc) {
-                XFreeGC(p->d, p->preview_gc);
-            }
-            p->preview_gc = 0;
             p->preview_disabled = true;
         }
         if (ev.type == ConfigureNotify && ev.xconfigure.window == p->preview) {
@@ -1235,65 +1271,29 @@ static void preview_create(Xorg *p, const Config *cfg)
     XStoreName(p->d, p->preview, "cast output preview");
     XSetWMProtocols(p->d, p->preview, &p->wm_delete, 1);
     XSelectInput(p->d, p->preview, ExposureMask | StructureNotifyMask);
-    p->preview_gc = XCreateGC(p->d, p->preview, 0, NULL);
-    XMapWindow(p->d, p->preview);
+    /* Map only after the worker has painted an accepted current-epoch frame. */
+    /* Its second connection must not address a window before creation completes. */
+    XSync(p->d, False);
 }
-int x11_preview(Platform *platform, const Frame *frame, const State *state, const Config *cfg,
-                char *e, size_t n)
+/* The worker owns its connection and all painting resources. It never maps a
+ * window, so capture exclusion and privacy hiding cannot wait on a slow repaint. */
+static int preview_paint(Display *d, const Frame *frame, Window window, int w, int h,
+                         const char *label, unsigned long color)
 {
-    Xorg *p = (Xorg *)platform;
-    if (!cfg->preview) {
-        if (p->preview) {
-            XUnmapWindow(p->d, p->preview);
-        }
-        p->preview_disabled = false;
-        return 0;
+    int screen = DefaultScreen(d);
+    XImage *im = XCreateImage(d, DefaultVisual(d, screen), (unsigned)DefaultDepth(d, screen),
+                              ZPixmap, 0, NULL, (unsigned)w, (unsigned)h, 32, 0);
+    if (!im) {
+        return -1;
     }
-    if (p->preview_disabled) {
-        return 0;
+    im->data = calloc((size_t)im->bytes_per_line, h);
+    if (!im->data) {
+        XDestroyImage(im);
+        return -1;
     }
-    uint64_t now = cast_now_ns();
-    if (p->last_preview && now - p->last_preview < 66666666) {
-        return 0;
-    }
-    p->last_preview = now;
-    if (!frame || !frame->data) {
-        return 0;
-    }
-    if (!p->preview) {
-        preview_create(p, cfg);
-    } else {
-        XMapWindow(p->d, p->preview);
-    }
-    int w = p->preview_w, h = p->preview_h - 32;
-    if (w < 1 || h < 1 || w > 4096 || h > 4096) {
-        return fail(e, n, "preview window size is unsupported; resize it below 4096 pixels");
-    }
-    if (!p->preview_image || p->preview_image->width != w || p->preview_image->height != h) {
-        if (p->preview_image) {
-            XDestroyImage(p->preview_image);
-        }
-        p->preview_image = XCreateImage(p->d, DefaultVisual(p->d, p->screen),
-                                        (unsigned)DefaultDepth(p->d, p->screen), ZPixmap, 0, NULL,
-                                        (unsigned)w, (unsigned)h, 32, 0);
-        if (!p->preview_image) {
-            return fail(e, n, "cannot allocate preview XImage");
-        }
-        p->preview_image->data = calloc((size_t)p->preview_image->bytes_per_line, h);
-        if (!p->preview_image->data) {
-            XDestroyImage(p->preview_image);
-            p->preview_image = NULL;
-            return fail(e, n, "cannot allocate preview image pixels");
-        }
-    }
-    XImage *im = p->preview_image;
-    double scale = (double)w / frame->width;
-    if ((double)h / frame->height < scale) {
-        scale = (double)h / frame->height;
-    }
-    int iw = (int)(frame->width * scale), ih = (int)(frame->height * scale), ox = (w - iw) / 2,
-        oy = (h - ih) / 2;
-    memset(im->data, 0, (size_t)im->bytes_per_line * h);
+    double scale = fmin((double)w / frame->width, (double)h / frame->height);
+    int iw = (int)(frame->width * scale), ih = (int)(frame->height * scale);
+    int ox = (w - iw) / 2, oy = (h - ih) / 2;
     for (int y = 0; y < ih; y++) {
         for (int x = 0; x < iw; x++) {
             int sx = x * frame->width / iw, sy = y * frame->height / ih;
@@ -1316,24 +1316,193 @@ int x11_preview(Platform *platform, const Frame *frame, const State *state, cons
             XPutPixel(im, ox + x, oy + y, value);
         }
     }
-    begin(p);
-    XPutImage(p->d, p->preview, p->preview_gc, im, 0, 0, 0, 32, (unsigned)w, (unsigned)h);
-    XSetForeground(p->d, p->preview_gc, 0x111111);
-    XFillRectangle(p->d, p->preview, p->preview_gc, 0, 0, (unsigned)w, 32);
-    XSetForeground(p->d, p->preview_gc,
-                   state->live_paused   ? 0xffc65c
-                   : state->live_frozen ? 0x7ec8ff
-                                        : 0x64e69f);
+    XSync(d, False);
+    xerror = 0;
+    /* Unmapped Windows clip direct painting. Paint a server Pixmap and install it
+     * as the background, so a later safe map starts with complete current pixels. */
+    Pixmap pixmap = XCreatePixmap(d, window, (unsigned)w, (unsigned)(h + 32),
+                                  (unsigned)DefaultDepth(d, screen));
+    GC gc = XCreateGC(d, pixmap, 0, NULL);
+    XPutImage(d, pixmap, gc, im, 0, 0, 0, 32, (unsigned)w, (unsigned)h);
+    XSetForeground(d, gc, 0x111111);
+    XFillRectangle(d, pixmap, gc, 0, 0, (unsigned)w, 32);
+    XSetForeground(d, gc, color);
+    XDrawString(d, pixmap, gc, 10, 21, label, (int)strlen(label));
+    XSetWindowBackgroundPixmap(d, window, pixmap);
+    XClearWindow(d, window);
+    XFreeGC(d, gc);
+    XFreePixmap(d, pixmap);
+    XDestroyImage(im);
+    XSync(d, False);
+    return xerror ? -1 : 0;
+}
+static void *preview_run(void *data)
+{
+    Preview *p = data;
+    Display *d = NULL;
+    pthread_mutex_lock(&p->mutex);
+    while (!p->stop) {
+        if (!p->pending) {
+            pthread_cond_wait(&p->changed, &p->mutex);
+            continue;
+        }
+        Frame frame = p->frame;
+        memset(&p->frame, 0, sizeof(p->frame));
+        Window window = p->window;
+        int w = p->width, h = p->height;
+        uint64_t epoch = p->epoch;
+        unsigned long color = p->color;
+        char label[sizeof(p->label)];
+        snprintf(label, sizeof(label), "%s", p->label);
+        p->pending = false;
+        pthread_mutex_unlock(&p->mutex);
+        if (!d) {
+            d = XOpenDisplay(NULL);
+        }
+        int rc = d ? preview_paint(d, &frame, window, w, h, label, color) : -1;
+        frame_free(&frame);
+        pthread_mutex_lock(&p->mutex);
+        if (rc < 0) {
+            snprintf(p->error, sizeof(p->error), "%s; toggle preview off/on",
+                     d ? "preview painting failed" : "cannot open preview display connection");
+        } else {
+            p->ready_epoch = epoch;
+            p->error[0] = 0;
+        }
+    }
+    pthread_mutex_unlock(&p->mutex);
+    if (d) {
+        XCloseDisplay(d);
+    }
+    return NULL;
+}
+static int preview_start(Xorg *p, char *e, size_t n)
+{
+    if (p->preview_worker) {
+        return 0;
+    }
+    Preview *worker = calloc(1, sizeof(*worker));
+    if (!worker) {
+        return fail(e, n, "cannot allocate preview worker");
+    }
+    pthread_mutex_init(&worker->mutex, NULL);
+    pthread_cond_init(&worker->changed, NULL);
+    int rc = pthread_create(&worker->thread, NULL, preview_run, worker);
+    if (rc != 0) {
+        pthread_cond_destroy(&worker->changed);
+        pthread_mutex_destroy(&worker->mutex);
+        free(worker);
+        snprintf(e, n, "cannot start preview worker: %s", strerror(rc));
+        return -1;
+    }
+    p->preview_worker = worker;
+    return 0;
+}
+static void preview_stop(Xorg *p)
+{
+    Preview *worker = p->preview_worker;
+    if (!worker) {
+        return;
+    }
+    pthread_mutex_lock(&worker->mutex);
+    worker->stop = true;
+    pthread_cond_signal(&worker->changed);
+    pthread_mutex_unlock(&worker->mutex);
+    pthread_join(worker->thread, NULL);
+    frame_free(&worker->frame);
+    pthread_cond_destroy(&worker->changed);
+    pthread_mutex_destroy(&worker->mutex);
+    free(worker);
+    p->preview_worker = NULL;
+}
+int x11_preview(Platform *platform, const Frame *frame, const State *state, const Config *cfg,
+                char *e, size_t n)
+{
+    Xorg *p = (Xorg *)platform;
+    if (!cfg->preview) {
+        if (p->preview) {
+            XUnmapWindow(p->d, p->preview);
+            XFlush(p->d);
+        }
+        if (p->preview_enabled) {
+            p->preview_epoch++;
+            p->preview_enabled = false;
+        }
+        Preview *worker = p->preview_worker;
+        if (worker && pthread_mutex_trylock(&worker->mutex) == 0) {
+            frame_free(&worker->frame);
+            worker->pending = false;
+            worker->error[0] = 0;
+            pthread_mutex_unlock(&worker->mutex);
+        }
+        p->preview_disabled = false;
+        return 0;
+    }
+    if (p->preview_disabled || !frame || !frame->data) {
+        return 0;
+    }
+    bool record = !strcmp(cfg->preview_target, "record");
+    unsigned flags = (unsigned)state->live_paused | ((unsigned)state->live_frozen << 1) |
+                     ((unsigned)state->recording << 2) | ((unsigned)state->record_paused << 3) |
+                     ((unsigned)record << 4);
+    if (!p->preview_enabled || flags != p->preview_state || p->preview_source != p->generation) {
+        p->preview_epoch++;
+        p->preview_state = flags;
+        p->preview_source = p->generation;
+        p->preview_enabled = true;
+        p->last_preview = 0;
+        if (p->preview) {
+            XUnmapWindow(p->d, p->preview);
+            XFlush(p->d);
+        }
+    }
+    if (!p->preview) {
+        preview_create(p, cfg);
+    }
+    if (preview_start(p, e, n) < 0) {
+        return -1;
+    }
+    Preview *worker = p->preview_worker;
+    if (pthread_mutex_trylock(&worker->mutex) != 0) {
+        return 0; /* A busy preview loses this update, never the live capture cadence. */
+    }
+    if (worker->ready_epoch == p->preview_epoch) {
+        XMapWindow(p->d, p->preview);
+        XFlush(p->d);
+    }
+    if (worker->error[0]) {
+        snprintf(e, n, "%s", worker->error);
+        pthread_mutex_unlock(&worker->mutex);
+        return -1;
+    }
+    uint64_t now = cast_now_ns();
+    if (p->last_preview && now - p->last_preview < 66666666) {
+        pthread_mutex_unlock(&worker->mutex);
+        return 0;
+    }
+    int w = p->preview_w, h = p->preview_h - 32;
+    if (w < 1 || h < 1 || w > 4096 || h > 4096) {
+        pthread_mutex_unlock(&worker->mutex);
+        return fail(e, n, "preview window size is unsupported; resize it below 4096 pixels");
+    }
+    if (frame_copy(&worker->frame, frame) < 0) {
+        pthread_mutex_unlock(&worker->mutex);
+        return fail(e, n, "cannot allocate preview queue frame");
+    }
+    p->last_preview = now;
+    worker->window = p->preview;
+    worker->width = w;
+    worker->height = h;
+    worker->epoch = p->preview_epoch;
+    worker->color = state->live_paused ? 0xffc65c : state->live_frozen ? 0x7ec8ff : 0x64e69f;
     const char *live = state->live_paused ? "PAUSED" : state->live_frozen ? "FROZEN" : "LIVE";
-    char label[256];
-    snprintf(label, sizeof(label), "%s | %s | preview: %s", live,
+    snprintf(worker->label, sizeof(worker->label), "%s | %s | preview: %s", live,
              state->recording ? (state->record_paused ? "RECORDING-PAUSED" : "RECORDING")
                               : "RECORD OFF",
              cfg->preview_target);
-    XDrawString(p->d, p->preview, p->preview_gc, 10, 21, label, (int)strlen(label));
-    if (!end(p)) {
-        return fail(e, n, "preview window disappeared; toggle preview off/on to recreate it");
-    }
+    worker->pending = true;
+    pthread_cond_signal(&worker->changed);
+    pthread_mutex_unlock(&worker->mutex);
     return 0;
 }
 void x11_doctor(const Config *cfg, char *e, size_t n)

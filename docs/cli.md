@@ -75,7 +75,10 @@ with neutral. Neither freeze nor unfreeze can bypass privacy pause.
 Automatic names are generated in record.directory; existing paths are never
 overwritten. Starting during group pause creates a paused recording; group resume
 does not resume it because it was not a running output changed by that pause.
-`record stop` finalizes the file and prints its filename, or cancels countdown.
+`record stop` ends media admission and requests worker finalization, printing the
+filename immediately, or cancels countdown. `status --json` reports record.finalizing;
+wait for false before using the file or starting another recording. The foreground
+daemon prints finalization completion/error, and quit waits for completion.
 `record pause|resume|toggle` appends no media while paused and resumes the SAME
 file with interruption time removed. Toggle NEVER starts/stops and errors without
 a recording. Recording is independent of live privacy/freeze. Encoder/disk failures
@@ -95,7 +98,7 @@ physical-speaker playback route; video and audio devices are selected separately
 `preview on|off|toggle` controls local preview; `preview target live|record` chooses
 its lane. Local LIVE/PAUSED/FROZEN/RECORDING labels stay out of exported frames.
 `status [--json]` reports capabilities, source, layout, camera visibility, zoom,
-live/record state, path/active duration/countdown, audio, errors and drops.
+live/record state, path/active duration/countdown/finalization, audio routing, errors and drops.
 `doctor` performs read-only dependency/device/directory checks with setup advice.
 `config check [PATH]`, `config defaults`, `config reload` validate/print/reload config.
 `reset` restores effective composition defaults only; `quit` cleanly shuts down
@@ -105,3 +108,7 @@ For a status bar, poll `cast status --json` and parse JSON, for example
 `cast status --json | jq -r '.live.state + " / " + .record.state'`.
 The last_error field retains the last reported failure; errors are also printed
 by the foreground daemon. A successful unrelated command does not erase evidence.
+
+When an edited configuration is invalid, explicit `--socket PATH` runtime commands
+use that routing directly, so status and config reload remain reachable. Local
+config check/doctor and daemon startup still strictly validate the selected file.

@@ -99,7 +99,11 @@ static const Setting settings[] = {
     I("keys", "timeout_ms", keys_timeout_ms, 100, 30000, "1800"),
     C("keys", "color", keys_color, "#ffffff"),
     C("keys", "background", keys_background, "#20252b"),
-    S("keys", "filter", keys_filter, "Super+Pause,Super+F9,Super+F10,Super+F11,Super+F12"),
+    S("keys", "filter", keys_filter,
+      "Super+Pause,Super+F9,Super+F10,Super+F11,Super+F12,Super+Shift+P,Super+Shift+R,Super+P,"
+      "Super+Shift+Space,Super+Shift+C,Super+=,Super+-,Super+Shift+A,Super+Shift+L,Super+Shift+D,"
+      "Super+Shift+M,Super+Shift+S,Super+Z,Super+Shift++,Super+Shift+_,Super+Shift+K,Super+Shift+B,"
+      "Super+Shift+V,Ctrl+Super+Shift+R,Ctrl+Super+Shift+S,Ctrl+Super+F,Ctrl+Super+Shift+F"),
     S("keys", "navigation", keys_navigation,
       "Left,Right,Up,Down,Home,End,Page_Up,Page_Down,Escape,Tab,Return,BackSpace,Delete"),
     B("annotations", "live_keys", annotations_live_keys, "true"),
