@@ -72,6 +72,8 @@ FORCE:
 	install -Dm755 cast $(DESTDIR)$(PREFIX)/bin/cast
 	install -Dm644 LICENSE $(DESTDIR)$(PREFIX)/share/licenses/cast/LICENSE
 	install -Dm644 vendor/inih/LICENSE.txt $(DESTDIR)$(PREFIX)/share/licenses/cast/inih-LICENSE
+	install -Dm644 licenses/GPL-3.0.txt $(DESTDIR)$(PREFIX)/share/licenses/cast/GPL-3.0.txt
+	install -Dm644 licenses/LGPL-2.1.txt $(DESTDIR)$(PREFIX)/share/licenses/cast/LGPL-2.1.txt
 	install -Dm644 docs/cast.1 $(DESTDIR)$(PREFIX)/share/man/man1/cast.1
 	install -Dm644 examples/cast.conf $(DESTDIR)$(PREFIX)/share/doc/cast/cast.conf.example
 	install -Dm644 examples/sxhkdrc $(DESTDIR)$(PREFIX)/share/doc/cast/sxhkdrc.example
@@ -86,6 +88,8 @@ package: cast
 	$(MAKE) X11=$(X11) WAYLAND=$(WAYLAND) DESTDIR='$(CURDIR)/dist/stage' PREFIX=/usr install
 	@{ echo 'cast $(VERSION)'; echo 'Architecture:'; uname -m; echo 'Backend features: X11=$(X11) WAYLAND=$(WAYLAND)'; echo 'Runtime dynamic libraries:'; ldd cast; } > dist/stage/usr/share/doc/cast/build-info.txt
 	tar -C dist/stage -czf dist/cast-$(VERSION)-linux-$$(uname -m).tar.gz .
+	tar -czf dist/cast-$(VERSION)-source.tar.gz Makefile README.md LICENSE licenses src vendor tests docs examples packaging
+	cd dist && sha256sum cast-$(VERSION)-linux-*.tar.gz cast-$(VERSION)-source.tar.gz > SHA256SUMS
 clean:
 	rm -rf build cast
 .PHONY: FORCE all check check-wayland sanitize install uninstall package clean
