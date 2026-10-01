@@ -71,6 +71,7 @@ $(BUILD)/test_xorg: $(XORG_TEST_SOURCES) src/cast.h src/platform_backend.h
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(shell $(PKG_CONFIG) --cflags xtst) $(CFLAGS) $(WARN) -std=gnu11 -o $@ $(XORG_TEST_SOURCES) $(PKG_LIBS) $(shell $(PKG_CONFIG) --libs xtst) $(LDLIBS)
 check-xorg: $(BUILD)/test_xorg
 	timeout 30s xvfb-run -a -s '-screen 0 800x600x24' $(BUILD)/test_xorg --exercise
+	timeout 30s xvfb-run -a -s '-screen 0 800x600x24 -extension MIT-SHM' $(BUILD)/test_xorg --exercise
 else
 check-xorg:
 	@echo 'check-xorg requires X11=1 and optional Xvfb/libXtst test dependencies' >&2

@@ -720,6 +720,8 @@ int x11_capture(Platform *platform, Frame *out, Cursor *cursor, char *e, size_t 
                     "Xorg source acquisition failed (window/monitor changed); no alternate source "
                     "was selected");
     }
+    /* Pixmap readback has no associated visual: XGetImage/XShmGetImage may return
+     * zero channel masks. The selected window visual describes its backing pixmap. */
     for (int j = 0; j < out->height; j++) {
         uint8_t *d = out->data + (size_t)j * out->stride;
         for (int i = 0; i < out->width; i++, d += 4) {
@@ -731,9 +733,9 @@ int x11_capture(Platform *platform, Frame *out, Cursor *cursor, char *e, size_t 
             } else {
                 value = XGetPixel(image, i, j);
             }
-            d[0] = (uint8_t)channel(value, image->red_mask);
-            d[1] = (uint8_t)channel(value, image->green_mask);
-            d[2] = (uint8_t)channel(value, image->blue_mask);
+            d[0] = (uint8_t)channel(value, visual->red_mask);
+            d[1] = (uint8_t)channel(value, visual->green_mask);
+            d[2] = (uint8_t)channel(value, visual->blue_mask);
             d[3] = 255;
         }
     }

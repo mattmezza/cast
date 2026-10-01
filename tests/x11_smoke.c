@@ -264,8 +264,6 @@ static void exercise(Display *d, Platform *p, Config *cfg)
     XClearWindow(d, window);
     XSync(d, false);
     assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) == 0);
-    fprintf(stderr, "window capture %dx%d pixel %06x\n", capture.width, capture.height,
-            pixel(&capture, 10, 10));
     assert(capture.width == 200 && capture.height == 100 && pixel(&capture, 10, 10) == 0x44aa66);
     XMoveResizeWindow(d, window, 120, 100, 240, 120);
     XSync(d, false);
