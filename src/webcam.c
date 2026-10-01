@@ -209,12 +209,75 @@ fail:
     camera_close(c);
     return NULL;
 }
+/* JPEG's legacy YUVJ formats describe the same planes as ordinary YUV,
+ * with full-range samples. Give swscale the range separately. */
+static struct SwsContext *camera_scaler(struct SwsContext *scale, int w, int h,
+                                        enum AVPixelFormat format, enum AVColorRange range,
+                                        enum AVColorSpace colorspace)
+{
+    int full = range == AVCOL_RANGE_JPEG;
+    switch (format) {
+    case AV_PIX_FMT_YUVJ420P:
+        format = AV_PIX_FMT_YUV420P;
+        full = 1;
+        break;
+    case AV_PIX_FMT_YUVJ422P:
+        format = AV_PIX_FMT_YUV422P;
+        full = 1;
+        break;
+    case AV_PIX_FMT_YUVJ444P:
+        format = AV_PIX_FMT_YUV444P;
+        full = 1;
+        break;
+    case AV_PIX_FMT_YUVJ440P:
+        format = AV_PIX_FMT_YUV440P;
+        full = 1;
+        break;
+    default:
+        break;
+    }
+    int matrix = SWS_CS_DEFAULT;
+    switch (colorspace) {
+    case AVCOL_SPC_BT709:
+        matrix = SWS_CS_ITU709;
+        break;
+    case AVCOL_SPC_FCC:
+        matrix = SWS_CS_FCC;
+        break;
+    case AVCOL_SPC_SMPTE240M:
+        matrix = SWS_CS_SMPTE240M;
+        break;
+    case AVCOL_SPC_BT2020_NCL:
+        matrix = SWS_CS_BT2020;
+        break;
+    default:
+        break;
+    }
+    scale = sws_getCachedContext(scale, w, h, format, w, h, AV_PIX_FMT_RGBA, SWS_BILINEAR, NULL,
+                                 NULL, NULL);
+    const int *coefficients = sws_getCoefficients(matrix);
+    if (scale && sws_setColorspaceDetails(scale, coefficients, full, coefficients, 1, 0, 1 << 16,
+                                          1 << 16) < 0) {
+        sws_freeContext(scale);
+        return NULL;
+    }
+    return scale;
+}
+#ifdef CAST_TEST
+struct SwsContext *camera_test_scaler(struct SwsContext *scale, const struct AVFrame *frame)
+{
+    return camera_scaler(scale, frame->width, frame->height, frame->format, frame->color_range,
+                         frame->colorspace);
+}
+#endif
 static int decode(CastCamera *c, const void *data, size_t bytes, char *e, size_t n)
 {
     const uint8_t *src[4] = {data, NULL, NULL, NULL};
     int strides[4] = {c->stride, 0, 0, 0};
     int w = c->w, h = c->h;
     enum AVPixelFormat f = raw_format(c->format);
+    enum AVColorRange range = AVCOL_RANGE_UNSPECIFIED;
+    enum AVColorSpace colorspace = AVCOL_SPC_UNSPECIFIED;
     if (c->decoder) {
         AVPacket *p = av_packet_alloc();
         if (!p || bytes > INT_MAX || av_new_packet(p, (int)bytes) < 0) {
@@ -232,6 +295,8 @@ static int decode(CastCamera *c, const void *data, size_t bytes, char *e, size_t
         w = c->decoded->width;
         h = c->decoded->height;
         f = c->decoded->format;
+        range = c->decoded->color_range;
+        colorspace = c->decoded->colorspace;
         for (int i = 0; i < 4; i++) {
             src[i] = c->decoded->data[i];
             strides[i] = c->decoded->linesize[i];
@@ -263,8 +328,7 @@ static int decode(CastCamera *c, const void *data, size_t bytes, char *e, size_t
         snprintf(e, n, "invalid webcam size or frame allocation failed");
         return -1;
     }
-    c->scale = sws_getCachedContext(c->scale, w, h, f, w, h, AV_PIX_FMT_RGBA, SWS_BILINEAR, NULL,
-                                    NULL, NULL);
+    c->scale = camera_scaler(c->scale, w, h, f, range, colorspace);
     if (!c->scale) {
         snprintf(e, n, "webcam conversion unavailable");
         return -1;

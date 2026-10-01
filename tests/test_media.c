@@ -480,6 +480,93 @@ static void audio_lanes_test(void)
     media_close(m);
     puts("audio lanes: clipped mix, independent virtual silence, stale samples and disabled lanes");
 }
+static int deprecated_pixel_warnings;
+static void camera_color_log(void *context, int level, const char *format, va_list args)
+{
+    (void)context;
+    if (level > AV_LOG_WARNING) {
+        return;
+    }
+    char message[512];
+    vsnprintf(message, sizeof(message), format, args);
+    if (strstr(message, "deprecated pixel format")) {
+        ++deprecated_pixel_warnings;
+    }
+}
+static void camera_color_test(void)
+{
+    const enum AVPixelFormat legacy[] = {AV_PIX_FMT_YUVJ420P, AV_PIX_FMT_YUVJ422P,
+                                         AV_PIX_FMT_YUVJ444P, AV_PIX_FMT_YUVJ440P};
+    const enum AVPixelFormat planar[] = {AV_PIX_FMT_YUV420P, AV_PIX_FMT_YUV422P, AV_PIX_FMT_YUV444P,
+                                         AV_PIX_FMT_YUV440P};
+    uint8_t planes[3][256 + AV_INPUT_BUFFER_PADDING_SIZE];
+    for (int i = 0; i < 256; ++i) {
+        planes[0][i] = (uint8_t)i;
+        planes[1][i] = (uint8_t)(80 + i / 4);
+        planes[2][i] = (uint8_t)(160 - i / 4);
+    }
+    const uint8_t *source[4] = {planes[0], planes[1], planes[2], NULL};
+    const int strides[4] = {16, 16, 16, 0};
+    const int output_strides[4] = {64, 0, 0, 0};
+    uint8_t old_pixels[1024], new_pixels[1024], explicit_pixels[1024];
+    uint8_t *old_dst[4] = {old_pixels, NULL, NULL, NULL};
+    uint8_t *new_dst[4] = {new_pixels, NULL, NULL, NULL};
+    uint8_t *explicit_dst[4] = {explicit_pixels, NULL, NULL, NULL};
+    int old_level = av_log_get_level();
+    av_log_set_level(AV_LOG_WARNING);
+    av_log_set_callback(camera_color_log);
+    for (int matrix = 0; matrix < 2; ++matrix) {
+        const int *coefficients = sws_getCoefficients(matrix ? SWS_CS_ITU709 : SWS_CS_DEFAULT);
+        for (size_t i = 0; i < sizeof(legacy) / sizeof(*legacy); ++i) {
+            AVFrame frame = {.width = 16,
+                             .height = 16,
+                             .format = legacy[i],
+                             .color_range = AVCOL_RANGE_UNSPECIFIED,
+                             .colorspace = matrix ? AVCOL_SPC_BT709 : AVCOL_SPC_UNSPECIFIED};
+            struct SwsContext *old = sws_getContext(16, 16, legacy[i], 16, 16, AV_PIX_FMT_RGBA,
+                                                    SWS_BILINEAR, NULL, NULL, NULL);
+            struct SwsContext *explicit = sws_getContext(16, 16, planar[i], 16, 16, AV_PIX_FMT_RGBA,
+                                                         SWS_BILINEAR, NULL, NULL, NULL);
+            assert(old && explicit);
+            assert(sws_setColorspaceDetails(old, coefficients, 1, coefficients, 1, 0, 1 << 16,
+                                            1 << 16) == 0);
+            assert(sws_setColorspaceDetails(explicit, coefficients, 1, coefficients, 1, 0, 1 << 16,
+                                            1 << 16) == 0);
+            int warnings = deprecated_pixel_warnings;
+            struct SwsContext *normalized = camera_test_scaler(NULL, &frame);
+            assert(normalized && deprecated_pixel_warnings == warnings);
+            assert(sws_scale(old, source, strides, 0, 16, old_dst, output_strides) == 16);
+            assert(sws_scale(explicit, source, strides, 0, 16, explicit_dst, output_strides) == 16);
+            assert(sws_scale(normalized, source, strides, 0, 16, new_dst, output_strides) == 16);
+            assert(!memcmp(old_pixels, new_pixels, sizeof(new_pixels)));
+            assert(!memcmp(explicit_pixels, new_pixels, sizeof(new_pixels)));
+            sws_freeContext(old);
+            sws_freeContext(explicit);
+            sws_freeContext(normalized);
+        }
+    }
+    /* Reusing the context must also update explicit range metadata. */
+    memset(planes[0], 64, sizeof(planes[0]));
+    memset(planes[1], 128, sizeof(planes[1]));
+    memset(planes[2], 128, sizeof(planes[2]));
+    AVFrame frame = {.width = 16,
+                     .height = 16,
+                     .format = AV_PIX_FMT_YUV444P,
+                     .color_range = AVCOL_RANGE_JPEG,
+                     .colorspace = AVCOL_SPC_BT709};
+    struct SwsContext *scale = camera_test_scaler(NULL, &frame);
+    assert(scale && sws_scale(scale, source, strides, 0, 16, new_dst, output_strides) == 16);
+    frame.color_range = AVCOL_RANGE_MPEG;
+    scale = camera_test_scaler(scale, &frame);
+    assert(scale && sws_scale(scale, source, strides, 0, 16, explicit_dst, output_strides) == 16);
+    assert(new_pixels[0] == 64 && new_pixels[0] > explicit_pixels[0]);
+    assert(new_pixels[3] == 255 && explicit_pixels[3] == 255);
+    sws_freeContext(scale);
+    av_log_set_callback(av_log_default_callback);
+    av_log_set_level(old_level);
+    puts("webcam colors: four legacy YUVJ formats match explicit full range without warnings; "
+         "range metadata updates");
+}
 static void webcam_probe(void)
 {
     const char *path = getenv("CAST_TEST_CAMERA");
@@ -539,6 +626,7 @@ int main(void)
     responsiveness_test(directory);
     disk_failure_test(directory);
     audio_lanes_test();
+    camera_color_test();
     webcam_probe();
     /* Test artifacts deliberately remain available for ffprobe/visual inspection. */
     printf("media tests passed; inspection artifacts: %s\n", directory);

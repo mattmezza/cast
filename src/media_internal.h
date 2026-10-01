@@ -38,6 +38,9 @@ uint64_t recorder_duration(CastRecorder *);
 void recorder_path(CastRecorder *, char *, size_t);
 /* Deterministic synthetic integration tests; no CLI/runtime input injection. */
 #ifdef CAST_TEST
+struct AVFrame;
+struct SwsContext;
+struct SwsContext *camera_test_scaler(struct SwsContext *, const struct AVFrame *);
 void audio_test_push(CastAudio *, int, uint64_t, const float *, int);
 void audio_test_virtual_read(CastAudio *, uint64_t, float *, int);
 CastAudio *media_test_audio(Media *);
