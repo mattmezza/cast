@@ -67,7 +67,7 @@ static const Setting settings[] = {
     E("composition", "fit", fit, "contain,cover", "contain"),
     S("composition", "preset_order", preset_order, "coding,demo,conversation"),
     S("capture", "monitor", monitor, ""),
-    E("capture", "kind", capture_kind, "monitor,region", "monitor"),
+    E("capture", "kind", capture_kind, "monitor,region,window", "monitor"),
     I("capture", "x", region_x, 0, 16384, "0"),
     I("capture", "y", region_y, 0, 16384, "0"),
     I("capture", "width", region_w, 0, 16384, "0"),
@@ -254,6 +254,34 @@ static int valid_list(const char *value, const char *allowed, char *err, size_t 
 }
 int config_validate(const Config *c, char *err, size_t n)
 {
+    /* Runtime commands and startup flags must pass the same schema as INI values. */
+    for (size_t i = 0; i < NSET; i++) {
+        const Setting *setting = &settings[i];
+        const char *value = (const char *)c + setting->offset;
+        if (setting->type == T_ENUM && !choice(value, setting->choices)) {
+            return fail(err, n, "%s.%s expects one of %s", setting->section, setting->key,
+                        setting->choices);
+        }
+        if (setting->type == T_INT) {
+            int number = *(const int *)value;
+            if (number < setting->min || number > setting->max) {
+                return fail(err, n, "%s.%s is outside %g..%g", setting->section, setting->key,
+                            setting->min, setting->max);
+            }
+        }
+        if (setting->type == T_DOUBLE) {
+            double number = *(const double *)value;
+            if (!isfinite(number) || number < setting->min || number > setting->max) {
+                return fail(err, n, "%s.%s is outside %g..%g", setting->section, setting->key,
+                            setting->min, setting->max);
+            }
+        }
+    }
+    if (!c->output_device[0] || !c->camera_device[0] || !c->record_dir[0] || !c->video_codec[0] ||
+        !c->audio_codec[0] || !c->record_container[0]) {
+        return fail(err, n,
+                    "device paths, recording directory, codecs and container cannot be empty");
+    }
     if (c->width % 2 || c->height % 2) {
         return fail(err, n, "output dimensions must be even for video formats");
     }
@@ -447,6 +475,34 @@ static int handler(void *u, const char *section, const char *key, const char *va
     }
     return 1;
 }
+static int check_section_lengths(FILE *file, const char *path, char *err, size_t n)
+{
+    char line[8192];
+    int line_number = 0;
+    while (fgets(line, sizeof line, file)) {
+        line_number++;
+        size_t length = strlen(line);
+        if (length == sizeof line - 1 && line[length - 1] != '\n') {
+            return fail(err, n, "%s:%d: line exceeds 8190 bytes", path, line_number);
+        }
+        char *start = line;
+        while (isspace((unsigned char)*start)) {
+            start++;
+        }
+        if (*start == '[') {
+            char *end = strchr(start, ']');
+            if (end && end - start - 1 >= 50) {
+                return fail(err, n, "%s:%d: section name exceeds 49 bytes", path, line_number);
+            }
+        }
+    }
+    if (ferror(file)) {
+        return fail(err, n, "%s: read failed: %s", path, strerror(errno));
+    }
+    rewind(file);
+    return 0;
+}
+
 int config_load(Config *c, const char *path, bool explicit_path, char *err, size_t n)
 {
     Config candidate;
@@ -458,6 +514,10 @@ int config_load(Config *c, const char *path, bool explicit_path, char *err, size
             return 0;
         }
         return fail(err, n, "%s: %s", path, strerror(errno));
+    }
+    if (check_section_lengths(f, path, err, n)) {
+        fclose(f);
+        return -1;
     }
     Parse *p = calloc(1, sizeof *p);
     if (!p) {
