@@ -42,6 +42,7 @@ static Config configuration(void)
     c.keys_timeout_ms = 1000;
     c.keys_font_size = 14;
     c.keys_color = 0xffffff;
+    c.pause_color = 0x253647;
     c.annotations_live_keys = c.annotations_record_keys = true;
     c.annotations_live_clicks = c.annotations_record_clicks = true;
     return c;
@@ -150,6 +151,131 @@ static Window wait_preview(Display *d, Platform *p, Config *cfg, Compositor *c, 
     }
     assert(!"preview worker did not paint/map within timeout");
     return None;
+}
+
+static void assert_preview_mask(const Frame *frame, const XWindowAttributes *attr, int source_x,
+                                int source_y, uint32_t color)
+{
+    int left = attr->x - source_x, top = attr->y - source_y;
+    int right = left + attr->width + 2 * attr->border_width;
+    int bottom = top + attr->height + 2 * attr->border_width;
+    for (int y = 0; y < frame->height; y++) {
+        for (int x = 0; x < frame->width; x++) {
+            bool covered = x >= left && x < right && y >= top && y < bottom;
+            assert(pixel(frame, x, y) == (covered ? color : 0));
+            assert(frame->data[(size_t)y * frame->stride + x * 4 + 3] == 255);
+        }
+    }
+}
+
+static void preview_tests(Display *d, Platform *p, Config *cfg, Compositor *c)
+{
+    Frame source = {0}, capture = {0};
+    fill_source(&source);
+    Cursor cursor;
+    char error[CAST_ERR];
+    State state = {.live_paused = true};
+    cfg->preview = true;
+    Window preview = wait_preview(d, p, cfg, c, &source, &state);
+    XWindowAttributes attr;
+    assert(XGetWindowAttributes(d, preview, &attr) && attr.override_redirect);
+    XClassHint hint;
+    assert(XGetClassHint(d, preview, &hint));
+    assert(!strcmp(hint.res_name, "cast-preview") && !strcmp(hint.res_class, "CastPreview"));
+    XFree(hint.res_name);
+    XFree(hint.res_class);
+    XImage *header = XGetImage(d, preview, 0, 0, 32, 32, AllPlanes, ZPixmap);
+    assert(header && XGetPixel(header, 10, 10) == 0x111111);
+    XDestroyImage(header);
+    XSetWindowBorderWidth(d, preview, 3);
+    XSetWindowBorder(d, preview, 0xff0000);
+    XMoveResizeWindow(d, preview, 70, 90, 210, 140);
+    pump(d, p, cfg, c, true);
+    XSelectInput(d, preview, StructureNotifyMask);
+    XSelectInput(d, DefaultRootWindow(d), SubstructureNotifyMask);
+    XSync(d, false);
+    while (XPending(d)) {
+        XEvent event;
+        XNextEvent(d, &event);
+    }
+    for (int phase = 0; phase < 5; phase++) {
+        state.live_paused = phase == 0;
+        state.live_frozen = phase == 2;
+        state.recording = phase >= 3;
+        state.record_paused = phase == 4;
+        strcpy(cfg->preview_target, phase >= 3 ? "record" : "live");
+        for (int i = 0; i < 4; i++) {
+            pump(d, p, cfg, c, state.live_paused);
+            assert(platform_preview(p, &source, &state, cfg, error, sizeof(error)) == 0);
+            assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) == 0);
+            assert(XGetWindowAttributes(d, preview, &attr) && attr.map_state == IsViewable);
+            assert_preview_mask(&capture, &attr, 0, 0, cfg->pause_color);
+            XSync(d, false);
+            while (XPending(d)) {
+                XEvent event;
+                XNextEvent(d, &event);
+                assert(event.type != MapNotify || event.xmap.window != preview);
+                assert(event.type != UnmapNotify || event.xunmap.window != preview);
+            }
+        }
+    }
+    /* Region clipping uses current geometry rather than creation coordinates. */
+    char *region[] = {"capture", "region", "100", "110", "140", "100"};
+    command(p, cfg, 6, region);
+    assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) == 0);
+    assert_preview_mask(&capture, &attr, 100, 110, cfg->pause_color);
+    char *monitor[] = {"capture", "monitor"};
+    command(p, cfg, 2, monitor);
+    XMoveResizeWindow(d, preview, 270, 210, 240, 150);
+    pump(d, p, cfg, c, false);
+    assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) == 0);
+    assert(XGetWindowAttributes(d, preview, &attr));
+    assert_preview_mask(&capture, &attr, 0, 0, cfg->pause_color);
+    /* Dragging the local header works without involving a tiling manager. */
+    XTestFakeMotionEvent(d, DefaultScreen(d), attr.x + 13, attr.y + 13, CurrentTime);
+    XTestFakeButtonEvent(d, 1, true, CurrentTime);
+    pump(d, p, cfg, c, false);
+    XTestFakeMotionEvent(d, DefaultScreen(d), attr.x + 53, attr.y + 43, CurrentTime);
+    pump(d, p, cfg, c, false);
+    XTestFakeButtonEvent(d, 1, false, CurrentTime);
+    pump(d, p, cfg, c, false);
+    assert(XGetWindowAttributes(d, preview, &attr) && attr.x == 310 && attr.y == 240);
+    assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) == 0);
+    assert_preview_mask(&capture, &attr, 0, 0, cfg->pause_color);
+    /* Application pixmap capture needs no footprint mask even when overlapped. */
+    Window app = XCreateSimpleWindow(d, DefaultRootWindow(d), 300, 230, 140, 90, 0, 0, 0x778899);
+    Atom wm_state = XInternAtom(d, "WM_STATE", false);
+    unsigned long app_state[2] = {1, 0};
+    XChangeProperty(d, app, wm_state, wm_state, 32, PropModeReplace, (unsigned char *)app_state, 2);
+    Atom active = XInternAtom(d, "_NET_ACTIVE_WINDOW", false);
+    XChangeProperty(d, DefaultRootWindow(d), active, XA_WINDOW, 32, PropModeReplace,
+                    (unsigned char *)&app, 1);
+    XMapWindow(d, app);
+    XSync(d, false);
+    char *select[] = {"capture", "window", "active"};
+    command(p, cfg, 3, select);
+    XClearWindow(d, app);
+    XRaiseWindow(d, preview);
+    XSync(d, false);
+    assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) == 0);
+    for (int y = 0; y < capture.height; y++) {
+        for (int x = 0; x < capture.width; x++) {
+            assert(pixel(&capture, x, y) == 0x778899);
+        }
+    }
+    command(p, cfg, 2, monitor);
+    XDestroyWindow(d, app);
+    XSync(d, false);
+    cfg->preview = false;
+    assert(platform_preview(p, &source, &state, cfg, error, sizeof(error)) == 0);
+    XSync(d, false);
+    assert(XGetWindowAttributes(d, preview, &attr) && attr.map_state == IsUnmapped);
+    cfg->preview = true;
+    wait_preview(d, p, cfg, c, &source, &state);
+    cfg->preview = false;
+    assert(platform_preview(p, &source, &state, cfg, error, sizeof(error)) == 0);
+    frame_free(&source);
+    frame_free(&capture);
 }
 
 static void keyboard_tests(Display *d, Platform *p, Config *cfg, Compositor *c)
@@ -353,33 +479,12 @@ static void exercise(Display *d, Platform *p, Config *cfg)
     assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) < 0);
     assert(strstr(error, "destroyed"));
     command(p, cfg, 2, monitor);
-    State s = {.live_paused = true};
-    cfg->preview = true;
-    assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) == 0);
-    Window preview = wait_preview(d, p, cfg, c, &capture, &s);
-    XImage *header = XGetImage(d, preview, 0, 0, 32, 32, AllPlanes, ZPixmap);
-    assert(header && XGetPixel(header, 10, 10) == 0x111111);
-    XDestroyImage(header); /* Local header was really painted before exclusion check. */
-    assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) == 0);
-    assert(pixel(&capture, 10, 10) == 0); /* Preview unmapped from root readback. */
-    cfg->preview = false;
-    assert(platform_preview(p, &capture, &s, cfg, error, sizeof(error)) == 0);
-    assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) == 0);
-    XWindowAttributes attr;
-    assert(XGetWindowAttributes(d, preview, &attr) && attr.map_state == IsUnmapped);
-    cfg->preview = true;
-    preview = wait_preview(d, p, cfg, c, &capture, &s);
-    s.live_paused = false;
-    assert(platform_preview(p, &capture, &s, cfg, error, sizeof(error)) == 0);
-    /* A state boundary hides already painted content until a fresh epoch is ready. */
-    assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) == 0);
-    assert(XGetWindowAttributes(d, preview, &attr) && attr.map_state == IsUnmapped);
-    cfg->preview = false;
-    assert(platform_preview(p, &capture, &s, cfg, error, sizeof(error)) == 0);
+    preview_tests(d, p, cfg, c);
     frame_free(&capture);
     compositor_destroy(c);
     puts("Xvfb: root/window pixels, resize, remap/minimize/destroy, atomic regions, selection "
-         "cancellation, XI2/XKB mapping/modifiers/repeat, input privacy and preview exclusion "
+         "cancellation, XI2/XKB mapping/modifiers/repeat, input privacy, stable floating preview "
+         "mapping/drag and neutral footprint exclusion "
          "passed");
 }
 

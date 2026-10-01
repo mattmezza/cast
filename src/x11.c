@@ -40,6 +40,7 @@ typedef struct {
     char label[256], error[CAST_ERR];
     unsigned long color;
     uint64_t epoch, ready_epoch;
+    Pixmap ready_pixmap;
 } Preview;
 typedef struct {
     Display *d;
@@ -64,12 +65,15 @@ typedef struct {
     bool dragging;
     Config *owner; /* Runtime config object provided by command; daemon owns its lifetime. */
     X11Cursor crosshair;
-    int preview_w, preview_h;
+    int preview_w, preview_h, preview_border;
     uint64_t last_preview;
     Preview *preview_worker;
     uint64_t preview_epoch, preview_source;
     unsigned preview_state;
     bool preview_enabled;
+    uint32_t preview_mask_color;
+    bool preview_dragging;
+    int preview_drag_x, preview_drag_y;
 } Xorg;
 static _Thread_local int xerror;
 static pthread_once_t xlib_once = PTHREAD_ONCE_INIT;
@@ -78,6 +82,7 @@ static void initialize_xlib(void)
     XInitThreads();
 }
 static void preview_stop(Xorg *p);
+static void preview_neutral(Xorg *p);
 static int on_error(Display *d, XErrorEvent *ev)
 {
     (void)d;
@@ -721,27 +726,29 @@ int x11_capture(Platform *platform, Frame *out, Cursor *cursor, char *e, size_t 
         return fail(e, n, "cannot allocate Xorg capture frame");
     }
     bool outline = p->selecting && p->dragging && p->selection;
-    bool hide_preview = false;
+    bool mask_preview = false;
+    int px = 0, py = 0, pw = 0, ph = 0;
     if (drawable == p->root && p->preview && !p->preview_disabled) {
         XWindowAttributes attr;
         Window child;
-        int px, py;
         begin(p);
         Status exists = XGetWindowAttributes(p->d, p->preview, &attr);
         Status position =
             exists ? XTranslateCoordinates(p->d, p->preview, p->root, 0, 0, &px, &py, &child) : 0;
         bool checked = end(p);
-        hide_preview = checked && exists && position && attr.map_state == IsViewable &&
-                       px < p->sx + p->sw && p->sx < px + attr.width && py < p->sy + p->sh &&
-                       p->sy < py + attr.height;
+        if (checked && exists && position && attr.map_state == IsViewable) {
+            px -= attr.border_width;
+            py -= attr.border_width;
+            pw = attr.width + 2 * attr.border_width;
+            ph = attr.height + 2 * attr.border_width;
+            mask_preview =
+                px < p->sx + p->sw && p->sx < px + pw && py < p->sy + p->sh && p->sy < py + ph;
+        }
     }
     if (outline) {
         XUnmapWindow(p->d, p->selection);
     }
-    if (hide_preview) {
-        XUnmapWindow(p->d, p->preview);
-    }
-    if (outline || hide_preview) {
+    if (outline) {
         XSync(p->d, False);
     }
     image_prepare(p, visual, depth, p->sw, p->sh);
@@ -760,9 +767,6 @@ int x11_capture(Platform *platform, Frame *out, Cursor *cursor, char *e, size_t 
     if (outline) {
         XMapRaised(p->d, p->selection);
     }
-    if (hide_preview) {
-        XMapWindow(p->d, p->preview);
-    }
     if (!ok) {
         if (image && image != p->image) {
             XDestroyImage(image);
@@ -774,6 +778,33 @@ int x11_capture(Platform *platform, Frame *out, Cursor *cursor, char *e, size_t 
     /* Pixmap readback has no associated visual: XGetImage/XShmGetImage may return
      * zero channel masks. The selected window visual describes its backing pixmap. */
     image_to_frame(image, visual, out);
+    if (mask_preview) {
+        /* Root readback includes the floating preview. Replace its entire footprint
+         * in our owned frame, including the local-only header and window border. */
+        int left = px - p->sx, top = py - p->sy;
+        int right = left + pw, bottom = top + ph;
+        if (left < 0) {
+            left = 0;
+        }
+        if (top < 0) {
+            top = 0;
+        }
+        if (right > out->width) {
+            right = out->width;
+        }
+        if (bottom > out->height) {
+            bottom = out->height;
+        }
+        for (int j = top; j < bottom; j++) {
+            uint8_t *d = out->data + (size_t)j * out->stride + 4 * left;
+            for (int i = left; i < right; i++, d += 4) {
+                d[0] = (uint8_t)(p->preview_mask_color >> 16);
+                d[1] = (uint8_t)(p->preview_mask_color >> 8);
+                d[2] = (uint8_t)p->preview_mask_color;
+                d[3] = 255;
+            }
+        }
+    }
     if (image != p->image) {
         XDestroyImage(image);
     }
@@ -834,6 +865,7 @@ int x11_reconfigure(Platform *platform, const Config *cfg, char *e, size_t n)
     }
     p->source_error[0] = 0;
     p->preview_disabled = false;
+    p->preview_mask_color = cfg->pause_color;
     return 0;
 }
 static int selection_start(Xorg *p, Config *cfg, int kind, char *e, size_t n)
@@ -1190,10 +1222,7 @@ void x11_events(Platform *platform, Compositor *comp, const Config *cfg, bool pr
         compositor_clear(comp);
         p->last_keycode = 0;
         p->seen_generation = p->generation;
-        /* Rendering runs on another connection and never remaps this window. */
-        if (p->preview) {
-            XUnmapWindow(p->d, p->preview);
-        }
+        preview_neutral(p);
         p->preview_epoch++;
     }
     p->privacy = privacy;
@@ -1256,14 +1285,42 @@ void x11_events(Platform *platform, Compositor *comp, const Config *cfg, bool pr
             (Atom)ev.xclient.data.l[0] == p->wm_delete) {
             XUnmapWindow(p->d, p->preview);
             p->preview_disabled = true;
+            p->preview_dragging = false;
         }
         if (ev.type == DestroyNotify && ev.xdestroywindow.window == p->preview) {
             p->preview = 0;
             p->preview_disabled = true;
+            p->preview_dragging = false;
         }
         if (ev.type == ConfigureNotify && ev.xconfigure.window == p->preview) {
             p->preview_w = ev.xconfigure.width;
             p->preview_h = ev.xconfigure.height;
+            p->preview_border = ev.xconfigure.border_width;
+        }
+        if (ev.type == ButtonPress && ev.xbutton.window == p->preview &&
+            ev.xbutton.button == Button1 && ev.xbutton.y < 32) {
+            p->preview_dragging = true;
+            p->preview_drag_x = ev.xbutton.x + p->preview_border;
+            p->preview_drag_y = ev.xbutton.y + p->preview_border;
+        }
+        if (ev.type == ButtonRelease && ev.xbutton.button == Button1) {
+            p->preview_dragging = false;
+        }
+        if (ev.type == MotionNotify && ev.xmotion.window == p->preview && p->preview_dragging) {
+            int x = ev.xmotion.x_root - p->preview_drag_x;
+            int y = ev.xmotion.y_root - p->preview_drag_y;
+            int max_x = DisplayWidth(p->d, p->screen) - p->preview_w - 2 * p->preview_border;
+            int max_y = DisplayHeight(p->d, p->screen) - p->preview_h - 2 * p->preview_border;
+            if (max_x < 0) {
+                max_x = 0;
+            }
+            if (max_y < 0) {
+                max_y = 0;
+            }
+            x = x < 0 ? 0 : x > max_x ? max_x : x;
+            y = y < 0 ? 0 : y > max_y ? max_y : y;
+            XMoveWindow(p->d, p->preview, x, y);
+            XFlush(p->d);
         }
     }
     /* A selection may have committed while draining. Drop the selection's own input. */
@@ -1276,6 +1333,16 @@ void x11_events(Platform *platform, Compositor *comp, const Config *cfg, bool pr
 static bool rectangles_overlap(int ax, int ay, int aw, int ah, int bx, int by, int bw, int bh)
 {
     return ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah;
+}
+static void preview_neutral(Xorg *p)
+{
+    if (p->preview) {
+        /* Keep the floating window mapped while a new epoch is prepared. Only the
+         * main connection publishes pixmaps, so an old worker cannot undo this. */
+        XSetWindowBackground(p->d, p->preview, 0x111111);
+        XClearWindow(p->d, p->preview);
+        XFlush(p->d);
+    }
 }
 static void preview_create(Xorg *p, const Config *cfg)
 {
@@ -1290,10 +1357,10 @@ static void preview_create(Xorg *p, const Config *cfg)
     if (h < 100) {
         h = 100;
     }
-    int x = 0, y = 0;
+    int x = 24, y = 24;
     Monitor list[MONITOR_MAX];
     int count = monitors(p, list, MONITOR_MAX);
-    /* Prefer a monitor outside the root-captured rectangle. Otherwise unmap around readback. */
+    /* Prefer a monitor outside the root-captured rectangle. Overlap is neutral-masked. */
     for (int i = 0; i < count; i++) {
         if (!rectangles_overlap(list[i].x, list[i].y, list[i].w, list[i].h, p->sx, p->sy, p->sw,
                                 p->sh)) {
@@ -1302,31 +1369,53 @@ static void preview_create(Xorg *p, const Config *cfg)
             break;
         }
     }
-    p->preview = XCreateSimpleWindow(p->d, p->root, x, y, (unsigned)w, (unsigned)h, 0, 0, 0x111111);
+    int root_w = DisplayWidth(p->d, p->screen), root_h = DisplayHeight(p->d, p->screen);
+    if (w > root_w) {
+        w = root_w;
+    }
+    if (h > root_h) {
+        h = root_h;
+    }
+    if (x > root_w - w) {
+        x = root_w - w;
+    }
+    if (y > root_h - h) {
+        y = root_h - h;
+    }
+    XSetWindowAttributes attr = {.override_redirect = True, .background_pixel = 0x111111};
+    p->preview =
+        XCreateWindow(p->d, p->root, x, y, (unsigned)w, (unsigned)h, 0, CopyFromParent, InputOutput,
+                      CopyFromParent, CWOverrideRedirect | CWBackPixel, &attr);
     p->preview_w = w;
     p->preview_h = h;
+    p->preview_border = 0;
+    p->preview_dragging = false;
     XStoreName(p->d, p->preview, "cast output preview");
+    XClassHint hint = {.res_name = "cast-preview", .res_class = "CastPreview"};
+    XSetClassHint(p->d, p->preview, &hint);
     XSetWMProtocols(p->d, p->preview, &p->wm_delete, 1);
-    XSelectInput(p->d, p->preview, ExposureMask | StructureNotifyMask);
+    XSelectInput(p->d, p->preview,
+                 ExposureMask | StructureNotifyMask | ButtonPressMask | ButtonReleaseMask |
+                     Button1MotionMask);
     /* Map only after the worker has painted an accepted current-epoch frame. */
     /* Its second connection must not address a window before creation completes. */
     XSync(p->d, False);
 }
-/* The worker owns its connection and all painting resources. It never maps a
- * window, so capture exclusion and privacy hiding cannot wait on a slow repaint. */
-static int preview_paint(Display *d, const Frame *frame, Window window, int w, int h,
-                         const char *label, unsigned long color)
+/* The worker prepares complete pixmaps on its own connection. Only the main
+ * connection can install an accepted epoch's pixmap in the visible window. */
+static Pixmap preview_paint(Display *d, const Frame *frame, Window window, int w, int h,
+                            const char *label, unsigned long color)
 {
     int screen = DefaultScreen(d);
     XImage *im = XCreateImage(d, DefaultVisual(d, screen), (unsigned)DefaultDepth(d, screen),
                               ZPixmap, 0, NULL, (unsigned)w, (unsigned)h, 32, 0);
     if (!im) {
-        return -1;
+        return None;
     }
     im->data = calloc((size_t)im->bytes_per_line, h);
     if (!im->data) {
         XDestroyImage(im);
-        return -1;
+        return None;
     }
     double scale = fmin((double)w / frame->width, (double)h / frame->height);
     int iw = (int)(frame->width * scale), ih = (int)(frame->height * scale);
@@ -1365,13 +1454,14 @@ static int preview_paint(Display *d, const Frame *frame, Window window, int w, i
     XFillRectangle(d, pixmap, gc, 0, 0, (unsigned)w, 32);
     XSetForeground(d, gc, color);
     XDrawString(d, pixmap, gc, 10, 21, label, (int)strlen(label));
-    XSetWindowBackgroundPixmap(d, window, pixmap);
-    XClearWindow(d, window);
     XFreeGC(d, gc);
-    XFreePixmap(d, pixmap);
     XDestroyImage(im);
     XSync(d, False);
-    return xerror ? -1 : 0;
+    if (xerror) {
+        XFreePixmap(d, pixmap);
+        return None;
+    }
+    return pixmap;
 }
 static void *preview_run(void *data)
 {
@@ -1396,19 +1486,27 @@ static void *preview_run(void *data)
         if (!d) {
             d = XOpenDisplay(NULL);
         }
-        int rc = d ? preview_paint(d, &frame, window, w, h, label, color) : -1;
+        Pixmap pixmap = d ? preview_paint(d, &frame, window, w, h, label, color) : None;
         frame_free(&frame);
         pthread_mutex_lock(&p->mutex);
-        if (rc < 0) {
+        if (!pixmap) {
             snprintf(p->error, sizeof(p->error), "%s; toggle preview off/on",
                      d ? "preview painting failed" : "cannot open preview display connection");
         } else {
+            if (p->ready_pixmap) {
+                XFreePixmap(d, p->ready_pixmap);
+            }
+            p->ready_pixmap = pixmap;
             p->ready_epoch = epoch;
             p->error[0] = 0;
         }
     }
     pthread_mutex_unlock(&p->mutex);
     if (d) {
+        if (p->ready_pixmap) {
+            XFreePixmap(d, p->ready_pixmap);
+            p->ready_pixmap = None;
+        }
         XCloseDisplay(d);
     }
     return NULL;
@@ -1473,6 +1571,7 @@ int x11_preview(Platform *platform, const Frame *frame, const State *state, cons
             pthread_mutex_unlock(&worker->mutex);
         }
         p->preview_disabled = false;
+        p->preview_dragging = false;
         return 0;
     }
     if (p->preview_disabled || !frame || !frame->data) {
@@ -1488,10 +1587,7 @@ int x11_preview(Platform *platform, const Frame *frame, const State *state, cons
         p->preview_source = p->generation;
         p->preview_enabled = true;
         p->last_preview = 0;
-        if (p->preview) {
-            XUnmapWindow(p->d, p->preview);
-            XFlush(p->d);
-        }
+        preview_neutral(p);
     }
     if (!p->preview) {
         preview_create(p, cfg);
@@ -1503,8 +1599,12 @@ int x11_preview(Platform *platform, const Frame *frame, const State *state, cons
     if (pthread_mutex_trylock(&worker->mutex) != 0) {
         return 0; /* A busy preview loses this update, never the live capture cadence. */
     }
-    if (worker->ready_epoch == p->preview_epoch) {
+    if (worker->ready_pixmap && worker->ready_epoch == p->preview_epoch) {
+        XSetWindowBackgroundPixmap(p->d, p->preview, worker->ready_pixmap);
+        XClearWindow(p->d, p->preview);
         XMapWindow(p->d, p->preview);
+        XFreePixmap(p->d, worker->ready_pixmap);
+        worker->ready_pixmap = None;
         XFlush(p->d);
     }
     if (worker->error[0]) {
@@ -1568,7 +1668,7 @@ void x11_doctor(const Config *cfg, char *e, size_t n)
     }
     snprintf(e, n,
              "Xorg: DISPLAY connected; %s; MIT-SHM %s (XGetImage fallback); XI2 %s; XComposite %s. "
-             "Preview uses out-of-source placement or explicit unmap during root readback.",
+             "Preview is an unmanaged floating window; overlapping root pixels are neutral-masked.",
              source, shm ? "available" : "missing",
              xi ? "available" : "missing: keys/clicks unsupported",
              comp ? "available" : "missing: window capture unsupported");

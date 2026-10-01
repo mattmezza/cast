@@ -118,21 +118,34 @@ LIVE/PAUSED/FROZEN and recording state. Its header is drawn in its X window afte
 composition and is not added to the output frame. The preview is limited to about
 15 updates per second. Painting and its X server synchronization run on a dedicated
 connection/thread with one replaceable pending frame; a busy worker loses preview
-updates instead of delaying the virtual camera or controls. Closing it hides it
-until `preview off` followed by `preview on`, or a reconfiguration, enables it again.
-An output/source/privacy boundary hides the old preview until a newly painted frame
-for that state is ready. Window creation, source acquisition and shutdown still
-depend on a responsive X server.
+updates instead of delaying the virtual camera or controls. It is a floating,
+unmanaged Xorg window (`override_redirect`), so tiling window managers do not tile
+it or rearrange application windows when it opens. No window-manager rule is needed.
+Its `WM_CLASS` is `cast-preview` / `CastPreview`. Drag its header with the left mouse
+button to move it; use `cast preview off` to hide it and `cast preview on` to show it.
+Window creation, source acquisition and shutdown still depend on a responsive X server.
+
+The preview stays mapped during capture and live/record/privacy changes. On a state
+or source boundary, its existing contents are cleared to a neutral background while
+the new state is painted. The worker prepares a server pixmap; the main connection
+installs it only if it belongs to the current state epoch. An older pending update
+cannot restore stale visible content. Initial mapping also waits for a complete
+current frame, so the first display has its local header and image together.
 
 Cast prefers preview placement on a monitor outside the captured root rectangle.
-Otherwise it unmaps its preview around root readback, synchronizes the server, then
-maps it again. The region outline is similarly unmapped during acquisition. An
-XComposite application-window capture excludes cast's separate preview drawable.
-There is no universal Xorg mechanism to invisibly exclude arbitrary windows from
-root capture. Temporary unmapping may flicker or cause focus/layout reactions, and
-a compositing window manager can retain an animation/shadow while responding to
-unmapping. Place the preview outside the source or disable it when these effects
-matter. Inspect actual virtual-camera or recording pixels on the target desktop.
+If it overlaps monitor/region capture, cast replaces its full window rectangle,
+including the header and border, with the configured `pause_color` in the owned
+capture frame before composition. Its current screen position and dimensions are
+queried for each capture, so moving or resizing it moves that neutral rectangle.
+The mask follows the source's zoom and fit into each output. This deliberately
+covers the desktop content beneath the preview; cast does not recover hidden pixels.
+Place the preview outside the captured source when all source content must remain
+visible. The preview's status labels and image are never copied into this rectangle,
+preventing recursive preview capture without per-frame unmapping or desktop flashes.
+An XComposite application-window capture reads that application's named pixmap,
+which excludes cast's separate preview window and requires no neutral rectangle.
+The interactive region-selection outline is still temporarily hidden during capture.
+Inspect actual virtual-camera or recording pixels on the target desktop.
 
 ## Verification limits and commands
 
