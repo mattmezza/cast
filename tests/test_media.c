@@ -499,15 +499,31 @@ static void webcam_probe(void)
     assert(camera);
     Frame frame = {0};
     int captured = 0;
+    uint64_t previous = 0;
     for (int i = 0; i < 100 && captured < 3; ++i) {
-        if (camera_frame(camera, &frame, error, sizeof(error)) == 0) {
+        if (camera_frame(camera, &frame, error, sizeof(error)) == 0 && frame.ts_ns != previous) {
+            previous = frame.ts_ns;
             ++captured;
         }
         delay_ms(35);
     }
     assert(captured == 3 && frame.width > 0 && frame.height > 0 && frame.stride >= frame.width * 4);
-    printf("physical webcam %s: decoded fresh RGBA %dx%d frames\n", path, frame.width,
-           frame.height);
+    /* Queue a backlog, then prove a privacy boundary rejects those captures. */
+    delay_ms(150);
+    uint64_t boundary = cast_now_ns();
+    camera_barrier(camera);
+    bool fresh = false;
+    for (int i = 0; i < 100 && !fresh; ++i) {
+        if (camera_frame(camera, &frame, error, sizeof(error)) == 0) {
+            assert(frame.ts_ns >= boundary);
+            fresh = true;
+        }
+        delay_ms(35);
+    }
+    assert(fresh);
+    printf(
+        "physical webcam %s: decoded unique RGBA %dx%d frames and rejected pre-barrier backlog\n",
+        path, frame.width, frame.height);
     frame_free(&frame);
     camera_close(camera);
 }
