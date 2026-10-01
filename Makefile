@@ -64,11 +64,9 @@ check-wayland: $(BUILD)/test_wayland
 	$(BUILD)/test_wayland
 endif
 sanitize:
-	$(MAKE) clean
-	$(MAKE) X11=$(X11) WAYLAND=$(WAYLAND) CFLAGS='-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer' LDFLAGS='-fsanitize=address,undefined' check
+	$(MAKE) BUILD=build/sanitize-x$(X11)-w$(WAYLAND) X11=$(X11) WAYLAND=$(WAYLAND) CFLAGS='-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer' LDFLAGS='-fsanitize=address,undefined' check
 
 install: cast
-FORCE:
 	install -Dm755 cast $(DESTDIR)$(PREFIX)/bin/cast
 	install -Dm644 LICENSE $(DESTDIR)$(PREFIX)/share/licenses/cast/LICENSE
 	install -Dm644 vendor/inih/LICENSE.txt $(DESTDIR)$(PREFIX)/share/licenses/cast/inih-LICENSE
@@ -88,7 +86,7 @@ package: cast
 	$(MAKE) X11=$(X11) WAYLAND=$(WAYLAND) DESTDIR='$(CURDIR)/dist/stage' PREFIX=/usr install
 	@{ echo 'cast $(VERSION)'; echo 'Architecture:'; uname -m; echo 'Backend features: X11=$(X11) WAYLAND=$(WAYLAND)'; echo 'Runtime dynamic libraries:'; ldd cast; } > dist/stage/usr/share/doc/cast/build-info.txt
 	tar -C dist/stage -czf dist/cast-$(VERSION)-linux-$$(uname -m).tar.gz .
-	tar -czf dist/cast-$(VERSION)-source.tar.gz Makefile README.md LICENSE licenses src vendor tests docs examples packaging
+	tar --transform='s,^,cast-$(VERSION)/,' -czf dist/cast-$(VERSION)-source.tar.gz Makefile README.md LICENSE licenses src vendor tests docs examples packaging
 	cd dist && sha256sum cast-$(VERSION)-linux-*.tar.gz cast-$(VERSION)-source.tar.gz > SHA256SUMS
 clean:
 	rm -rf build cast
