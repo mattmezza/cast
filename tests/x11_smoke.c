@@ -383,6 +383,24 @@ static void exercise(Display *d, Platform *p, Config *cfg)
          "passed");
 }
 
+static void capture_benchmark(Platform *p)
+{
+    Frame f = {0};
+    Cursor cursor;
+    char error[CAST_ERR];
+    assert(platform_capture(p, &f, &cursor, error, sizeof(error)) == 0);
+    const int frames = 40;
+    uint64_t start = cast_now_ns();
+    for (int i = 0; i < frames; i++) {
+        assert(platform_capture(p, &f, &cursor, error, sizeof(error)) == 0);
+    }
+    double seconds = (double)(cast_now_ns() - start) / 1e9;
+    printf("Xorg read-only benchmark: %dx%d, %d captures in %.3fs, %.3fms/capture, %.2ffps; "
+           "no pixels saved\n",
+           f.width, f.height, frames, seconds, seconds * 1000 / frames, frames / seconds);
+    frame_free(&f);
+}
+
 int main(int argc, char **argv)
 {
     Config cfg = configuration();
@@ -399,6 +417,8 @@ int main(int argc, char **argv)
         assert(d);
         exercise(d, p, &cfg);
         XCloseDisplay(d);
+    } else if (argc == 2 && !strcmp(argv[1], "--benchmark")) {
+        capture_benchmark(p);
     } else {
         Frame f = {0};
         Cursor cursor;

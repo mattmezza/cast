@@ -556,18 +556,69 @@ uint64_t x11_source_generation(Platform *platform)
 {
     return ((Xorg *)platform)->generation;
 }
-static unsigned channel(unsigned long pixel, unsigned long mask)
+typedef struct {
+    unsigned shift;
+    unsigned long mask;
+} ColorChannel;
+static ColorChannel color_channel(unsigned long mask)
 {
-    if (!mask) {
+    ColorChannel c = {0, mask};
+    while (mask && !(mask & 1)) {
+        mask >>= 1;
+        c.shift++;
+    }
+    c.mask = mask;
+    return c;
+}
+static unsigned channel(unsigned long pixel, ColorChannel c)
+{
+    if (!c.mask) {
         return 0;
     }
-    unsigned shift = 0;
-    while (!(mask & 1)) {
-        mask >>= 1;
-        shift++;
+    unsigned long value = (pixel >> c.shift) & c.mask;
+    return (unsigned)((value * 255 + c.mask / 2) / c.mask);
+}
+static void image_to_frame(XImage *image, Visual *visual, Frame *out)
+{
+    /* Most Xorg visuals have one byte per color in a 32-bit pixel. Choose the
+     * byte positions once; handle XImage byte order independently of the CPU. */
+    bool packed = image->format == ZPixmap && image->bits_per_pixel == 32 && image->xoffset == 0 &&
+                  visual->green_mask == 0xff00 &&
+                  ((visual->red_mask == 0xff0000 && visual->blue_mask == 0xff) ||
+                   (visual->red_mask == 0xff && visual->blue_mask == 0xff0000));
+    if (packed) {
+        int red = visual->red_mask == 0xff0000 ? 2 : 0;
+        int green = 1, blue = 2 - red;
+        if (image->byte_order == MSBFirst) {
+            red = 3 - red;
+            green = 3 - green;
+            blue = 3 - blue;
+        }
+        for (int y = 0; y < out->height; y++) {
+            const uint8_t *s = (const uint8_t *)image->data + (size_t)y * image->bytes_per_line;
+            uint8_t *d = out->data + (size_t)y * out->stride;
+            for (int x = 0; x < out->width; x++, s += 4, d += 4) {
+                d[0] = s[red];
+                d[1] = s[green];
+                d[2] = s[blue];
+                d[3] = 255;
+            }
+        }
+        return;
     }
-    unsigned long value = (pixel >> shift) & mask;
-    return (unsigned)((value * 255 + mask / 2) / mask);
+    ColorChannel red = color_channel(visual->red_mask);
+    ColorChannel green = color_channel(visual->green_mask);
+    ColorChannel blue = color_channel(visual->blue_mask);
+    for (int y = 0; y < out->height; y++) {
+        uint8_t *d = out->data + (size_t)y * out->stride;
+        for (int x = 0; x < out->width; x++, d += 4) {
+            unsigned long value = XGetPixel(image, x, y);
+            d[0] = (uint8_t)channel(value, red);
+            d[1] = (uint8_t)channel(value, green);
+            d[2] = (uint8_t)channel(value, blue);
+            d[3] = 255;
+        }
+    }
 }
 static int source_rect(Xorg *p, Drawable *drawable, Visual **visual, int *depth, char *e, size_t n)
 {
@@ -722,23 +773,7 @@ int x11_capture(Platform *platform, Frame *out, Cursor *cursor, char *e, size_t 
     }
     /* Pixmap readback has no associated visual: XGetImage/XShmGetImage may return
      * zero channel masks. The selected window visual describes its backing pixmap. */
-    for (int j = 0; j < out->height; j++) {
-        uint8_t *d = out->data + (size_t)j * out->stride;
-        for (int i = 0; i < out->width; i++, d += 4) {
-            unsigned long value;
-            if (image->bits_per_pixel == 32 && image->byte_order == LSBFirst) {
-                uint32_t v;
-                memcpy(&v, image->data + (size_t)j * image->bytes_per_line + i * 4, 4);
-                value = v;
-            } else {
-                value = XGetPixel(image, i, j);
-            }
-            d[0] = (uint8_t)channel(value, visual->red_mask);
-            d[1] = (uint8_t)channel(value, visual->green_mask);
-            d[2] = (uint8_t)channel(value, visual->blue_mask);
-            d[3] = 255;
-        }
-    }
+    image_to_frame(image, visual, out);
     if (image != p->image) {
         XDestroyImage(image);
     }
