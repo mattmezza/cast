@@ -1,0 +1,44 @@
+# Merge these bindings into ~/.config/sxhkd/sxhkdrc; choose unused chords.
+# All cast commands connect to the same foreground daemon. Commands do not launch it.
+super + shift + p
+    cast pause
+super + shift + r
+    cast resume
+super + p
+    cast live toggle
+super + shift + space
+    cast record toggle
+super + shift + c
+    cast camera toggle
+super + {equal,minus}
+    cast camera size {+5%,-5%}
+super + shift + a
+    cast camera anchor next
+super + shift + l
+    cast layout next
+super + shift + d
+    cast preset next
+super + shift + m
+    cast screen next
+super + shift + s
+    cast capture region select
+super + z
+    cast zoom toggle
+super + shift + {equal,minus}
+    cast zoom {in,out}
+super + shift + k
+    cast keys toggle
+super + shift + b
+    cast clicks toggle
+super + shift + v
+    cast preview toggle
+# Deliberate recording start/stop. record toggle only pauses/resumes an existing file.
+super + control + shift + r
+    cast record start
+super + control + shift + s
+    cast record stop
+# Freeze holds content (silences cast virtual audio); pause still overrides freeze.
+super + control + f
+    cast live freeze
+super + control + shift + f
+    cast live unfreeze
