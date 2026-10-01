@@ -31,6 +31,8 @@ sanitizers and binary/source packaging respectively. `make check-unit` runs inde
 tests without needing socket bind/display permissions; `make check-xorg` runs the
 isolated Xvfb smoke, and `make benchmark` measures composition alone. Test dependencies (Python, Xvfb,
 optional XTest and FFmpeg tools for inspection) are not normal runtime dependencies.
+`make check-loopback LOOPBACK_DEVICE=/dev/video10` additionally tests synthetic
+output and recording through an existing loopback device; select the intended device explicitly.
 
 Before live output, create an existing loopback device. These commands are for an
 Arch user running the `linux` kernel to execute; cast does not run them:
@@ -97,7 +99,10 @@ Installation uses `make install PREFIX=/usr/local`; `DESTDIR` supports staging.
 share/doc/cast and never overwrites a user's configuration. `make package` creates a
 ready-to-run dynamically linked Linux archive in dist, its runtime library manifest,
 and matching project source. The binary targets the build machine's ABI; install its
-listed runtime dependencies. No repository has been published and nothing deployed.
+listed runtime dependencies. [Release instructions](docs/releases.md) cover
+`make release-check` and `make release RELEASE_NOTES=path/to/notes.md`, which build
+from a clean, pushed version tag and attach binary, project/dependency source archives and checksums to
+a GitHub release through `gh`.
 
 Project source is [MIT licensed](LICENSE); the original bundled bitmap font shares that
 license. inih is BSD-3-Clause. FFmpeg licensing depends on its build; this machine uses

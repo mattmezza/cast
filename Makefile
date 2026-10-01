@@ -6,6 +6,9 @@ DESTDIR =
 X11 = 1
 WAYLAND = 0
 VERSION = 0.1.0
+SOURCE_COMMIT = working-tree
+RELEASE_NOTES =
+LOOPBACK_DEVICE =
 CFLAGS = -O2 -g
 WARN = -Wall -Wextra -Wformat=2 -Wstrict-prototypes -Wmissing-prototypes
 BASE_PACKAGES = libavcodec libavformat libavutil libswscale libswresample libpipewire-0.3
@@ -85,6 +88,9 @@ check-unit: $(BUILD)/test_core $(BUILD)/test_visual $(BUILD)/test_media $(BUILD)
 	python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["record"]["state"] == "stopped" and not s["record"]["finalizing"]; assert s["audio"]["mic"]["source"] == "mic \"quoted\" \\ route\n"; assert s["audio"]["desktop"]["source"] == "desktop café"; assert s["audio"]["virtual"]["name"] == "cast\tvirtual"; assert "\xff" in s["record"]["path"]' $(BUILD)/commands-status.json
 check: cast check-unit
 	python3 tests/test_ipc.py
+check-loopback: cast
+	@test -n '$(LOOPBACK_DEVICE)' || { echo 'set LOOPBACK_DEVICE to an existing v4l2loopback output device' >&2; exit 1; }
+	python3 tests/test_loopback.py --device '$(LOOPBACK_DEVICE)'
 ifeq ($(WAYLAND),1)
 check-unit: check-wayland-unit
 check-wayland-unit: $(BUILD)/test_wayland
@@ -110,14 +116,20 @@ install: cast
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/cast $(DESTDIR)$(PREFIX)/share/man/man1/cast.1
 	rm -rf $(DESTDIR)$(PREFIX)/share/doc/cast $(DESTDIR)$(PREFIX)/share/licenses/cast
-package: cast
+package-check:
+	@test '$(VERSION)' = "$$(sed -n 's/^#define CAST_VERSION "\([^"]*\)"/\1/p' src/cast.h)" || { echo 'VERSION must match CAST_VERSION in src/cast.h' >&2; exit 1; }
+package: package-check cast
 	@mkdir -p dist
 	rm -rf dist/stage
 	$(MAKE) X11=$(X11) WAYLAND=$(WAYLAND) DESTDIR='$(CURDIR)/dist/stage' PREFIX=/usr install
-	@{ echo 'cast $(VERSION)'; echo 'Architecture:'; uname -m; echo 'Backend features: X11=$(X11) WAYLAND=$(WAYLAND)'; echo 'Runtime dynamic libraries:'; ldd cast; } > dist/stage/usr/share/doc/cast/build-info.txt
+	@{ echo 'cast $(VERSION)'; echo 'Source commit: $(SOURCE_COMMIT)'; echo 'Architecture:'; uname -m; echo 'Backend features: X11=$(X11) WAYLAND=$(WAYLAND)'; echo 'Runtime dynamic libraries:'; ldd cast; } > dist/stage/usr/share/doc/cast/build-info.txt
 	tar -C dist/stage -czf dist/cast-$(VERSION)-linux-$$(uname -m).tar.gz .
 	tar --transform='s,^,cast-$(VERSION)/,' -czf dist/cast-$(VERSION)-source.tar.gz Makefile .clang-format cast-build-prompt.md README.md LICENSE licenses src vendor tests docs examples packaging
-	cd dist && sha256sum cast-$(VERSION)-linux-*.tar.gz cast-$(VERSION)-source.tar.gz > SHA256SUMS
+	cd dist && sha256sum cast-$(VERSION)-linux-$$(uname -m).tar.gz cast-$(VERSION)-source.tar.gz > SHA256SUMS
+release-check:
+	sh packaging/release.sh check '$(VERSION)' '$(RELEASE_NOTES)' '$(X11)' '$(WAYLAND)'
+release:
+	sh packaging/release.sh release '$(VERSION)' '$(RELEASE_NOTES)' '$(X11)' '$(WAYLAND)'
 clean:
 	rm -rf build cast
-.PHONY: FORCE all check check-unit check-wayland check-wayland-unit check-xorg benchmark sanitize install uninstall package clean
+.PHONY: FORCE all check check-unit check-wayland check-wayland-unit check-xorg check-loopback benchmark sanitize install uninstall package-check package release-check release clean
