@@ -9,27 +9,36 @@
 #include <libswscale/swscale.h>
 #include <linux/videodev2.h>
 #include <poll.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #define CAMERA_BUFFERS 4
+#define CAMERA_POLL_MS 50
 struct CastCamera {
     int fd, w, h, stride;
     uint32_t format;
-    bool synthetic, streaming, failed;
-    uint64_t accept_after_ns;
+    bool synthetic, streaming, failed, stop, worker_started;
+    pthread_t worker;
+    pthread_mutex_t lock;
+    uint64_t epoch, accept_after_ns;
+    char failure[CAST_ERR];
     struct {
         void *ptr;
         size_t len;
+        uint64_t epoch;
     } bufs[CAMERA_BUFFERS];
     unsigned count;
     AVCodecContext *decoder;
     AVFrame *decoded;
     struct SwsContext *scale;
-    Frame cached;
+    Frame cached, working;
     char path[PATH_MAX];
+#ifdef CAST_TEST
+    const struct CameraTest *test;
+#endif
 };
 struct CastOutput {
     int fd, w, h, stride, size;
@@ -75,16 +84,64 @@ static enum AVPixelFormat raw_format(uint32_t f)
         return AV_PIX_FMT_NONE;
     }
 }
+static int camera_ioctl(CastCamera *c, unsigned long request, void *argument)
+{
+#ifdef CAST_TEST
+    if (c->test) {
+        return c->test->ioctl(c->test->data, request, argument);
+    }
+#endif
+    return xioctl(c->fd, request, argument);
+}
+static CastCamera *camera_alloc(char *e, size_t n)
+{
+    CastCamera *c = calloc(1, sizeof(*c));
+    if (!c) {
+        snprintf(e, n, "camera allocation failed");
+        return NULL;
+    }
+    c->fd = -1;
+    int r = pthread_mutex_init(&c->lock, NULL);
+    if (r) {
+        snprintf(e, n, "camera mutex: %s", strerror(r));
+        free(c);
+        return NULL;
+    }
+    return c;
+}
+static void *camera_worker(void *);
+static int camera_start(CastCamera *c, char *e, size_t n)
+{
+    int r = pthread_create(&c->worker, NULL, camera_worker, c);
+    if (r) {
+        snprintf(e, n, "camera worker: %s", strerror(r));
+        return -1;
+    }
+    c->worker_started = true;
+    return 0;
+}
 void camera_close(CastCamera *c)
 {
     if (!c) {
         return;
     }
+    if (c->worker_started) {
+        pthread_mutex_lock(&c->lock);
+        c->stop = true;
+        pthread_mutex_unlock(&c->lock);
+        /* The worker owns device ioctls; its poll wakes within 50 ms. */
+        pthread_join(c->worker, NULL);
+    }
     if (c->streaming) {
         enum v4l2_buf_type t = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        xioctl(c->fd, VIDIOC_STREAMOFF, &t);
+        camera_ioctl(c, VIDIOC_STREAMOFF, &t);
     }
     for (unsigned i = 0; i < c->count; i++) {
+#ifdef CAST_TEST
+        if (c->test) {
+            break;
+        }
+#endif
         if (c->bufs[i].ptr && c->bufs[i].ptr != MAP_FAILED) {
             munmap(c->bufs[i].ptr, c->bufs[i].len);
         }
@@ -96,16 +153,16 @@ void camera_close(CastCamera *c)
     av_frame_free(&c->decoded);
     sws_freeContext(c->scale);
     frame_free(&c->cached);
+    frame_free(&c->working);
+    pthread_mutex_destroy(&c->lock);
     free(c);
 }
 CastCamera *camera_open(const Config *cfg, char *e, size_t n)
 {
-    CastCamera *c = calloc(1, sizeof(*c));
+    CastCamera *c = camera_alloc(e, n);
     if (!c) {
-        snprintf(e, n, "camera allocation failed");
         return NULL;
     }
-    c->fd = -1;
     snprintf(c->path, sizeof(c->path), "%s", cfg->camera_device);
     if (!strcmp(cfg->camera_device, "synthetic")) {
         c->synthetic = true;
@@ -204,6 +261,9 @@ CastCamera *camera_open(const Config *cfg, char *e, size_t n)
         goto fail;
     }
     c->streaming = true;
+    if (camera_start(c, e, n) < 0) {
+        goto fail;
+    }
     return c;
 fail:
     camera_close(c);
@@ -324,7 +384,7 @@ static int decode(CastCamera *c, const void *data, size_t bytes, char *e, size_t
             return -1;
         }
     }
-    if (w < 1 || h < 1 || w > 8192 || h > 8192 || frame_alloc(&c->cached, w, h) < 0) {
+    if (w < 1 || h < 1 || w > 8192 || h > 8192 || frame_alloc(&c->working, w, h) < 0) {
         snprintf(e, n, "invalid webcam size or frame allocation failed");
         return -1;
     }
@@ -333,49 +393,218 @@ static int decode(CastCamera *c, const void *data, size_t bytes, char *e, size_t
         snprintf(e, n, "webcam conversion unavailable");
         return -1;
     }
-    uint8_t *dst[4] = {c->cached.data, NULL, NULL, NULL};
-    int ds[4] = {c->cached.stride, 0, 0, 0};
+    uint8_t *dst[4] = {c->working.data, NULL, NULL, NULL};
+    int ds[4] = {c->working.stride, 0, 0, 0};
     if (sws_scale(c->scale, src, strides, 0, h, dst, ds) != h) {
         snprintf(e, n, "webcam conversion failed");
         return -1;
     }
-    c->cached.ts_ns = cast_now_ns();
+    c->working.ts_ns = cast_now_ns();
     return 0;
+}
+static void camera_error(CastCamera *c, const char *message, bool fatal, uint64_t epoch)
+{
+    pthread_mutex_lock(&c->lock);
+    if (fatal || epoch == c->epoch) {
+        c->failed = fatal;
+        snprintf(c->failure, sizeof(c->failure), "%.*s", (int)sizeof(c->failure) - 1, message);
+        frame_free(&c->cached);
+    }
+    pthread_mutex_unlock(&c->lock);
+}
+static int camera_requeue(CastCamera *c, struct v4l2_buffer *buffer, uint64_t epoch)
+{
+    if (camera_ioctl(c, VIDIOC_QBUF, buffer) < 0) {
+        return -1;
+    }
+    c->bufs[buffer->index].epoch = epoch;
+    return 0;
+}
+/* Only the capture worker dequeues/requeues buffers after startup. */
+static int camera_drain(CastCamera *c, uint64_t epoch, char *e, size_t n)
+{
+    for (unsigned i = 0; i < c->count; ++i) {
+        struct v4l2_buffer b = {.type = V4L2_BUF_TYPE_VIDEO_CAPTURE, .memory = V4L2_MEMORY_MMAP};
+        if (camera_ioctl(c, VIDIOC_DQBUF, &b) < 0) {
+            return errno == EAGAIN ? 0 : error(e, n, "drain webcam", c->path);
+        }
+        if (b.index >= c->count) {
+            snprintf(e, n, "invalid V4L2 webcam buffer");
+            return -1;
+        }
+        if (camera_requeue(c, &b, epoch) < 0) {
+            return error(e, n, "requeue webcam", c->path);
+        }
+    }
+    return 0;
+}
+static uint64_t camera_timestamp(const struct v4l2_buffer *b, bool *monotonic)
+{
+    uint64_t now = cast_now_ns();
+    *monotonic = false;
+    if ((b->flags & V4L2_BUF_FLAG_TIMESTAMP_MASK) == V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC &&
+        b->timestamp.tv_sec >= 0 && (uint64_t)b->timestamp.tv_sec <= now / 1000000000 &&
+        b->timestamp.tv_usec >= 0 && b->timestamp.tv_usec < 1000000) {
+        uint64_t stamp =
+            (uint64_t)b->timestamp.tv_sec * 1000000000 + (uint64_t)b->timestamp.tv_usec * 1000;
+        if (stamp <= now) {
+            *monotonic = true;
+            return stamp;
+        }
+    }
+    return now;
+}
+static void *camera_worker(void *data)
+{
+    CastCamera *c = data;
+    uint64_t seen_epoch = 0;
+    char message[PATH_MAX + CAST_ERR];
+    for (;;) {
+        pthread_mutex_lock(&c->lock);
+        bool stop = c->stop;
+        uint64_t epoch = c->epoch, after = c->accept_after_ns;
+        pthread_mutex_unlock(&c->lock);
+        if (stop) {
+            break;
+        }
+        if (epoch != seen_epoch) {
+            /* Unknown driver timestamps require a queue drain at each boundary.
+             * Monotonic timestamps additionally reject late pre-boundary captures. */
+            if (camera_drain(c, epoch, message, sizeof(message)) < 0) {
+                camera_error(c, message, true, epoch);
+                break;
+            }
+            seen_epoch = epoch;
+            continue;
+        }
+        struct pollfd p = {.fd = c->fd, .events = POLLIN};
+        int r = poll(&p, 1, CAMERA_POLL_MS);
+        if (r < 0 && errno == EINTR) {
+            continue;
+        }
+        if (r < 0 || (p.revents & (POLLERR | POLLHUP | POLLNVAL))) {
+            snprintf(message, sizeof(message), "webcam %s disappeared or stopped", c->path);
+            camera_error(c, message, true, epoch);
+            break;
+        }
+        if (!r || !(p.revents & POLLIN)) {
+            continue;
+        }
+        pthread_mutex_lock(&c->lock);
+        bool current = !c->stop && epoch == c->epoch;
+        pthread_mutex_unlock(&c->lock);
+        if (!current) {
+            continue;
+        }
+        /* Hold only the newest ready frame, and convert it outside the lock. */
+        struct v4l2_buffer newest = {0};
+        uint64_t captured = 0;
+        bool have = false, fatal = false, current_buffer = false;
+        for (unsigned i = 0; i < c->count; ++i) {
+            struct v4l2_buffer b = {.type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
+                                    .memory = V4L2_MEMORY_MMAP};
+            if (camera_ioctl(c, VIDIOC_DQBUF, &b) < 0) {
+                if (errno != EAGAIN) {
+                    error(message, sizeof(message), "read webcam", c->path);
+                    fatal = true;
+                }
+                break;
+            }
+            if (b.index >= c->count || b.bytesused > c->bufs[b.index].len) {
+                snprintf(message, sizeof(message), "invalid V4L2 webcam buffer");
+                fatal = true;
+                break;
+            }
+            if (have && camera_requeue(c, &newest, epoch) < 0) {
+                error(message, sizeof(message), "requeue webcam", c->path);
+                fatal = true;
+                break;
+            }
+            newest = b;
+            have = true;
+            bool monotonic;
+            captured = camera_timestamp(&b, &monotonic);
+            /* An old exposure can finish after the boundary drain. Without a
+             * usable timestamp it is safe only after a current-epoch QBUF. */
+            current_buffer = monotonic || c->bufs[b.index].epoch == epoch;
+        }
+        if (fatal) {
+            if (have) {
+                camera_requeue(c, &newest, epoch);
+            }
+            camera_error(c, message, true, epoch);
+            break;
+        }
+        if (!have) {
+            continue;
+        }
+        int ok =
+            !current_buffer || captured < after
+                ? 1
+                : decode(c, c->bufs[newest.index].ptr, newest.bytesused, message, sizeof(message));
+        if (camera_requeue(c, &newest, epoch) < 0) {
+            error(message, sizeof(message), "requeue webcam", c->path);
+            camera_error(c, message, true, epoch);
+            break;
+        }
+        if (ok < 0) {
+            camera_error(c, message, false, epoch);
+            continue;
+        }
+        if (ok > 0) {
+            continue;
+        }
+#ifdef CAST_TEST
+        if (c->test && c->test->decoded) {
+            c->test->decoded(c->test->data);
+        }
+#endif
+        c->working.ts_ns = captured;
+        pthread_mutex_lock(&c->lock);
+        /* A barrier may arrive while poll, dequeue, or decode is in progress. */
+        if (!c->stop && epoch == c->epoch && captured >= c->accept_after_ns) {
+            Frame previous = c->cached;
+            c->cached = c->working;
+            c->working = previous;
+            c->failure[0] = 0;
+        }
+        pthread_mutex_unlock(&c->lock);
+    }
+    if (c->streaming) {
+        enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        camera_ioctl(c, VIDIOC_STREAMOFF, &type);
+        c->streaming = false;
+    }
+    return NULL;
 }
 bool camera_failed(CastCamera *c)
 {
-    return c && c->failed;
+    if (!c) {
+        return false;
+    }
+    pthread_mutex_lock(&c->lock);
+    bool failed = c->failed;
+    pthread_mutex_unlock(&c->lock);
+    return failed;
 }
 void camera_barrier(CastCamera *c)
 {
     if (!c) {
         return;
     }
+    pthread_mutex_lock(&c->lock);
     c->accept_after_ns = cast_now_ns();
+    ++c->epoch;
     frame_free(&c->cached);
-    if (c->synthetic) {
-        return;
+    if (!c->failed) {
+        c->failure[0] = 0;
     }
-    /* Drain only buffers currently ready; never wait for hardware. Monotonic
-     * driver timestamps also reject old frames delivered after this boundary. */
-    for (unsigned i = 0; i < c->count; i++) {
-        struct v4l2_buffer b = {.type = V4L2_BUF_TYPE_VIDEO_CAPTURE, .memory = V4L2_MEMORY_MMAP};
-        if (xioctl(c->fd, VIDIOC_DQBUF, &b) < 0) {
-            break;
-        }
-        if (xioctl(c->fd, VIDIOC_QBUF, &b) < 0) {
-            break;
-        }
-    }
+    pthread_mutex_unlock(&c->lock);
 }
 int camera_frame(CastCamera *c, Frame *out, char *e, size_t n)
 {
     if (!c) {
         snprintf(e, n, "camera unavailable");
-        return -1;
-    }
-    if (c->failed) {
-        snprintf(e, n, "webcam %s failed; explicitly select the camera device again", c->path);
         return -1;
     }
     if (c->synthetic) {
@@ -397,88 +626,52 @@ int camera_frame(CastCamera *c, Frame *out, char *e, size_t n)
         out->ts_ns = now;
         return 0;
     }
-    struct pollfd p = {.fd = c->fd, .events = POLLIN};
-    int r = poll(&p, 1, 0);
-    if (r < 0 || (p.revents & (POLLERR | POLLHUP | POLLNVAL))) {
-        c->failed = true;
-        frame_free(&c->cached);
-        snprintf(e, n, "webcam %s disappeared or stopped", c->path);
-        return -1;
-    }
-    /* MJPEG frames are independent. Drain the ready queue before decoding so
-     * a slow compositor does not pay to convert frames it will never display. */
-    struct v4l2_buffer newest = {0};
-    uint64_t captured = 0;
-    bool have = false, got = false;
-    for (unsigned i = 0; i < c->count; i++) {
-        struct v4l2_buffer b = {.type = V4L2_BUF_TYPE_VIDEO_CAPTURE, .memory = V4L2_MEMORY_MMAP};
-        if (xioctl(c->fd, VIDIOC_DQBUF, &b) < 0) {
-            if (errno == EAGAIN) {
-                break;
-            }
-            int saved = errno;
-            if (have) {
-                xioctl(c->fd, VIDIOC_QBUF, &newest);
-            }
-            c->failed = true;
-            frame_free(&c->cached);
-            errno = saved;
-            return error(e, n, "read webcam", c->path);
-        }
-        if (b.index >= c->count || b.bytesused > c->bufs[b.index].len) {
-            if (have) {
-                xioctl(c->fd, VIDIOC_QBUF, &newest);
-            }
-            c->failed = true;
-            frame_free(&c->cached);
-            snprintf(e, n, "invalid V4L2 webcam buffer");
-            return -1;
-        }
-        if (have && xioctl(c->fd, VIDIOC_QBUF, &newest) < 0) {
-            c->failed = true;
-            frame_free(&c->cached);
-            return error(e, n, "requeue webcam", c->path);
-        }
-        newest = b;
-        have = true;
-        captured = cast_now_ns();
-        if ((b.flags & V4L2_BUF_FLAG_TIMESTAMP_MASK) == V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC &&
-            b.timestamp.tv_sec >= 0 && b.timestamp.tv_usec >= 0 && b.timestamp.tv_usec < 1000000) {
-            uint64_t stamp =
-                (uint64_t)b.timestamp.tv_sec * 1000000000 + (uint64_t)b.timestamp.tv_usec * 1000;
-            if (stamp <= captured) {
-                captured = stamp;
-            }
-        }
-    }
-    if (have) {
-        int ok = captured < c->accept_after_ns
-                     ? 1
-                     : decode(c, c->bufs[newest.index].ptr, newest.bytesused, e, n);
-        if (ok == 0) {
-            c->cached.ts_ns = captured;
-        }
-        if (xioctl(c->fd, VIDIOC_QBUF, &newest) < 0) {
-            c->failed = true;
-            frame_free(&c->cached);
-            return error(e, n, "requeue webcam", c->path);
-        }
-        if (ok < 0) {
-            frame_free(&c->cached);
-            return -1;
-        }
-        got = ok == 0;
-    }
-    if (!c->cached.data || (!got && cast_now_ns() - c->cached.ts_ns > 500000000)) {
+    pthread_mutex_lock(&c->lock);
+    int result = -1;
+    if (c->failed || c->failure[0]) {
+        snprintf(e, n, "%s", c->failure);
+    } else if (!c->cached.data || cast_now_ns() - c->cached.ts_ns > 500000000) {
         snprintf(e, n, "waiting for fresh frames from webcam %s", c->path);
-        return -1;
-    }
-    if (frame_copy(out, &c->cached) < 0) {
+    } else if (frame_copy(out, &c->cached) < 0) {
         snprintf(e, n, "webcam frame allocation failed");
-        return -1;
+    } else {
+        result = 0;
     }
-    return 0;
+    pthread_mutex_unlock(&c->lock);
+    return result;
 }
+#ifdef CAST_TEST
+CastCamera *camera_test_open(const struct CameraTest *test, char *e, size_t n)
+{
+    CastCamera *c = camera_alloc(e, n);
+    if (!c) {
+        return NULL;
+    }
+    c->test = test;
+    c->fd = dup(test->fd);
+    c->w = test->width;
+    c->h = test->height;
+    c->stride = test->stride;
+    c->format = test->format;
+    c->count = test->count;
+    snprintf(c->path, sizeof(c->path), "test webcam");
+    if (c->fd < 0 || c->count < 1 || c->count > CAMERA_BUFFERS) {
+        snprintf(e, n, "invalid test webcam");
+        camera_close(c);
+        return NULL;
+    }
+    for (unsigned i = 0; i < c->count; ++i) {
+        c->bufs[i].ptr = test->buffers[i];
+        c->bufs[i].len = test->lengths[i];
+    }
+    c->streaming = true;
+    if (camera_start(c, e, n) < 0) {
+        camera_close(c);
+        return NULL;
+    }
+    return c;
+}
+#endif
 void output_close(CastOutput *o)
 {
     if (!o) {

@@ -38,6 +38,18 @@ uint64_t recorder_duration(CastRecorder *);
 void recorder_path(CastRecorder *, char *, size_t);
 /* Deterministic synthetic integration tests; no CLI/runtime input injection. */
 #ifdef CAST_TEST
+/* Pipe-backed V4L2 buffers exercise the production capture worker without hardware. */
+struct CameraTest {
+    int fd, width, height, stride;
+    uint32_t format;
+    unsigned count;
+    void *buffers[4];
+    size_t lengths[4];
+    int (*ioctl)(void *, unsigned long, void *);
+    void (*decoded)(void *);
+    void *data;
+};
+CastCamera *camera_test_open(const struct CameraTest *, char *, size_t);
 CastOutput *output_test_open(const Config *, int (*)(int, unsigned long, void *), char *, size_t);
 struct AVFrame;
 struct SwsContext;

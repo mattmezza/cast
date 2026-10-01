@@ -633,6 +633,202 @@ static void camera_color_test(void)
     puts("webcam colors: four legacy YUVJ formats match explicit full range without warnings; "
          "range metadata updates");
 }
+struct CameraFixture {
+    pthread_mutex_t lock;
+    pthread_cond_t changed;
+    int pipes[2];
+    uint8_t pixels[4][8 * 4 * 3];
+    struct v4l2_buffer ready[4];
+    unsigned head, count, decoded, requeued, stopped;
+    bool hold;
+};
+static int camera_fixture_ioctl(void *data, unsigned long request, void *argument)
+{
+    struct CameraFixture *f = data;
+    pthread_mutex_lock(&f->lock);
+    int result = 0;
+    if (request == VIDIOC_DQBUF) {
+        if (!f->count) {
+            errno = EAGAIN;
+            result = -1;
+        } else {
+            *(struct v4l2_buffer *)argument = f->ready[f->head];
+            f->head = (f->head + 1) % 4;
+            --f->count;
+            char byte;
+            assert(read(f->pipes[0], &byte, 1) == 1);
+        }
+    } else if (request == VIDIOC_QBUF) {
+        ++f->requeued;
+    } else if (request == VIDIOC_STREAMOFF) {
+        ++f->stopped;
+    } else {
+        assert(!"unexpected camera ioctl");
+    }
+    pthread_cond_broadcast(&f->changed);
+    pthread_mutex_unlock(&f->lock);
+    return result;
+}
+static void camera_fixture_decoded(void *data)
+{
+    struct CameraFixture *f = data;
+    pthread_mutex_lock(&f->lock);
+    ++f->decoded;
+    pthread_cond_broadcast(&f->changed);
+    while (f->hold) {
+        pthread_cond_wait(&f->changed, &f->lock);
+    }
+    pthread_mutex_unlock(&f->lock);
+}
+static void camera_fixture_wait(struct CameraFixture *f, const unsigned *counter, unsigned target)
+{
+    uint64_t deadline = cast_now_ns() + 1000000000;
+    for (;;) {
+        pthread_mutex_lock(&f->lock);
+        bool ready = *counter >= target;
+        pthread_mutex_unlock(&f->lock);
+        if (ready) {
+            return;
+        }
+        assert(cast_now_ns() < deadline);
+        delay_ms(1);
+    }
+}
+static void camera_fixture_queue(struct CameraFixture *f, unsigned index, uint64_t stamp,
+                                 bool monotonic, int color)
+{
+    pthread_mutex_lock(&f->lock);
+    assert(f->count < 4 && index < 4);
+    for (size_t i = 0; i < sizeof(f->pixels[index]); i += 3) {
+        f->pixels[index][i] = color == 0 ? 230 : 10;
+        f->pixels[index][i + 1] = color == 1 ? 230 : 10;
+        f->pixels[index][i + 2] = color == 2 ? 230 : 10;
+    }
+    f->ready[(f->head + f->count) % 4] =
+        (struct v4l2_buffer){.type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
+                             .memory = V4L2_MEMORY_MMAP,
+                             .index = index,
+                             .bytesused = sizeof(f->pixels[index]),
+                             .flags = monotonic ? V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC : 0,
+                             .timestamp = {.tv_sec = (time_t)(stamp / 1000000000),
+                                           .tv_usec = (suseconds_t)((stamp % 1000000000) / 1000)}};
+    ++f->count;
+    assert(write(f->pipes[1], "f", 1) == 1);
+    pthread_mutex_unlock(&f->lock);
+}
+static CastCamera *camera_fixture_open(struct CameraFixture *f, struct CameraTest *test)
+{
+    memset(f, 0, sizeof(*f));
+    assert(pthread_mutex_init(&f->lock, NULL) == 0);
+    assert(pthread_cond_init(&f->changed, NULL) == 0);
+    assert(pipe(f->pipes) == 0);
+    *test = (struct CameraTest){.fd = f->pipes[0],
+                                .width = 8,
+                                .height = 4,
+                                .stride = 8 * 3,
+                                .format = V4L2_PIX_FMT_RGB24,
+                                .count = 4,
+                                .ioctl = camera_fixture_ioctl,
+                                .decoded = camera_fixture_decoded,
+                                .data = f};
+    for (unsigned i = 0; i < 4; ++i) {
+        test->buffers[i] = f->pixels[i];
+        test->lengths[i] = sizeof(f->pixels[i]);
+    }
+    char error[CAST_ERR];
+    CastCamera *camera = camera_test_open(test, error, sizeof(error));
+    if (!camera) {
+        fprintf(stderr, "camera worker fixture: %s\n", error);
+    }
+    assert(camera);
+    return camera;
+}
+static void camera_fixture_close(struct CameraFixture *f, CastCamera *camera)
+{
+    uint64_t before = cast_now_ns();
+    camera_close(camera);
+    assert(cast_now_ns() - before < 200000000);
+    assert(f->stopped == 1);
+    close(f->pipes[0]);
+    if (f->pipes[1] >= 0) {
+        close(f->pipes[1]);
+    }
+    pthread_cond_destroy(&f->changed);
+    pthread_mutex_destroy(&f->lock);
+}
+static void camera_wait_frame(CastCamera *camera, Frame *frame)
+{
+    uint64_t deadline = cast_now_ns() + 1000000000;
+    char error[CAST_ERR];
+    while (camera_frame(camera, frame, error, sizeof(error)) < 0) {
+        assert(!camera_failed(camera) && cast_now_ns() < deadline);
+        delay_ms(1);
+    }
+}
+static void camera_worker_test(void)
+{
+    struct CameraFixture fixture;
+    struct CameraTest test;
+    CastCamera *camera = camera_fixture_open(&fixture, &test);
+    char error[CAST_ERR];
+    Frame frame = {0};
+    camera_fixture_queue(&fixture, 0, cast_now_ns(), true, 0);
+    camera_wait_frame(camera, &frame);
+    assert(frame.data[0] == 230 && frame.data[1] == 10);
+    uint64_t previous = frame.ts_ns;
+    assert(camera_frame(camera, &frame, error, sizeof(error)) == 0 && frame.ts_ns == previous);
+    pthread_mutex_lock(&fixture.lock);
+    fixture.hold = true;
+    pthread_mutex_unlock(&fixture.lock);
+    camera_fixture_queue(&fixture, 1, cast_now_ns(), true, 1);
+    camera_fixture_wait(&fixture, &fixture.decoded, 2);
+    uint64_t boundary = cast_now_ns();
+    camera_barrier(camera);
+    assert(camera_frame(camera, &frame, error, sizeof(error)) < 0);
+    assert(cast_now_ns() - boundary < 100000000);
+    /* Queue an untimestamped old frame while conversion is held across privacy. */
+    camera_fixture_queue(&fixture, 2, 0, false, 1);
+    pthread_mutex_lock(&fixture.lock);
+    fixture.hold = false;
+    pthread_cond_broadcast(&fixture.changed);
+    pthread_mutex_unlock(&fixture.lock);
+    camera_fixture_wait(&fixture, &fixture.requeued, 3);
+    assert(camera_frame(camera, &frame, error, sizeof(error)) < 0);
+    /* A pre-boundary exposure with no timestamp can complete after the drain. */
+    camera_fixture_queue(&fixture, 3, 0, false, 1);
+    camera_fixture_wait(&fixture, &fixture.requeued, 4);
+    assert(camera_frame(camera, &frame, error, sizeof(error)) < 0);
+    /* A bogus monotonic timestamp must use the same conservative queue epoch. */
+    camera_fixture_queue(&fixture, 1, UINT64_MAX, true, 1);
+    camera_fixture_wait(&fixture, &fixture.requeued, 5);
+    assert(camera_frame(camera, &frame, error, sizeof(error)) < 0);
+    /* A monotonic pre-boundary capture delivered late must also be rejected. */
+    camera_fixture_queue(&fixture, 0, boundary - 10000000, true, 1);
+    camera_fixture_wait(&fixture, &fixture.requeued, 6);
+    assert(camera_frame(camera, &frame, error, sizeof(error)) < 0);
+    camera_fixture_queue(&fixture, 3, 0, false, 2);
+    camera_wait_frame(camera, &frame);
+    assert(frame.ts_ns >= boundary && frame.data[0] == 10 && frame.data[2] == 230);
+    delay_ms(520);
+    assert(camera_frame(camera, &frame, error, sizeof(error)) < 0 && strstr(error, "fresh frames"));
+    close(fixture.pipes[1]);
+    fixture.pipes[1] = -1;
+    uint64_t deadline = cast_now_ns() + 1000000000;
+    while (!camera_failed(camera)) {
+        assert(cast_now_ns() < deadline);
+        delay_ms(1);
+    }
+    assert(camera_frame(camera, &frame, error, sizeof(error)) < 0 && strstr(error, "disappeared"));
+    camera_fixture_close(&fixture, camera);
+    frame_free(&frame);
+    /* Shutdown remains bounded when the worker is waiting on an idle device. */
+    camera = camera_fixture_open(&fixture, &test);
+    delay_ms(5);
+    camera_fixture_close(&fixture, camera);
+    puts("webcam worker: latest-frame handoff, in-flight privacy, queued and late unknown "
+         "timestamps, malformed and old capture rejection, stale timeout, disconnect, and "
+         "bounded shutdown passed");
+}
 static void webcam_probe(void)
 {
     const char *path = getenv("CAST_TEST_CAMERA");
@@ -641,8 +837,8 @@ static void webcam_probe(void)
     }
     Config cfg;
     config_defaults(&cfg);
-    cfg.width = 1280;
-    cfg.height = 720;
+    cfg.width = 1920;
+    cfg.height = 1080;
     snprintf(cfg.camera_device, sizeof(cfg.camera_device), "%s", path);
     char error[CAST_ERR] = {0};
     CastCamera *camera = camera_open(&cfg, error, sizeof(error));
@@ -674,15 +870,40 @@ static void webcam_probe(void)
         delay_ms(35);
     }
     assert(fresh);
-    printf(
-        "physical webcam %s: decoded unique RGBA %dx%d frames and rejected pre-barrier backlog\n",
-        path, frame.width, frame.height);
+    uint64_t total = 0, longest = 0;
+    int delivered = 0, unique = 0;
+    previous = frame.ts_ns;
+    for (int i = 0; i < 90; ++i) {
+        uint64_t start = cast_now_ns();
+        int result = camera_frame(camera, &frame, error, sizeof(error));
+        uint64_t elapsed = cast_now_ns() - start;
+        total += elapsed;
+        if (elapsed > longest) {
+            longest = elapsed;
+        }
+        if (result == 0) {
+            ++delivered;
+            if (frame.ts_ns != previous) {
+                ++unique;
+                previous = frame.ts_ns;
+            }
+        }
+        delay_ms(33);
+    }
+    assert(delivered >= 85 && unique >= 10);
+    printf("physical webcam %s: RGBA %dx%d, %d/90 reads (%d unique), main read mean %.3f ms "
+           "max %.3f ms; pre-barrier backlog rejected\n",
+           path, frame.width, frame.height, delivered, unique, total / 90e6, longest / 1e6);
     frame_free(&frame);
     camera_close(camera);
 }
-int main(void)
+int main(int argc, char **argv)
 {
     av_log_set_level(AV_LOG_ERROR);
+    if (argc == 2 && !strcmp(argv[1], "--camera-worker")) {
+        camera_worker_test();
+        return 0;
+    }
     char directory[] = "/tmp/cast-media-test-XXXXXX";
     assert(mkdtemp(directory));
     timeline_test(directory, true);
@@ -694,6 +915,7 @@ int main(void)
     audio_lanes_test();
     output_negotiation_test();
     camera_color_test();
+    camera_worker_test();
     webcam_probe();
     /* Test artifacts deliberately remain available for ffprobe/visual inspection. */
     printf("media tests passed; inspection artifacts: %s\n", directory);
