@@ -491,6 +491,18 @@ void output_close(CastOutput *o)
     free(o->pixels);
     free(o);
 }
+#ifdef CAST_TEST
+static int (*test_output_ioctl)(int, unsigned long, void *);
+#endif
+static int output_ioctl(int fd, unsigned long request, void *argument)
+{
+#ifdef CAST_TEST
+    if (test_output_ioctl) {
+        return test_output_ioctl(fd, request, argument);
+    }
+#endif
+    return xioctl(fd, request, argument);
+}
 CastOutput *output_open(const Config *c, char *e, size_t n)
 {
     CastOutput *o = calloc(1, sizeof(*o));
@@ -510,11 +522,15 @@ CastOutput *output_open(const Config *c, char *e, size_t n)
         goto fail;
     }
     struct v4l2_capability cap = {0};
-    if (xioctl(o->fd, VIDIOC_QUERYCAP, &cap) < 0) {
+    if (output_ioctl(o->fd, VIDIOC_QUERYCAP, &cap) < 0) {
         error(e, n, "query virtual output", c->output_device);
         goto fail;
     }
-    if (!(caps(&cap) & V4L2_CAP_VIDEO_OUTPUT)) {
+    /* exclusive_caps is dynamic. A known loopback driver may advertise
+     * CAPTURE until its output format/stream tokens are available again;
+     * negotiate OUTPUT to establish whether this opener can be a producer. */
+    bool loopback = !strncmp((const char *)cap.driver, "v4l2 loopback", sizeof(cap.driver));
+    if (!(caps(&cap) & V4L2_CAP_VIDEO_OUTPUT) && !loopback) {
         snprintf(e, n, "%s is not a V4L2 video output; create v4l2loopback with exclusive_caps=1",
                  c->output_device);
         goto fail;
@@ -526,8 +542,21 @@ CastOutput *output_open(const Config *c, char *e, size_t n)
         f.fmt.pix.height = (unsigned)c->height;
         f.fmt.pix.pixelformat = formats[i];
         f.fmt.pix.field = V4L2_FIELD_NONE;
-        if (xioctl(o->fd, VIDIOC_S_FMT, &f) < 0 || f.fmt.pix.pixelformat != formats[i] ||
-            f.fmt.pix.width != (unsigned)c->width || f.fmt.pix.height != (unsigned)c->height) {
+        if (output_ioctl(o->fd, VIDIOC_S_FMT, &f) < 0) {
+            if (errno == EBUSY) {
+                snprintf(e, n,
+                         "%s output is busy; stop the other producer or clients holding its format",
+                         c->output_device);
+                goto fail;
+            }
+            if (errno != EINVAL && errno != ENOTTY) {
+                error(e, n, "configure virtual output", c->output_device);
+                goto fail;
+            }
+            continue;
+        }
+        if (f.fmt.pix.pixelformat != formats[i] || f.fmt.pix.width != (unsigned)c->width ||
+            f.fmt.pix.height != (unsigned)c->height) {
             continue;
         }
         o->format = formats[i];
@@ -536,8 +565,9 @@ CastOutput *output_open(const Config *c, char *e, size_t n)
         break;
     }
     if (!o->format) {
-        snprintf(e, n, "%s cannot accept configured %dx%d YUYV/RGB24/BGR32 output",
-                 c->output_device, c->width, c->height);
+        snprintf(e, n, "%s cannot accept configured %dx%d YUYV/RGB24/BGR32 output%s",
+                 c->output_device, c->width, c->height,
+                 loopback ? "; check for another producer or a locked format" : "");
         goto fail;
     }
     int tight = av_image_get_linesize(raw_format(o->format), o->w, 0);
@@ -555,12 +585,22 @@ CastOutput *output_open(const Config *c, char *e, size_t n)
     struct v4l2_streamparm p = {.type = V4L2_BUF_TYPE_VIDEO_OUTPUT};
     p.parm.output.timeperframe.numerator = 1;
     p.parm.output.timeperframe.denominator = (unsigned)c->fps;
-    xioctl(o->fd, VIDIOC_S_PARM, &p);
+    output_ioctl(o->fd, VIDIOC_S_PARM, &p);
     return o;
 fail:
     output_close(o);
     return NULL;
 }
+#ifdef CAST_TEST
+CastOutput *output_test_open(const Config *cfg, int (*ioctl_fn)(int, unsigned long, void *),
+                             char *error, size_t size)
+{
+    test_output_ioctl = ioctl_fn;
+    CastOutput *output = output_open(cfg, error, size);
+    test_output_ioctl = NULL;
+    return output;
+}
+#endif
 int output_frame(CastOutput *o, const Frame *f, char *e, size_t n)
 {
     if (!o || o->fd < 0) {

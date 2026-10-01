@@ -4,9 +4,11 @@
 #include "cast.h"
 #include "media_internal.h"
 #include <assert.h>
+#include <errno.h>
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libswscale/swscale.h>
+#include <linux/videodev2.h>
 #include <math.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -480,6 +482,70 @@ static void audio_lanes_test(void)
     media_close(m);
     puts("audio lanes: clipped mix, independent virtual silence, stale samples and disabled lanes");
 }
+static struct v4l2_capability output_capability;
+static int output_format_error, output_format_calls;
+static int output_probe_ioctl(int fd, unsigned long request, void *argument)
+{
+    (void)fd;
+    if (request == VIDIOC_QUERYCAP) {
+        *(struct v4l2_capability *)argument = output_capability;
+        return 0;
+    }
+    if (request == VIDIOC_S_FMT) {
+        ++output_format_calls;
+        if (output_format_error) {
+            errno = output_format_error;
+            return -1;
+        }
+        struct v4l2_format *format = argument;
+        assert(format->type == V4L2_BUF_TYPE_VIDEO_OUTPUT);
+        format->fmt.pix.bytesperline = format->fmt.pix.width * 2;
+        format->fmt.pix.sizeimage = format->fmt.pix.bytesperline * format->fmt.pix.height;
+        return 0;
+    }
+    assert(request == VIDIOC_S_PARM);
+    return 0;
+}
+static void output_negotiation_test(void)
+{
+    Config cfg;
+    config_defaults(&cfg);
+    cfg.width = 64;
+    cfg.height = 36;
+    cfg.live_enabled = true;
+    snprintf(cfg.output_device, sizeof(cfg.output_device), "/dev/null");
+    char error[CAST_ERR] = {0};
+    output_capability.capabilities = V4L2_CAP_DEVICE_CAPS | V4L2_CAP_VIDEO_OUTPUT;
+    output_capability.device_caps = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_READWRITE;
+    snprintf((char *)output_capability.driver, sizeof(output_capability.driver), "v4l2 loopback");
+    CastOutput *output = output_test_open(&cfg, output_probe_ioctl, error, sizeof(error));
+    assert(output && output_format_calls == 1);
+    output_close(output);
+
+    /* An arbitrary capture device must never reach OUTPUT negotiation, even
+     * if its overall capabilities include output on a different device node. */
+    snprintf((char *)output_capability.driver, sizeof(output_capability.driver), "uvcvideo");
+    output_format_calls = 0;
+    output = output_test_open(&cfg, output_probe_ioctl, error, sizeof(error));
+    assert(!output && output_format_calls == 0);
+
+    snprintf((char *)output_capability.driver, sizeof(output_capability.driver), "v4l2 loopback");
+    output_format_error = EBUSY;
+    output = output_test_open(&cfg, output_probe_ioctl, error, sizeof(error));
+    assert(!output && output_format_calls == 1 && strstr(error, "busy") &&
+           strstr(error, "producer"));
+    output_format_calls = 0;
+    output_format_error = ENODEV;
+    output = output_test_open(&cfg, output_probe_ioctl, error, sizeof(error));
+    assert(!output && output_format_calls == 1 && strstr(error, strerror(ENODEV)));
+    output_format_calls = 0;
+    output_format_error = EINVAL;
+    output = output_test_open(&cfg, output_probe_ioctl, error, sizeof(error));
+    assert(!output && output_format_calls == 3 && strstr(error, "locked format"));
+    output_format_error = 0;
+    puts("virtual output: dynamic loopback caps negotiate; physical capture rejected; "
+         "busy/disappeared errors preserved");
+}
 static int deprecated_pixel_warnings;
 static void camera_color_log(void *context, int level, const char *format, va_list args)
 {
@@ -626,6 +692,7 @@ int main(void)
     responsiveness_test(directory);
     disk_failure_test(directory);
     audio_lanes_test();
+    output_negotiation_test();
     camera_color_test();
     webcam_probe();
     /* Test artifacts deliberately remain available for ffprobe/visual inspection. */

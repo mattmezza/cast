@@ -38,6 +38,7 @@ uint64_t recorder_duration(CastRecorder *);
 void recorder_path(CastRecorder *, char *, size_t);
 /* Deterministic synthetic integration tests; no CLI/runtime input injection. */
 #ifdef CAST_TEST
+CastOutput *output_test_open(const Config *, int (*)(int, unsigned long, void *), char *, size_t);
 struct AVFrame;
 struct SwsContext;
 struct SwsContext *camera_test_scaler(struct SwsContext *, const struct AVFrame *);
