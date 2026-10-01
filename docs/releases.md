@@ -15,7 +15,11 @@ The dependency source helper additionally requires its documented tools and
 network access to fetch pinned sources; it refuses unsupported dependency builds
 or downloads that fail verification. See [dependencies.md](dependencies.md).
 The binary uses the build host's architecture and library ABI; this is not a
-universal or statically linked Linux package. Review the FFmpeg redistribution
+universal or statically linked Linux package. The first release uses `RELEASE_TAG=v0.1` with package/executable version `0.1.0`.
+The tag defaults to `v$(VERSION)`; an explicit tag still must identify the exact
+clean HEAD and pushed commit. Archive filenames retain `VERSION`.
+
+Review the FFmpeg redistribution
 requirements in [dependencies.md](dependencies.md) before distributing binaries.
 
 1. Update `VERSION` in `Makefile`, `CAST_VERSION` in `src/cast.h`, and `pkgver`
@@ -29,15 +33,15 @@ requirements in [dependencies.md](dependencies.md) before distributing binaries.
 
    ```sh
    git push origin HEAD
-   git tag -a v0.1.0 -m 'cast 0.1.0'
-   git push origin refs/tags/v0.1.0
+   git tag -a v0.1 -m 'cast v0.1'
+   git push origin refs/tags/v0.1
    ```
 
 4. Check and publish with the same backend settings you verified:
 
    ```sh
-   make release-check VERSION=0.1.0 RELEASE_NOTES=docs/release-notes/0.1.0.md X11=1 WAYLAND=1
-   make release VERSION=0.1.0 RELEASE_NOTES=docs/release-notes/0.1.0.md X11=1 WAYLAND=1
+   make release-check VERSION=0.1.0 RELEASE_TAG=v0.1 RELEASE_NOTES=docs/release-notes/0.1.0.md X11=1 WAYLAND=1
+   make release VERSION=0.1.0 RELEASE_TAG=v0.1 RELEASE_NOTES=docs/release-notes/0.1.0.md X11=1 WAYLAND=1
    ```
 
 `release-check` reads Git/GitHub state without building or publishing. Both targets
@@ -50,7 +54,7 @@ required so publication never falls back to an interactive prompt or implicit no
 without reusing checkout objects, prepares the matching dependency source archive,
 creates checksums, then rechecks the Git/GitHub
 state before publication. The resulting files and a copy of the notes are preserved
-under `dist/releases/vVERSION/linux-ARCH/`. `gh release create --verify-tag` attaches
+under `dist/releases/RELEASE_TAG/linux-ARCH/`. `gh release create --verify-tag` attaches
 the binary archive, both explicit source archives and checksums. It cannot create a
 tag implicitly. Version/commit provenance is checked; byte-for-byte reproducibility
 across different compilers or dependency builds is not claimed.
@@ -59,7 +63,7 @@ Existing artifact directories are never overwritten. If upload fails, preserve
 the artifacts, inspect `gh release view vVERSION` for a partial draft, and determine
 whether to finish that draft or retry publication. Do not replace an existing
 published release or its assets silently. After a successful release, inspect it
-with `gh release view vVERSION` and check downloaded files using `sha256sum -c SHA256SUMS`.
+with `gh release view RELEASE_TAG` and check downloaded files using `sha256sum -c SHA256SUMS`.
 
 For local development, `make package X11=1 WAYLAND=1` still packages the working
 tree under `dist/`; it does not create a GitHub release. `VERSION` must match the

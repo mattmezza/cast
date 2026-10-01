@@ -12,7 +12,8 @@ wayland=${5:-0}
 case "$action" in check|release) ;; *) fail 'expected check or release' ;; esac
 case "$version" in ''|*[!0-9A-Za-z.-]*) fail 'invalid release version' ;; esac
 case "$x11:$wayland" in 0:0|0:1|1:0|1:1) ;; *) fail 'X11 and WAYLAND must be 0 or 1' ;; esac
-tag=v$version
+tag=${6:-v$version}
+git check-ref-format "refs/tags/$tag" >/dev/null || fail 'invalid RELEASE_TAG'
 for command in git gh make tar sha256sum mktemp; do
     command -v "$command" >/dev/null || fail "required command missing: $command"
 done

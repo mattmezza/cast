@@ -8,6 +8,7 @@ WAYLAND = 0
 VERSION = 0.1.0
 SOURCE_COMMIT = working-tree
 RELEASE_NOTES =
+RELEASE_TAG = v$(VERSION)
 LOOPBACK_DEVICE =
 CFLAGS = -O2 -g
 WARN = -Wall -Wextra -Wformat=2 -Wstrict-prototypes -Wmissing-prototypes
@@ -127,9 +128,9 @@ package: package-check cast
 	tar --transform='s,^,cast-$(VERSION)/,' -czf dist/cast-$(VERSION)-source.tar.gz Makefile .clang-format cast-build-prompt.md README.md LICENSE licenses src vendor tests docs examples packaging
 	cd dist && sha256sum cast-$(VERSION)-linux-$$(uname -m).tar.gz cast-$(VERSION)-source.tar.gz > SHA256SUMS
 release-check:
-	sh packaging/release.sh check '$(VERSION)' '$(RELEASE_NOTES)' '$(X11)' '$(WAYLAND)'
+	sh packaging/release.sh check '$(VERSION)' '$(RELEASE_NOTES)' '$(X11)' '$(WAYLAND)' '$(RELEASE_TAG)'
 release:
-	sh packaging/release.sh release '$(VERSION)' '$(RELEASE_NOTES)' '$(X11)' '$(WAYLAND)'
+	sh packaging/release.sh release '$(VERSION)' '$(RELEASE_NOTES)' '$(X11)' '$(WAYLAND)' '$(RELEASE_TAG)'
 clean:
 	rm -rf build cast
 .PHONY: FORCE all check check-unit check-wayland check-wayland-unit check-xorg check-loopback benchmark sanitize install uninstall package-check package release-check release clean
