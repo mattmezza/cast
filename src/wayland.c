@@ -175,7 +175,7 @@ Platform *wayland_open(const Config *c,char *err,size_t n) {
  if(!(w->source_types&3)){snprintf(err,n,"Portal advertises no monitor/window capture");g_object_unref(w->bus);free(w);return NULL;}
  w->cursor_mode=modes&4?4:(c->cursor && modes&2?2:(modes&1?1:(modes&2?2:0)));
  if(!w->cursor_mode || (!c->cursor && w->cursor_mode==2)){snprintf(err,n,"Portal does not advertise the requested hidden cursor capability");g_object_unref(w->bus);free(w);return NULL;}
- if(c->zoom_follow && w->cursor_mode!=4){snprintf(err,n,"Wayland zoom follow requires portal cursor metadata; set [zoom] follow=false");g_object_unref(w->bus);free(w);return NULL;}
+ if(w->cursor_mode!=4)w->config.zoom_follow=false;
  if(c->keys || c->clicks || c->preview || strcmp(c->capture_kind,"monitor") || c->monitor[0]) {snprintf(err,n,"Wayland requires keys/clicks/preview off, capture monitor, and empty monitor; selection is handled by portal consent");g_object_unref(w->bus);free(w);return NULL;}
  w->cancel=g_cancellable_new();w->response_sub=g_dbus_connection_signal_subscribe(w->bus,PORTAL,"org.freedesktop.portal.Request","Response",NULL,NULL,G_DBUS_SIGNAL_FLAGS_NONE,response,w,NULL);
  w->owner_sub=g_dbus_connection_signal_subscribe(w->bus,"org.freedesktop.DBus","org.freedesktop.DBus","NameOwnerChanged","/org/freedesktop/DBus",PORTAL,G_DBUS_SIGNAL_FLAGS_NONE,owner_changed,w,NULL);

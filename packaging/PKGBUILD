@@ -1,0 +1,32 @@
+# Build from a local source archive: git archive --format=tar --prefix=cast-0.1.0/ HEAD | gzip > cast-0.1.0.tar.gz
+# Copy the archive beside this file, then run makepkg. No repository publication required.
+pkgname=cast
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Minimal screen and webcam presentation camera with independent local recording'
+arch=('x86_64' 'aarch64')
+license=('MIT' 'BSD-3-Clause')
+depends=('ffmpeg' 'pipewire' 'glib2' 'libx11' 'libxext' 'libxrandr' 'libxi' 'libxfixes')
+makedepends=('pkgconf')
+checkdepends=('python')
+optdepends=('v4l2loopback-dkms: virtual camera kernel device'
+            'linux-headers: DKMS build for the linux kernel; match your actual kernel'
+            'xdg-desktop-portal: Wayland screen capture consent'
+            'sxhkd: example Xorg control bindings')
+source=("cast-$pkgver.tar.gz")
+sha256sums=('SKIP') # Local source archive: verify its provenance; set a checksum for distribution.
+
+build() {
+  cd "cast-$pkgver"
+  make X11=1 WAYLAND=1 PREFIX=/usr
+}
+
+check() {
+  cd "cast-$pkgver"
+  make X11=1 WAYLAND=1 check
+}
+
+package() {
+  cd "cast-$pkgver"
+  make X11=1 WAYLAND=1 PREFIX=/usr DESTDIR="$pkgdir" install
+}

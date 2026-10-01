@@ -6,8 +6,9 @@ PipeWire implement the optional backend; FFmpeg and PipeWire audio remain shared
 Start `cast --backend wayland`. A desktop consent dialog chooses one screen.
 The daemon continues servicing controls while consent is pending. Live output
 starts privacy paused, including after source selection; explicitly resume it.
-Configure `zoom.follow=false` if the portal does not advertise cursor metadata.
-Keep `capture.kind=monitor`, `capture.monitor` empty, and keys/clicks/preview off.
+If the portal does not advertise cursor metadata, cast disables default zoom follow
+and reports the missing capability. Explicitly enabling follow then returns an error.
+Keep the default monitor capture and empty monitor setting, and keys/clicks/preview off.
 
 The [ScreenCast portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.ScreenCast.html)
 provides session consent and an isolated PipeWire remote. cast subscribes to
