@@ -60,7 +60,7 @@ tag implicitly. Version/commit provenance is checked; byte-for-byte reproducibil
 across different compilers or dependency builds is not claimed.
 
 Existing artifact directories are never overwritten. If upload fails, preserve
-the artifacts, inspect `gh release view vVERSION` for a partial draft, and determine
+the artifacts, inspect `gh release view RELEASE_TAG` for a partial draft, and determine
 whether to finish that draft or retry publication. Do not replace an existing
 published release or its assets silently. After a successful release, inspect it
 with `gh release view RELEASE_TAG` and check downloaded files using `sha256sum -c SHA256SUMS`.

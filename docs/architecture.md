@@ -12,6 +12,9 @@ output scaling identically to screen pixels, cursor and click markers. Camera cr
 and mirroring are independent. Backend failures produce neutral content and errors.
 
 FFmpeg libraries provide camera MJPEG decoding, format conversion, codecs and muxing.
+A camera worker owns V4L2 buffers and decoding, publishing only the latest owned RGBA
+frame. Main-loop reads copy that snapshot; privacy epochs and per-buffer queue epochs
+reject pre-boundary capture/decoding without waiting for device work.
 Recording has a bounded worker queue, independent control/encoder locks and monotonic
 active-time timestamps. Status and frame admission never wait for codec work. Stop
 requests worker finalization; status exposes completion and shutdown waits for it. Pause

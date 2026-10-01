@@ -6,7 +6,6 @@ physical camera or microphone is captured. Temporary recordings are removed.
 """
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -53,7 +52,7 @@ def main():
                     capture_output=True, timeout=10)
                 assert result.returncode == 0, result.stderr.decode(errors='replace')
                 assert len(result.stdout) == 64 * 36 * 3
-                return hashlib.sha256(result.stdout).digest()
+                return result.stdout
 
             try:
                 deadline = time.monotonic() + 10
@@ -65,7 +64,19 @@ def main():
                 assert status()['live']['state'] == 'paused'
                 neutral = consumer_frame()
                 command('live', 'resume')
-                assert consumer_frame() != neutral
+                resumed = consumer_frame()
+                assert resumed != neutral
+                # The synthetic screen red channel increases from left to right.
+                # Check actual device pixels, independently of a call's self-view.
+                def screen_orientation(frame):
+                    left = frame[(18 * 64 + 4) * 3]
+                    right = frame[(18 * 64 + 59) * 3]
+                    assert right > left + 100, 'screen layer is mirrored in device output'
+
+                screen_orientation(resumed)
+                command('camera', 'mirror', 'on')
+                screen_orientation(consumer_frame())
+                command('camera', 'mirror', 'off')
                 command('live', 'freeze')
                 frozen = consumer_frame()
                 assert consumer_frame() == frozen
@@ -111,7 +122,7 @@ def main():
                 command('quit')
                 daemon.wait(timeout=10)
                 assert daemon.returncode == 0
-                print(f'loopback consumer: neutral/resume/freeze/privacy/same-file recording '
+                print(f'loopback consumer: orientation/neutral/resume/freeze/privacy/same-file recording '
                       f'passed at 1920x1080@30 on {options.device}; '
                       f'{video["nb_read_frames"]} decoded recording frames')
             finally:

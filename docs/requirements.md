@@ -9,7 +9,7 @@ hardware compatibility. Integration-only acceptance remains unchecked below.
 | M1 foreground daemon, single executable, bounded IPC, ownership, stale socket, ordering/timeouts, signals | main.c, commands.c | Core/production command tests and full post-reboot socket transport integration pass |
 | M1 narrow platform boundaries, RGBA ownership/stride/monotonic time | cast.h, platform.c, compositor.c | Owned-frame/stride tests; X11 types remain private |
 | M1 independent privacy/freeze/group state and neutral barriers | state.c, commands.c, media.c | Every initial output state combination; command/pause/barrier tests; driver acceptance pending |
-| M1 Xorg shared-memory capture and compatible V4L2 formats/output | x11.c, webcam.c | Xvfb smoke passes both capture paths; real FFmpeg V4L2 consumer privacy checks pass |
+| M1 Xorg shared-memory capture and compatible V4L2 formats/output | x11.c, webcam.c | Xvfb smoke passes both paths; real FFmpeg V4L2 privacy/orientation and async camera checks pass |
 | M2 overlay/split/screen/camera, masks/aspects/crop/mirror/border/anchors/fit | compositor.c, commands.c | Actual synthetic output pixels, geometry/clamping/scalar sampling tests |
 | M2 monitors, regions, active/selected windows, cancellation/hotplug/failures | x11.c, platform.c | Isolated Xvfb smoke passes windows, selections/remap/errors; physical hotplug remains manual |
 | M3 mic/explicit desktop sources/gain/disappearance and virtual source | audio.c, media.c | Synthetic mixing/clipping/stale tests; physical mic and virtual-source readiness/silence verified |
@@ -34,7 +34,8 @@ hardware compatibility. Integration-only acceptance remains unchecked below.
 - [x] Expanded private D-Bus portal lifecycle execution in a normal session.
 - [x] Kernel loopback consumer pixels and physical PipeWire virtual-source privacy silence.
 - [ ] Real Wayland portal streams, physical hotplug and user keyboard/IME acceptance.
-- [ ] Conferencing compatibility and full-pipeline 1080p30 CPU/RSS/latency/drops.
+- [x] Short full-pipeline 1080p30 live/record/both CPU/RSS/fps/drop samples.
+- [ ] Remote conferencing compatibility, endurance, physical AV drift and glass-to-glass latency.
 
 See verification.md for measured results and environment restrictions, and
 hardware-acceptance.md for the exact integration acceptance procedure. No privileged

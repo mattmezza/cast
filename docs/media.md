@@ -8,20 +8,29 @@ optional virtual microphone. Video and audio are separate conference devices.
 
 The webcam accepts streaming, single-plane V4L2 capture devices. It enumerates formats
 and prefers MJPEG, followed by YUYV, UYVY, NV12, planar YUV420, RGB24 and BGR24. FFmpeg
-decodes MJPEG and converts selected input to owned RGBA frames. Capture drains ready
-buffers to favor the newest frame. Missing, unplugged or stale input produces an absent
+decodes MJPEG and converts selected input to owned RGBA frames. Deprecated JPEG
+YUV aliases are normalized with explicit color range/matrix metadata, preserving
+colors without repeated swscale warnings. One worker owns real-device polling,
+dequeue/requeue, decoding and conversion. It drains bounded ready buffers and decodes
+only the newest. Main-loop reads copy the latest published RGBA snapshot; they never
+wait for device capture or decoding. Two owned frames bound the handoff memory. Missing, unplugged or stale input produces an absent
 camera layer with an error; it never substitutes another camera. Explicitly select a
 reconnected device again, including the same path, to retry a failed handle.
 
-Privacy/source barriers clear the cached webcam image and drain buffers already ready.
-Monotonic V4L2 timestamps reject older frames delivered afterward. Devices with other
-timestamp types rely on the drain and arrival timing; hardware latency still needs
-acceptance testing. A camera temporarily awaiting its next frame remains available for
+Privacy/source barriers immediately clear publication and advance its epoch without
+waiting for the worker. In-flight older work cannot publish afterward. The worker
+drains ready buffers at each boundary; monotonic V4L2 timestamps reject late older
+captures. Unknown, malformed or future timestamps additionally require that the
+buffer was queued in the current epoch, so a late old exposure cannot bypass the
+boundary drain. Hardware latency still needs acceptance testing. A camera temporarily awaiting its next frame remains available for
 later acquisition.
 
 Live output opens an existing V4L2 output device and negotiates the exact configured
 canvas size as YUYV, RGB24 or BGR32. It converts the composed RGBA frame and writes in
-nonblocking mode. Busy/short writes are reported and counted as drops. The output size
+nonblocking mode. Exclusive-caps loopback advertisement is dynamic; the known
+v4l2loopback driver can negotiate OUTPUT even while advertising CAPTURE. A busy
+producer, disappeared device or locked/incompatible format returns an actionable
+error. Physical capture-only cameras are rejected. Busy/short writes are reported and counted as drops. The output size
 and frame rate stay fixed across source/layout changes. The `none` device discards output
 for synthetic testing and cannot establish virtual-camera consumer compatibility.
 
@@ -144,15 +153,21 @@ completed in 0.41 ms. These are small 160x90 synthetic acceptance results, not 1
 performance or a physical latency measurement. Address/undefined sanitizer verification
 of the media suite also passed; the complete record is in [verification.md](verification.md).
 
-Before the paused session, a physical `/dev/video0` MJPEG capture probe and PipeWire
-source enumeration were reported successful. The resumed sandbox had neither
-`/dev/video0` nor `/dev/video10`; `pw-cli ls Node` returned `Operation not permitted`.
-Those earlier probes have not been repeated against the final source. Physical webcam
-capture can be checked without exporting images by setting `CAST_TEST_CAMERA=/dev/video0`
-when running the media test; it validates decoded frame dimensions/stride only.
+Post-reboot checks exercised the physical webcam, loopback consumer and PipeWire
+mic/virtual-source readiness and privacy silence. The optional physical camera test
+is `CAST_TEST_CAMERA=/dev/video0 build/x1-w0/test_media`: it requests 1920x1080,
+checks fresh owned-frame dimensions/stride/timestamps, and reports unique-frame
+counts and mean/max main-read latency without exporting images. Device access must
+be free; do not run this while another cast daemon owns the camera.
 
-Real V4L2 loopback consumer pixels, physical microphone/application capture and virtual
-source routing, long-run physical AV drift, 1920x1080/30 fps performance and conferencing
-compatibility remain acceptance work. Follow [hardware-acceptance.md](hardware-acceptance.md)
-in a graphical session with the actual devices. No kernel module or system audio
-configuration was changed by these tests.
+Deterministic worker tests hold decoding across a privacy barrier and release late
+unknown/malformed-timestamp buffers after the boundary drain. They also cover stale
+frames, disconnects and bounded shutdown. The isolated --camera-worker sanitizer
+run passed address, undefined-behavior and leak checks. The full media sanitizer
+reported PipeWire module allocations at process exit; a clean full dependency-leak
+check is not claimed.
+
+Long-run physical AV drift, conference receive-path compatibility and glass-to-glass
+latency remain acceptance work. Follow [hardware-acceptance.md](hardware-acceptance.md).
+Actual short-run throughput and memory are recorded in [verification.md](verification.md).
+No kernel module or system audio configuration was changed by these tests.

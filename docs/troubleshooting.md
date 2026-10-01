@@ -99,3 +99,18 @@ camera in the conferencing app after producer startup. The physical webcam LED
 can be on while live is paused because cast has opened its input; privacy pause
 controls transmitted video and the virtual audio mix. Use `cast quit` to release
 the camera, then restart the daemon after rebuilding or upgrading its executable.
+
+## Google Meet self-view looks mirrored
+
+Check text in cast's preview and ask another participant to check the received image
+before changing output orientation. `cast camera mirror` changes only the webcam
+layer; screen content remains unmirrored. Meet can mirror its own camera tile locally.
+Google [documents mirrored self-view backgrounds with correct remote orientation](https://support.google.com/meet/answer/13954947),
+which is evidence for a display-side effect, not proof of a particular call's remote
+receive path. The kernel-consumer orientation regression verifies screen direction
+independently of Meet. Compensating for local self-view by reversing transmitted text
+would reverse it for participants whose received image was already correct.
+
+For a recursion-free presentation, select the application window or a region that
+does not contain Meet's own camera tile. The preview footprint mask excludes cast's
+preview; it cannot exclude a call application's self-view automatically.

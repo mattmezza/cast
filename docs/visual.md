@@ -152,17 +152,18 @@ Inspect actual virtual-camera or recording pixels on the target desktop.
 `tests/test_visual.c` checks actual synthetic frame pixels for geometry, layouts,
 masks/borders, aspect crop/mirror, contain/cover, zoom, click transforms, key expiry,
 annotation lane switches, neutral content and consistent dual-output following.
-The visual suite passes address/undefined sanitizers in this workspace with
-`ASAN_OPTIONS=detect_leaks=0`; LeakSanitizer cannot run under its ptrace restrictions.
+The visual suite passed address/undefined sanitizers in the earlier managed
+workspace with `ASAN_OPTIONS=detect_leaks=0`; that environment prevented leak checks.
+Post-reboot preview changes also passed isolated ASan/UBSan Xvfb exercises.
 
 `tests/x11_smoke.c --exercise` is an acceptance test for a disposable Xvfb server.
 It creates application windows and injects keys/clicks only into that isolated
 display. It checks root/window pixels, resize/remap/minimize/destruction, numeric
 and interactive regions, Escape cancellation, keymap/modifier/repeat/filter behavior,
 input privacy, unrelated click rejection and preview exclusion. It compiles with
-the project's warning flags. The current managed workspace blocks X server socket
-creation and cannot connect to its advertised `DISPLAY=:0`, so this final suite has
-not run here. Do not run `--exercise` on the user's desktop.
+the project's warning flags. After reboot this complete suite passed with MIT-SHM enabled and disabled,
+including stable mapped preview, dragging, neutral footprint/geometry and application
+pixmap exclusion. Earlier sandbox socket/display restrictions no longer apply. Do not run `--exercise` on the user's desktop.
 
 To run on a system permitting a disposable X server, install Xvfb and the XTest
 development package, then run `make X11=1 WAYLAND=1 check-xorg`, or compile the

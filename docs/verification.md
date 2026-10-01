@@ -150,3 +150,52 @@ camera can reduce its cadence for exposure. Device controls were preserved.
 The output cadence can reuse camera frames; unique camera fps and output fps are
 different measurements. A physical regression also verified that queued frames
 predating a privacy boundary are rejected.
+
+## Final camera, preview and pipeline checks
+
+Real V4L2 polling/decoding now runs in a separate worker with a bounded latest-frame
+handoff. Epochs reject in-flight older work; per-buffer queue epochs reject late
+unknown/malformed timestamps even after the ready-buffer drain. Worker tests passed
+ASan/UBSan/LeakSanitizer in isolation, including bounded shutdown. Full media leak
+checking reported allocations inside PipeWire modules, so dependency-wide leak
+freedom is not claimed. The full optimized combined check and both Xvfb capture
+paths passed after the worker and preview changes.
+
+The preview stays mapped as an unmanaged floating window (WM_CLASS cast-preview /
+CastPreview), supports header dragging, and clears to neutral across privacy epochs.
+Its geometric overlap is neutral-masked in root/region frames; named application
+pixmaps exclude it without that mask. Tests verify no map/unmap notifications across
+capture or output state changes, exact opaque mask pixels including borders, moved/
+resized/clipped geometry and privacy-safe worker publication. No tiling rule is needed.
+
+The final kernel-loopback test also verified the asymmetric synthetic screen's
+left-to-right orientation before and after camera mirror on/off. The screen remains
+unmirrored in actual FFmpeg consumer pixels. The user reported selecting cast in a
+Google Meet call and observing a mirrored self-view; remote orientation, negotiated
+resolution and text readability have not been independently confirmed.
+
+Final hardware samples used eDP-1 1920x1200, physical MJPEG webcam /dev/video0, explicit
+physical microphone, an optional virtual source, 1920x1080/30 output, libx264 veryfast
+CRF 23 with AAC 48 kHz, and FFmpeg V4L2 consumption. Each CPU/drop observation lasts
+15 seconds after initial setup; decoded recording counts include brief setup/stop
+intervals, so their durations are slightly longer. No user media was retained.
+
+| Mode | Consumer fps | Decoded recording fps | CPU (% of one core) | RSS start/end (KiB) | Drops during sample | Deprecated-format warnings |
+|---|---:|---:|---:|---:|---:|---:|
+| Live only | 30.00 (450 frames) | — | 117.80 | 111,536 / 128,456 | 0 | 0 |
+| Recording only | — | 29.93 (456 frames / 15.234 s) | 188.93 | 155,796 / 188,700 | 0 | 0 |
+| Live and recording | 29.47 (442 frames) | 29.43 (448 frames / 15.220 s) | 219.20 | 167,344 / 194,748 | 7 | 0 |
+
+The samples demonstrate near-target operation after removing synchronous webcam work;
+they do not establish ten-minute endurance, physical AV drift or glass-to-glass latency.
+A remembered initial webcam-freshness warning remains in last_error as historical
+feedback. Automatic camera exposure still limits unique camera frames separately.
+
+The final optional physical camera probe returned owned RGBA 1920x1080 on all
+90 reads, with 62 unique frames, mean main-read time 1.768 ms and max 3.784 ms;
+pre-boundary backlog was rejected. No camera pixels were exported by this probe.
+Final Xorg-only and Wayland-only builds passed -Werror in an isolated source tree;
+the combined executable remains installed in the checkout. Staged install ran
+--version and matched ./cast exactly, and staged uninstall removed it. Man page,
+configuration example and license files were present; no system install or user
+configuration modification was performed.

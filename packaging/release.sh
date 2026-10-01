@@ -80,5 +80,5 @@ cp "$work/release-notes.md" "$output/release-notes.md"
 printf '%s\n' "$commit" > "$output/source-commit.txt"
 (cd "$output" && sha256sum -c SHA256SUMS)
 gh release create "$tag" "$output/$binary_name" "$output/$source_name" "$output/$dependencies_name" "$output/SHA256SUMS" \
-    --repo "https://github.com/$repo" --verify-tag --fail-on-no-commits --title "cast $version" --notes-file "$output/release-notes.md"
+    --repo "https://github.com/$repo" --verify-tag --fail-on-no-commits --title "cast $tag" --notes-file "$output/release-notes.md"
 printf 'Published %s with source, binary, dependency sources and checksums. Local artifacts: %s\n' "$tag" "$output"
