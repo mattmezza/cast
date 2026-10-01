@@ -1,0 +1,5 @@
+/build/
+/cast
+/dist/
+*.o
+*.d
