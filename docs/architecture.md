@@ -17,7 +17,7 @@ flushes queued samples and excludes its interval, preserving one open container.
 PipeWire provides audio capture and an optional virtual source; no physical playback
 sink is created. Software encoding is the baseline. Matroska is the default container.
 
-Configuration uses maintained MIT-licensed inih, vendored without local parser changes.
+Configuration uses maintained BSD-3-Clause-licensed inih, vendored without local parser changes.
 A strict schema layer validates sections, units and duplicate keys with source lines.
 Precedence is defaults, config file, startup overrides, then session commands.
 
