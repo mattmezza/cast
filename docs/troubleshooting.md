@@ -89,3 +89,13 @@ Only stale sockets safely owned by the current user are cleaned automatically.
 If an invalid edited config prevents routing, use `cast --socket /absolute/path/cast.sock
 status --json` or the same explicit socket for config reload. Daemon startup and local
 configuration checks remain strict.
+
+## No local camera view after starting cast
+
+`cast` runs as a foreground terminal daemon. Preview defaults off and live output
+starts privacy-paused. In another terminal, run `cast preview on` for the local
+window, then `cast live resume` to enable the composition. Select the loopback
+camera in the conferencing app after producer startup. The physical webcam LED
+can be on while live is paused because cast has opened its input; privacy pause
+controls transmitted video and the virtual audio mix. Use `cast quit` to release
+the camera, then restart the daemon after rebuilding or upgrading its executable.

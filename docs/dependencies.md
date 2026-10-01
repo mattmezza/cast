@@ -18,7 +18,7 @@ licenses of the dynamically linked libraries below.
 
 FFmpeg's [official licensing page](https://ffmpeg.org/legal.html) explains that
 GPL-enabled components change FFmpeg's effective license. The development
-machine's FFmpeg 9.0.1 was built with `--enable-gpl --enable-version3` and reports
+machine's FFmpeg 9.0.2 was built with `--enable-gpl --enable-version3` and reports
 GPL-3.0-or-later. The resulting binary uses those system libraries; the project
 source remains MIT, while redistribution of that linked binary must satisfy the
 applicable GPL terms. MIT and BSD-3-Clause permit that combination. For GLib/GIO,
@@ -34,9 +34,13 @@ archive contains build scripts, all project/vendor source, tests and notices.
 These archives are built for this machine's ABI, not universal static binaries.
 Distributing GPL-linked binaries to others also requires providing complete
 corresponding source for the exact dependency builds under their licenses;
-obtain it from your distribution's packaging/source repositories. The local
-package target does not fetch or bundle that dependency source, publish an
-archive or make a source offer on the user's behalf. Inspect `ffmpeg -L` and
+obtain it from your distribution's packaging/source repositories. The local package target does not fetch dependency source or publish archives.
+The GitHub release target additionally collects the exact pinned Arch FFmpeg and
+GLib source trees, patches, upstream licenses and package/build metadata into a
+dependency-source asset. The collector verifies Arch source hashes and upstream
+commit pins and rejects changed installed package versions. This asset identifies
+its scope explicitly; separately packaged codecs, PipeWire, X11 and other transitive
+dependencies are not bundled. See [release instructions](releases.md). Inspect `ffmpeg -L` and
 your distribution package metadata before making a redistributable release.
 
 Build tools are a C compiler, GNU make and pkg-config. Python is used only for

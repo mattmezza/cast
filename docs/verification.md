@@ -1,8 +1,9 @@
 # Verification record
 
 This record distinguishes executable tests, read-only platform probes and pending
-hardware acceptance. No conferencing or loopback-consumer compatibility is implied
-by successful synthetic tests. Results below were collected on 2026-10-01.
+hardware acceptance. Synthetic tests alone do not establish conferencing or hardware compatibility.
+Initial results were collected on 2026-10-01; post-reboot integration was performed
+on 2026-10-02 in the normal graphical session.
 
 ## Automated tests
 
@@ -27,10 +28,9 @@ by successful synthetic tests. Results below were collected on 2026-10-01.
 The initial unrestricted environment exposed DISPLAY=:0 and camera nodes. Read-only
 probes found an MJPEG-capable webcam and PipeWire 1.6.8; no loopback output was found.
 After the user resumed, the managed sandbox no longer exposed camera nodes or permitted
-display/PipeWire connection or Unix socket binding. Consequently test_ipc.py, Xvfb and
-the private mock D-Bus portal cannot execute here (bind returns EPERM). The Xorg smoke
-compiles warning-clean; it is not recorded as executed. Expanded D-Bus tests fail promptly
-when permission is absent. CPU Wayland buffer/revocation/capability tests do execute.
+display/PipeWire connection or Unix socket binding. That earlier sandbox blocked test_ipc.py, Xvfb and the private mock D-Bus portal
+(bind returned EPERM). After reboot, unrestricted access was restored and all three
+integrations executed successfully. These were temporary environment restrictions.
 
 Run `make check` for Xorg and `make X11=0 WAYLAND=1 check` for the Wayland-only
 build. `make sanitize` uses separate address/undefined sanitizer objects. Test-only
@@ -39,9 +39,9 @@ synthetic source/device/none-output options cannot establish integration compati
 ## Hardware acceptance
 
 The exact acceptance steps and measurement method are in
-[hardware-acceptance.md](hardware-acceptance.md). Virtual camera consumer pixels,
-real conferencing resolution/compression, real portal stream negotiation, user desktop
-key layouts/IMEs and physical AV latency remain unverified unless listed with results.
+[hardware-acceptance.md](hardware-acceptance.md). The FFmpeg V4L2 consumer and real PipeWire routing checks below now have hardware
+evidence. Conference resolution/compression, real Wayland portal streams, user desktop
+key layouts/IMEs and glass-to-glass latency remain unverified.
 
 
 ## Recorded independent results
@@ -78,9 +78,10 @@ measurement. No glass-to-glass latency, sustained device FPS, consumer drops or 
 hardware conferencing performance is asserted. The hardware acceptance checklist
 requires measuring those separately.
 
-Further commits were prevented after resumption by the managed sandbox's read-only
-.git mount. Source changes remain in the working tree; `make package` archives that
-actual working tree, so the source checkpoint matches its binary independently of HEAD.
+The earlier managed sandbox prevented commits through a read-only .git mount.
+After reboot, the saved changes were committed in 0f6c5d5 and subsequent integration
+fixes were committed separately. GitHub release artifacts build from the exact tagged
+commit; local make package continues to archive the working tree.
 
 ## Build and package checkpoint
 
@@ -95,7 +96,57 @@ Staged uninstall removed the executable and example without touching user config
 Checksums are in dist/SHA256SUMS. No test cast daemon or recording remains running.
 The code and these artifacts are safe to retain through a normal computer restart.
 
-After creating /dev/video10 and restarting, run `./cast doctor`, `make check`,
-`make check-xorg`, then the hardware-acceptance.md checks in the normal graphical
-session. Full IPC, desktop capture/input/preview, real PipeWire routing, the actual
-portal and conferencing consumers still need their recorded acceptance results.
+## Post-reboot integration
+
+The user loaded v4l2loopback with devices=1, video_nr=10, card_label=cast and
+exclusive_caps=1. Read-only doctor confirmed Xorg eDP-1 (1920x1200), MIT-SHM,
+XI2/XComposite, the MJPEG/YUYV integrated webcam, writable /dev/video10, software
+encoders and PipeWire sources. Baseline: Intel Core Ultra 5 235U, Arch Linux
+7.2.8-arch1-1, PipeWire 1.6.9 and FFmpeg 9.0.2 (package 2:9.0.2-1).
+
+- make X11=1 WAYLAND=1 check passed the complete unit, media, production commands,
+  Unix socket IPC and private mock-portal lifecycle suite.
+- make X11=1 WAYLAND=1 check-xorg passed all isolated Xvfb capture/window/selection,
+  input/layout/privacy and preview-exclusion checks, with MIT-SHM and XGetImage.
+  This found and fixed black redirected-window images: image masks can be zero;
+  conversion now uses the source window's actual visual.
+- make X11=1 WAYLAND=1 check-loopback LOOPBACK_DEVICE=/dev/video10 passed at
+  1920x1080/30 using synthetic sources through the real kernel device and FFmpeg
+  consumer. Consumer pixels verified startup neutral, distinct resumed content,
+  stable freeze, pause replacing freeze, unfreeze retaining pause and group pause.
+  The same-file recording decoded 55 frames after repeated pauses. The test waits
+  for a fresh cadence tick; it does not measure buffered conference-frame latency.
+- A separate physical Xorg/webcam/PipeWire run opened the MJPEG camera, selected
+  the named microphone and created a temporary virtual source. A pw-cat consumer
+  received 24,000 stereo float frames for each privacy check; sample peaks were
+  exactly zero during startup pause, live freeze and group pause. Both mic and
+  virtual routes reported ready. FFmpeg decoded real H.264 video and 48 kHz AAC
+  audio after independent and group pauses. Temporary user media was removed.
+
+The initial simultaneous 1080p30 run exposed poor throughput: 265 recorded frames
+in 35.158 seconds (about 7.5 fps), 1,070 reported drops, 117% of one CPU and RSS
+138–194 MiB over a 44.84-second sample. A remembered initial webcam-freshness warning
+remained in last_error. Profiling identified per-pixel Xorg channel normalization
+and decoding every queued MJPEG camera frame. Subsequent measurements below document
+the fixes; the initial run is not a successful 30 fps performance baseline.
+
+## Capture performance fixes
+
+Owned-frame measurements do not save or display desktop pixels. The Xorg test
+now offers a read-only --benchmark mode. For 40 actual eDP-1 captures at 1920x1200,
+channel conversion improved from 50.88 ms/frame (19.65 fps) to 8.86 ms/frame
+(112.87 fps). Common 32-bit visuals use direct byte conversion; other visuals
+normalize masks once per frame. Synthetic checks cover both byte orders, RGB565,
+packed 24-bit pixels, padded rows and visual masks independent of XImage masks.
+Both isolated MIT-SHM and forced XGetImage exercises pass after optimization.
+
+The webcam path now drains bounded ready buffers and decodes only the newest one.
+At 33 ms call spacing, average/max camera work changed from 15.34/51.03 ms to
+14.97/31.53 ms; at 100 ms spacing it changed from 41.95/55.99 ms to 24.27/31.91 ms.
+Unique frames improved from 16.21 to 18.46 fps in the 33 ms probe. A separate raw
+V4L2 request for MJPEG 1920x1080/30 delivered 20.02 fps. Read-only inspection found
+auto_exposure=AperturePriority and exposure_dynamic_framerate=1, so this physical
+camera can reduce its cadence for exposure. Device controls were preserved.
+The output cadence can reuse camera frames; unique camera fps and output fps are
+different measurements. A physical regression also verified that queued frames
+predating a privacy boundary are rejected.

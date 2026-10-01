@@ -72,6 +72,11 @@ terminal, explicitly enable live video and then select `cast` in the conference:
 ./cast quit
 ```
 
+The daemon runs in the terminal and opens no window by default. Use `./cast preview on`
+for a local view of the actual output. The physical camera LED can turn on during
+startup privacy pause: cast opens the input device, while transmitted video stays
+neutral until explicit live resume.
+
 With exclusive_caps=1, some consumers detect the camera only after the producer starts.
 Virtual audio is a separate optional device. cast cannot mute a physical mic selected
 directly by the call app; use the app's mute control or select cast's virtual microphone.
