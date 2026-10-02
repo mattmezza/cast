@@ -103,3 +103,8 @@ else
     sudo pacman -U -- "$work/$package" </dev/tty || fail 'pacman installation failed'
 fi
 printf 'Installed cast %s. Start cast again to use the new version.\n' "$tag"
+resolved_cast=$(command -v cast || true)
+if [ -n "$resolved_cast" ] && [ "$resolved_cast" != /usr/bin/cast ]; then
+    printf 'Your PATH currently selects %s; the release package installs /usr/bin/cast.\n' "$resolved_cast"
+    printf '%s\n' 'Remove an older manual installation from its source checkout with sudo make uninstall PREFIX=/usr/local, or use /usr/bin/cast explicitly.'
+fi

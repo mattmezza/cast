@@ -27,6 +27,9 @@ cast setup
 The installer downloads the release package, verifies its SHA-256 checksum and
 uses pacman to install it with dependencies. sudo is needed for installation.
 For an inspectable download, save the script first and read it before running it.
+If an earlier `make install` placed cast in `/usr/local/bin`, remove that manual
+installation with `sudo make uninstall PREFIX=/usr/local` from its source checkout,
+or use `/usr/bin/cast` explicitly; the older executable can take priority in PATH.
 Virtual-camera setup is a separate step explained by `cast setup`; the installer
 does not create devices or change your configuration.
 
