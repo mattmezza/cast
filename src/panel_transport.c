@@ -195,7 +195,8 @@ void panel_transport_publish(PanelTransport *t, App *a, const Frame *live, const
     if (!a->config.live_enabled || a->state.live_paused) {
         live = &a->neutral;
     }
-    if (!a->state.recording || a->state.record_paused || a->state.record_cut) {
+    if (a->state.record_paused ||
+        ((!a->state.recording || a->state.record_cut) && !a->countdown)) {
         record = &a->neutral;
     }
     atomic_fetch_add_explicit(&t->shared->sequence, 1, memory_order_acq_rel);
@@ -222,7 +223,8 @@ void panel_transport_barrier(PanelTransport *t, App *a, bool invalidate)
         /* The daemon has applied freeze, then blur before this acknowledged barrier. */
         preview_write(t->shared, 0, a->live.data ? &a->live : &a->neutral);
     }
-    if (invalidate || !a->state.recording || a->state.record_paused || a->state.record_cut) {
+    if (invalidate || a->state.record_paused ||
+        ((!a->state.recording || a->state.record_cut) && !a->countdown)) {
         preview_write(t->shared, 1, &a->neutral);
     } else {
         preview_write(t->shared, 1, a->record.data ? &a->record : &a->neutral);

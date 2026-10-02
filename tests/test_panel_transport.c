@@ -271,6 +271,18 @@ int main(void)
     CMD(&config, true, "live", "resume");
     char recording[PATH_MAX];
     snprintf(recording, sizeof recording, "%s/panel.mkv", directory);
+    CMD(&config, true, "settings", "record.countdown", "3");
+    CMD(&config, true, "record", "start", recording);
+    assert(shared->snapshot.countdown && !shared->snapshot.state.recording);
+    deadline = cast_now_ns() + UINT64_C(1000000000);
+    while (shared->pixels[1][0] == 0x20 && cast_now_ns() < deadline) {
+        delay();
+    }
+    assert(shared->snapshot.countdown && shared->pixels[1][0] != 0x20);
+    CMD(&config, true, "record", "cancel");
+    assert(!shared->snapshot.countdown && !shared->snapshot.state.recording &&
+           shared->pixels[1][0] == 0x20);
+    CMD(&config, true, "settings", "record.countdown", "0");
     CMD(&config, true, "record", "start", recording);
     wait_raw(shared, false, true);
     CMD(&config, true, "pause");
@@ -289,9 +301,24 @@ int main(void)
     CMD(&config, true, "settings", "record.countdown", "1");
     CMD(&config, true, "record", "resume");
     assert(shared->snapshot.countdown && shared->snapshot.state.record_cut);
+    assert(shared->pixels[1][0] == 0x20); /* Solid pause still overrides countdown. */
     CMD(&config, true, "record", "cut");
     assert(!shared->snapshot.countdown && shared->snapshot.state.record_cut);
     assert(!strcmp(shared->snapshot.state.record_path, recording));
+    CMD(&config, true, "record", "toggle");
+    CMD(&config, true, "record", "unfreeze");
+    CMD(&config, true, "record", "blur", "off");
+    CMD(&config, true, "settings", "record.countdown", "3");
+    CMD(&config, true, "record", "resume");
+    deadline = cast_now_ns() + UINT64_C(1000000000);
+    while (shared->pixels[1][0] == 0x20 && cast_now_ns() < deadline) {
+        delay();
+    }
+    assert(shared->snapshot.countdown && shared->snapshot.state.record_cut &&
+           shared->pixels[1][0] != 0x20);
+    CMD(&config, true, "record", "cut");
+    assert(!shared->snapshot.countdown && shared->snapshot.state.record_cut &&
+           shared->pixels[1][0] == 0x20);
     CMD(&config, true, "record", "stop");
     CMD(&config, true, "settings", "camera.radius", "37", "camera.border_width", "5");
     assert(shared->snapshot.config.radius == 37 && shared->snapshot.config.border_width == 5);

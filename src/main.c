@@ -543,7 +543,8 @@ static void tick(App *a)
             remember_error(a, e);
         }
     }
-    panel_transport_publish(a->panel, a, live, write_record ? record : &a->neutral);
+    panel_transport_publish(a->panel, a, live,
+                            (write_record || a->countdown) ? record : &a->neutral);
     if (a->config.preview || platform_capabilities(a->platform).preview) {
         const Frame *target = !strcmp(a->config.preview_target, "record")
                                   ? (write_record ? record : &a->neutral)
