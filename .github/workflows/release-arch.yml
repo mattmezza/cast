@@ -114,6 +114,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Container steps use a different HOME from checkout's temporary HOME.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           [[ $(git rev-parse HEAD) == "$SOURCE_COMMIT" ]]
           if [[ "$PUBLISH" == false ]]; then
             if git show-ref --verify --quiet "refs/tags/$BUILD_TAG"; then
