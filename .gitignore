@@ -4,3 +4,4 @@
 /.impeccable/review/
 *.o
 *.d
+__pycache__/

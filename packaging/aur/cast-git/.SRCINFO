@@ -26,6 +26,7 @@ pkgbase = cast-git
 	depends = libxcomposite
 	depends = sdl3
 	depends = sdl3_ttf
+	depends = curl
 	optdepends = v4l2loopback-dkms: virtual camera kernel device
 	optdepends = linux-headers: DKMS headers for the linux kernel; use headers matching your kernel
 	optdepends = xdg-desktop-portal: Wayland screen capture consent

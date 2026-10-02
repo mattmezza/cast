@@ -7,9 +7,9 @@ arch=('x86_64' 'aarch64')
 url='https://github.com/mattmezza/cast'
 license=('MIT' 'BSD-3-Clause' 'OFL-1.1' 'Zlib' 'GPL-3.0-only')
 depends=('glibc' 'ffmpeg' 'pipewire' 'glib2' 'libx11' 'libxext' 'libxrandr'
-         'libxi' 'libxfixes' 'libxcomposite' 'sdl3' 'sdl3_ttf')
+         'libxi' 'libxfixes' 'libxcomposite' 'sdl3' 'sdl3_ttf' 'curl')
 makedepends=('pkgconf')
-checkdepends=('python' 'dbus' 'xorg-server-xvfb' 'xorg-xauth' 'libxtst' 'xdotool' 'xclip')
+checkdepends=('python' 'dbus' 'xorg-server-xvfb' 'xorg-xauth' 'libxtst' 'xdotool' 'xclip' 'zsh' 'fish')
 optdepends=('v4l2loopback-dkms: virtual camera kernel device'
             'linux-headers: DKMS headers for the linux kernel; use headers matching your kernel'
             'xdg-desktop-portal: Wayland screen capture consent'
