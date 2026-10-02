@@ -1,6 +1,10 @@
 /build/
 /cast
 /dist/
+# Default recording filenames are local media, never project source.
+/cast-*.mkv
+/cast-*.mp4
+/cast-*.webm
 /.impeccable/review/
 *.o
 *.d
