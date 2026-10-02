@@ -229,3 +229,32 @@ drafts across navigation, UTF-8 paste, numeric rejection and reconnect. Final li
 synthetic renders at 480×760 and 360×640 were reviewed at both scales. Exclusion
 warnings remain visible on Home and settings screens. This is isolated native UI
 validation, not a claim about every physical display or compositor.
+
+## v0.3 panel, preview and countdown validation
+
+The full combined Xorg/Wayland/panel suite passes with `-Werror`; an isolated
+Wayland-only/panel build passes the full suite too. Native panel interactions pass
+at 1x and 2x, including square icon controls, Back, persistent movable preview,
+countdown on every section, cancellation, privacy controls, drafts and reconnect.
+A private Xvfb instance of the installed mwm verifies the panel's pre-map utility
+type, truthful class, floating state and centered position. No user WM files or
+live desktop were changed. Final synthetic UI captures update the README image.
+
+Xorg checks pass with MIT-SHM and the XGetImage fallback. They exercise managed
+preview/frame exclusion, latest-frame updates, old in-flight epoch rejection,
+rapid `j` presses producing `j`, `jx2`, `jx3`, countdown Escape/WM-close cancellation,
+and retained masking while a reparenting WM frame retires. A real daemon on private
+Xvfb additionally verifies command cancellation acknowledgements, recording start,
+finalization and decoded first-frame pixels without countdown graphics. Visual
+compositor tests cover bounded recent history, independent expiry, repeat refresh,
+eight-row eviction, geometry and privacy clearing; isolated ASan/UBSan passes.
+
+The retained `test_xorg --preview-benchmark` submits 90 synthetic 1920x1080 frames
+at 60 Hz on an 800x600x24 Xvfb display. The equivalent 640x320 preview comparison
+improved from 20/90 visible updates and 45.16 ms mean displayed frame age to 89/90
+and 16.67 ms. Final 640x360 runs show 89/90 updates and 16.67 ms age with both capture
+paths; mean capture-thread preview calls take 2.000 ms with SHM and 1.878 ms with
+fallback. The old limited path averaged 0.54 ms per call because it skipped most
+frame copies. This measures isolated preview publication, not hardware or conference
+latency. Keyboard software autorepeat that does not enter XI2's global raw stream
+is not synthesized; actual observed presses and flagged repeats are counted.
