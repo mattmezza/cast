@@ -582,7 +582,7 @@ static void output_controls(Panel *p, bool compact)
 static void preview_area(Panel *p, bool compact)
 {
     CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
-                     .childGap = 16,
+                     .childGap = compact ? 8 : 16,
                      .layoutDirection = compact ? CLAY_TOP_TO_BOTTOM : CLAY_LEFT_TO_RIGHT}})
     {
         CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
@@ -603,7 +603,7 @@ static void preview_area(Panel *p, bool compact)
             CLAY(
                 {.id = CLAY_ID("OutputPreview"),
                  .layout = {.sizing = {.width = CLAY_SIZING_GROW(),
-                                       .height = CLAY_SIZING_FIXED(compact ? 120 : 164)},
+                                       .height = CLAY_SIZING_FIXED(compact ? 88 : 164)},
                             .childAlignment = {.x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER}},
                  .backgroundColor = (Clay_Color){9, 13, 18, 255},
                  .cornerRadius = CLAY_CORNER_RADIUS(6),
@@ -851,10 +851,9 @@ static void settings_area(Panel *p)
 static void footer(Panel *p)
 {
     const char *error = p->error[0] ? p->error : p->snapshot.error;
-    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_FIXED(54)},
+    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_FIT()},
                      .layoutDirection = CLAY_TOP_TO_BOTTOM,
-                     .childGap = 4},
-          .clip = {.vertical = true}})
+                     .childGap = 4}})
     {
         if (!p->snapshot.connected) {
             text_wrapped(error[0]
@@ -866,14 +865,14 @@ static void footer(Panel *p)
         } else if (p->snapshot.command_queued > p->snapshot.command_completed) {
             label("Applying…", 0, accent);
         } else if (p->reply[0]) {
-            label(strchr(p->reply, '\n') ? "Command result appears in the settings area."
-                                         : p->reply,
-                  0, secondary);
+            text_wrapped(strchr(p->reply, '\n') ? "Command result appears in the settings area."
+                                                : p->reply,
+                         secondary);
         } else {
-            label(format(p, "%s · %d × %d · %d fps", p->snapshot.config.backend,
-                         p->snapshot.config.width, p->snapshot.config.height,
-                         p->snapshot.config.fps),
-                  0, secondary);
+            text_wrapped(format(p, "%s · %d × %d · %d fps", p->snapshot.config.backend,
+                                p->snapshot.config.width, p->snapshot.config.height,
+                                p->snapshot.config.fps),
+                         secondary);
         }
         if (p->snapshot.connected && p->snapshot.exclusion[0]) {
             text_wrapped(p->snapshot.exclusion, secondary);
@@ -932,7 +931,7 @@ static Clay_RenderCommandArray layout(Panel *p)
     CLAY({.id = CLAY_ID("Panel"),
           .layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_GROW()},
                      .padding = {24, 24, 16, 12},
-                     .childGap = 12,
+                     .childGap = p->width < 680 ? 8 : 12,
                      .layoutDirection = CLAY_TOP_TO_BOTTOM},
           .backgroundColor = background})
     {
@@ -1339,12 +1338,66 @@ static void apply_setting(Panel *p, int index, const char *value, bool draft)
     }
     p->error[0] = 0;
     int result;
-    if (!strcmp(fields[index].key, "output.pause_text")) {
-        const char *args[] = {"live", "message", value};
-        result = panel_client_command(p->client, 3, args, p->error, sizeof p->error);
+    const char *key = fields[index].key;
+    const char *args[4] = {0};
+    char parameter[128], other[32];
+    int argc = 0;
+    if (!strcmp(key, "output.pause_text")) {
+        args[0] = "live";
+        args[1] = "message";
+        args[2] = value;
+        argc = 3;
+    } else if (!strcmp(key, "camera.width_percent")) {
+        snprintf(parameter, sizeof parameter, "%.17g%%", strtod(value, NULL));
+        args[0] = "camera";
+        args[1] = "size";
+        args[2] = parameter;
+        argc = 3;
+    } else if (!strcmp(key, "camera.x") || !strcmp(key, "camera.y") ||
+               (!strcmp(key, "camera.anchor") && !strcmp(value, "free"))) {
+        bool x = !strcmp(key, "camera.x"), y = !strcmp(key, "camera.y");
+        snprintf(parameter, sizeof parameter, "%d", p->snapshot.config.camera_x);
+        snprintf(other, sizeof other, "%d", p->snapshot.config.camera_y);
+        args[0] = "camera";
+        args[1] = "position";
+        args[2] = x ? value : parameter;
+        args[3] = y ? value : other;
+        argc = 4;
+    } else if (!strcmp(key, "camera.anchor") || !strcmp(key, "camera.shape") ||
+               !strcmp(key, "camera.aspect")) {
+        args[0] = "camera";
+        args[1] = key + strlen("camera.");
+        args[2] = value;
+        argc = 3;
+    } else if (!strcmp(key, "camera.mirror")) {
+        args[0] = "camera";
+        args[1] = "mirror";
+        args[2] = !strcmp(value, "true") ? "on" : "off";
+        argc = 3;
+    } else if (!strcmp(key, "camera.visible")) {
+        args[0] = "camera";
+        args[1] = !strcmp(value, "true") ? "show" : "hide";
+        argc = 2;
+    } else if (!strcmp(key, "camera.device")) {
+        args[0] = "camera";
+        args[1] = "device";
+        args[2] = value;
+        argc = 3;
+    } else if (!strcmp(key, "zoom.factor")) {
+        args[0] = "zoom";
+        args[1] = "set";
+        args[2] = value;
+        argc = 3;
+    } else if (!strcmp(key, "zoom.follow")) {
+        args[0] = "zoom";
+        args[1] = "follow";
+        args[2] = !strcmp(value, "true") ? "on" : "off";
+        argc = 3;
+    }
+    if (argc) {
+        result = panel_client_command(p->client, argc, args, p->error, sizeof p->error);
     } else {
-        result =
-            panel_client_setting(p->client, fields[index].key, value, p->error, sizeof p->error);
+        result = panel_client_setting(p->client, key, value, p->error, sizeof p->error);
     }
     if (result) {
         return;

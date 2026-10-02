@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the native panel on a private Xvfb with synthetic media only.
 
-Requires an optional PANEL=1 build, Xvfb, and xdotool. No desktop or hardware device
+Requires an optional PANEL=1 build, Xvfb, xdotool, and xclip. No desktop or hardware device
 is captured. UI actions are checked through the daemon's ordinary CLI status.
 """
 import json
@@ -116,8 +116,14 @@ def exercise():
             xdo("key", "--clearmodifiers", "Return")
             wait_until(lambda: state()["live"]["message"] == "Private session",
                        "Pause-message text edit did not apply")
+            # The CLI state can lead the next UI frame; let its Apply acknowledgment settle.
+            time.sleep(0.2)
             xdo("key", "--clearmodifiers", "Tab", "Tab", "shift+Tab", "shift+Tab")
-            xdo("type", "--clearmodifiers", "--delay", "12", "Private café")
+            # XTest's transient Unicode keymap is unreliable; exercise native UTF-8 paste.
+            subprocess.run(["xclip", "-selection", "clipboard", "-loops", "2"], env=env,
+                           input="Private café", text=True, stdout=subprocess.DEVNULL,
+                           stderr=log, check=True, timeout=3)
+            xdo("key", "--clearmodifiers", "ctrl+v")
             xdo("key", "--clearmodifiers", "Return")
             wait_until(lambda: state()["live"]["message"] == "Private café",
                        "Tab/Shift+Tab focus or UTF-8 text editing failed")
@@ -144,7 +150,7 @@ def exercise():
             # Compact layout keeps pause/record controls available and the same window identity.
             xdo("windowsize", window, "540", "620")
             time.sleep(0.2)
-            click(70, 253)
+            click(70, 220)
             wait_until(lambda: state()["live"]["state"] == "paused", "Compact pause control failed")
 
             # A lost daemon does not close the window; it reconnects to a new generation.
@@ -155,7 +161,7 @@ def exercise():
             daemon = start_daemon()
             wait_until(lambda: (root / "daemon.sock").exists(), "daemon restart did not open socket")
             time.sleep(0.9)
-            click(70, 253)
+            click(70, 220)
             wait_until(lambda: state()["live"]["state"] == "live", "Panel did not reconnect")
             xdo("key", "--clearmodifiers", "ctrl+q")
             assert panel.wait(timeout=8) == 0, "panel window did not close cleanly"
@@ -177,7 +183,7 @@ def exercise():
 
 
 if __name__ == "__main__":
-    for dependency in ("xvfb-run", "xdotool"):
+    for dependency in ("xvfb-run", "xdotool", "xclip"):
         if not shutil.which(dependency):
             raise SystemExit(f"native panel check requires {dependency}")
     if "--inside" not in sys.argv:
