@@ -120,8 +120,8 @@ def exercise():
                                 if "=" in line)
                 # mwm centers floating clients at first management. Its bottom bar
                 # shifts the available work area slightly up from the screen midpoint.
-                assert abs(int(geometry["X"]) + int(geometry["WIDTH"])/2 - 1024) < 8
-                assert abs(int(geometry["Y"]) + int(geometry["HEIGHT"])/2 - 1024) < 64
+                assert abs(int(geometry["X"]) + int(geometry["WIDTH"])/2 - 1024) < 8, geometry
+                assert abs(int(geometry["Y"]) + int(geometry["HEIGHT"])/2 - 1024) < 64, geometry
             xdo("windowfocus", "--sync", window)
             if not wm:
                 # SDL resizes its initially centered hidden window for display
@@ -166,7 +166,8 @@ def exercise():
                     x, y, w, h = item["box"]
                     area = ui()["scroll"]
                     inside_scroll = (item["id"] >= 1000 or 40 <= item["id"] < 90 or
-                                     100 <= item["id"] < 105 or 200 <= item["id"] < 300)
+                                     100 <= item["id"] < 106 or 200 <= item["id"] < 300 or
+                                     (ui()["tab"] == 5 and item["id"] in (31, 33, 36, 37, 38, 39)))
                     if not inside_scroll or (y >= area[1] and y+h <= area[1]+area[3]):
                         click(x+w/2, y+h/2)
                         return
@@ -194,7 +195,7 @@ def exercise():
                 if ui()["tab"] < 0:
                     return
                 px, py, pw, ph = ui()["preview_panel"]
-                for identifier in (99, 30, 31, 32, 33, 34):
+                for identifier in (99, 30, 32, 34, 35):
                     item = widget(identifier)
                     if item:
                         bx, by, bw, bh = item["box"]
@@ -218,19 +219,48 @@ def exercise():
             click_widget(30)
             wait_until(lambda: state()["live"]["state"] == "live", "Resume live did not apply")
             capture("home")
+            navigate(5)
+            capture("outputs")
             click_widget(31)
             wait_until(lambda: state()["live"]["state"] == "frozen", "Freeze did not apply")
+            click_widget(36)
+            wait_until(lambda: state()["live"]["state"] == "blurred", "Live blur did not apply")
+            assert state()["live"]["frozen"] and state()["live"]["blurred"]
+            capture("outputs-live-blurred")
+            click_widget(30)
+            wait_until(lambda: state()["live"]["state"] == "paused", "Solid pause did not override blur")
+            assert state()["live"]["frozen"] and state()["live"]["blurred"]
+            click_widget(21)
+            wait_until(lambda: ui()["record_preview"], "Manual recording preview failed")
+            click_widget(30)
+            wait_until(lambda: state()["live"]["state"] == "blurred" and not ui()["record_preview"],
+                       "Resume live did not restore blur and select the live preview")
+            click_widget(36)
+            wait_until(lambda: state()["live"]["state"] == "frozen", "Freeze underneath blur was lost")
             click_widget(31)
             wait_until(lambda: state()["live"]["state"] == "live", "Unfreeze did not apply")
 
             # Every screen keeps the actual preview and output controls accessible.
-            for tab in range(5):
+            for tab in range(6):
                 navigate(tab)
                 assert_preview()
                 assert widget(30) and widget(32)
                 assert_output_accessible()
             navigate(1)
             capture("camera")
+            for choice, anchor in ((1, "top"), (6, "bottom"), (3, "left"), (4, "right")):
+                click_widget("camera.anchor")
+                click_widget(400+choice)
+                wait_until(lambda: ui()["camera_anchor"] == anchor, "Camera middle-edge anchor did not apply")
+            click_widget(210)
+            click_widget("camera.background")
+            click_widget(401)
+            wait_until(lambda: ui()["camera_background"] == "gradient", "Camera backdrop did not apply")
+            capture("camera-appearance")
+            click_widget("camera.background")
+            click_widget(400)
+            wait_until(lambda: ui()["camera_background"] == "blurred", "Blurred camera backdrop did not apply")
+            click_widget(210)
             old = ui()["preview_panel"]
             x, y, w, h = old
             xdo("mousemove", "--window", window, int(x+w/2), int(y+h-15), "mousedown", 1,
@@ -263,13 +293,43 @@ def exercise():
             click_widget(50)
             wait_until(lambda: state()["layout"] == "overlay", "CLI/UI layout synchronization failed")
 
-            # Start/pause/resume/stop preserve independent live state and the same file.
+            # Independent freeze/blur, solid pause, and omitted-time cut retain the same file.
+            cli("settings", "record.countdown", "2")
             click_widget(32)
             wait_until(lambda: state()["record"]["state"] == "recording", "Record did not start")
+            wait_until(lambda: ui()["record_preview"], "Start record did not select recording preview")
+            record_path = state()["record"]["path"]
+            navigate(5)
+            click_widget(37)
+            wait_until(lambda: state()["record"]["state"] == "frozen", "Record freeze did not apply")
+            click_widget(38)
+            wait_until(lambda: state()["record"]["state"] == "blurred", "Record blur did not apply")
+            assert state()["record"]["frozen"] and state()["record"]["blurred"]
+            assert not state()["live"]["blurred"] and not state()["live"]["frozen"]
             click_widget(33)
-            wait_until(lambda: state()["record"]["state"] == "paused", "Pause record did not apply")
+            wait_until(lambda: state()["record"]["state"] == "paused", "Pause record did not override blur")
+            capture("outputs-record-paused")
             click_widget(33)
-            wait_until(lambda: state()["record"]["state"] == "recording", "Resume record did not apply")
+            wait_until(lambda: state()["record"]["state"] == "blurred", "Resume record did not restore blur")
+            click_widget(38)
+            wait_until(lambda: state()["record"]["state"] == "frozen", "Record freeze underneath blur was lost")
+            click_widget(37)
+            wait_until(lambda: state()["record"]["state"] == "recording", "Record unfreeze did not apply")
+            click_widget(39)
+            wait_until(lambda: state()["record"]["state"] == "cut", "Record cut did not apply")
+            click_widget(20)
+            click_widget(33)
+            wait_until(lambda: ui()["countdown"] and ui()["record_preview"],
+                       "Cut resume did not show countdown and recording preview")
+            capture("outputs-cut-resume")
+            click_widget(35)
+            wait_until(lambda: not ui()["countdown"] and state()["record"]["state"] == "cut",
+                       "Cancel resume did not keep the recording cut")
+            assert state()["record"]["path"] == record_path
+            click_widget(33)
+            wait_until(lambda: state()["record"]["state"] == "recording" and not ui()["countdown"],
+                       "Cut resume did not continue recording after its countdown")
+            assert state()["record"]["path"] == record_path
             click_widget(34)
             wait_until(lambda: state()["live"]["state"] == "paused" and
                        state()["record"]["state"] == "paused", "Pause all did not apply")
@@ -285,11 +345,12 @@ def exercise():
             click_widget(32)
             wait_until(lambda: ui()["countdown"] and ui()["countdown_seconds"] > 0,
                        "Native recording countdown did not appear")
-            for tab in range(5):
+            for tab in range(6):
                 navigate(tab)
                 assert ui()["countdown"] and widget(32) and widget(34)
                 assert_preview()
                 assert_output_accessible()
+            navigate(4)
             capture("countdown-settings")
             navigate(1)
             capture("countdown-camera")
@@ -318,7 +379,9 @@ def exercise():
 
             # Drafts survive navigation and only Apply/Enter submits them.
             navigate(4)
+            click_widget(236)
             click_widget("output.pause_text")
+            capture("pause-style")
             xdo("key", "--clearmodifiers", "ctrl+a")
             xdo("type", "--clearmodifiers", "--delay", "12", "Private session")
             assert state()["live"]["message"] != "Private session", "Editing applied a draft"
@@ -365,6 +428,24 @@ def exercise():
             clipboard.terminate()
             clipboard.wait(timeout=3)
             clipboard = None
+            click_widget("output.pause_text")
+            xdo("key", "--clearmodifiers", "ctrl+a", "BackSpace", "Return")
+            wait_until(lambda: state()["live"]["message"] == "", "Optional pause title could not be blank")
+            click_widget("output.pause_text")
+            xdo("type", "--clearmodifiers", "Returns {date:%Y-%m-%d} at {time}")
+            xdo("key", "--clearmodifiers", "Return")
+            wait_until(lambda: state()["live"]["message"] == "Returns {date:%Y-%m-%d} at {time}",
+                       "Pause date/time template did not reach the daemon")
+            click_widget(236)
+            click_widget(237)
+            click_widget("output.blur_title")
+            capture("blur-style")
+            xdo("key", "--clearmodifiers", "ctrl+a")
+            xdo("type", "--clearmodifiers", "Private {datetime}")
+            submitted = ui()["command_queued"] + 1
+            xdo("key", "--clearmodifiers", "Return")
+            await_panel_ack(submitted)
+            assert not ui()["error"], "Blur title template was rejected"
             xdo("key", "--clearmodifiers", "Escape")
             wait_until(lambda: ui()["tab"] == -1, "Escape did not return home")
 
@@ -387,6 +468,10 @@ def exercise():
             # Minimum width keeps state, preview, controls, and section back navigation.
             xdo("windowsize", window, "360", "640")
             time.sleep(.2)
+            navigate(5)
+            assert_preview()
+            assert_output_accessible()
+            capture("narrow-outputs")
             navigate(1)
             assert_preview()
             capture("narrow-camera")
@@ -460,7 +545,7 @@ if __name__ == "__main__":
             raise SystemExit(f"native panel check requires {dependency}")
     if "--inside" not in sys.argv:
         result = subprocess.run(["xvfb-run", "-a", "-s", "-screen 0 2048x2048x24",
-                                 sys.executable, __file__, "--inside"], timeout=120)
+                                 sys.executable, __file__, "--inside"], timeout=180)
         raise SystemExit(result.returncode)
     exercise()
-    print("native panel: utility identity, navigation, draggable preview, countdown/cancel/privacy, live/record, drafts, UTF-8, keyboard, 360px resize, reconnect passed")
+    print("native panel: utility identity, edge anchors, navigation, draggable preview, independent freeze/blur, solid pause/cut/resume, countdown/cancel/privacy, live/record, drafts, UTF-8, keyboard, 360px resize, reconnect passed")

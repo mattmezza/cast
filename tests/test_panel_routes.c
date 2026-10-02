@@ -114,7 +114,7 @@ int main(void)
     app->media = media_open(&app->config, error, sizeof error);
     assert(app->compositor && app->platform && app->media);
     assert(!frame_alloc(&app->neutral, app->config.width, app->config.height));
-    compositor_neutral(&app->config, &app->neutral);
+    assert(!compositor_neutral(app->compositor, &app->config, &app->neutral, error, sizeof error));
     panel->client = (PanelClient *)app;
     State initial_state = app->state;
 
@@ -141,12 +141,42 @@ int main(void)
     edit_field(panel, app, "camera.shape", "circle");
     edit_field(panel, app, "camera.aspect", "1:1");
     edit_field(panel, app, "camera.mirror", "false");
+    edit_field(panel, app, "camera.background", "gradient");
+    edit_field(panel, app, "camera.background_color", "#243040");
+    edit_field(panel, app, "camera.background_blur_radius", "80");
+    edit_field(panel, app, "camera.background_brightness", "0.3");
+    assert(!strcmp(app->config.camera_background, "gradient"));
+    assert(app->config.camera_background_color == 0x243040);
+    assert(app->config.camera_background_blur_radius == 80);
+    assert(app->config.camera_background_brightness == .3);
     assert(!strcmp(app->config.shape, "circle") && !strcmp(app->config.aspect, "1:1"));
     assert(!app->config.mirror);
     edit_field(panel, app, "camera.anchor", "top-left");
     assert(!strcmp(app->config.anchor, "top-left"));
     edit_field(panel, app, "camera.anchor", "free");
     assert(!strcmp(app->config.anchor, "free"));
+    const char *edges[] = {"top", "bottom", "left", "right"};
+    for (size_t i = 0; i < sizeof edges / sizeof edges[0]; i++) {
+        edit_field(panel, app, "camera.anchor", edges[i]);
+        camera_geometry(app, &x, &y, &width, &height);
+        if (i < 2) {
+            assert(abs(2 * x + width - app->config.width) <= 1);
+        } else {
+            assert(abs(2 * y + height - app->config.height) <= 1);
+        }
+        assert(!strcmp(app->config.anchor, edges[i]));
+    }
+
+    edit_field(panel, app, "output.pause_text", "Session {date:%Y-%m-%d}");
+    edit_field(panel, app, "output.pause_subtitle", "Returns at {time}");
+    edit_field(panel, app, "output.blur_title", "Private {datetime}");
+    edit_field(panel, app, "output.blur_subtitle", "");
+    edit_field(panel, app, "output.blur_radius", "24");
+    edit_field(panel, app, "output.blur_opacity", "0.75");
+    assert(!strcmp(app->config.pause_text, "Session {date:%Y-%m-%d}"));
+    assert(!strcmp(app->config.pause_subtitle, "Returns at {time}"));
+    assert(!app->config.blur_subtitle[0] && app->config.blur_radius == 24);
+    assert(app->config.blur_opacity == .75);
 
     edit_field(panel, app, "zoom.factor", "3.25");
     assert(app->config.zoom_factor == 3.25 && app->zoom_last == 3.25);
@@ -158,6 +188,56 @@ int main(void)
     edit_field(panel, app, "camera.radius", "40");
     assert(app->config.radius == 40);
     assert(!memcmp(&initial_state, &app->state, sizeof initial_state));
+
+    /* Preview follows only successful acknowledgements; a failed command or a
+     * replaced daemon leaves the user's selected preview unchanged. */
+    PanelSnapshot ack = {.connected = true, .daemon_generation = 7, .command_completed = 3};
+    panel->preview_pending = 3;
+    panel->preview_pending_generation = 7;
+    panel->preview_pending_record = true;
+    ack.command_failed = true;
+    acknowledge_preview(panel, &ack);
+    assert(!panel->record_preview && !panel->preview_pending);
+    panel->preview_pending = 3;
+    ack.command_failed = false;
+    acknowledge_preview(panel, &ack);
+    assert(panel->record_preview && !panel->preview_pending);
+    panel->preview_pending = 4;
+    panel->preview_pending_record = false;
+    ack.daemon_generation = 8;
+    ack.command_completed = 4;
+    acknowledge_preview(panel, &ack);
+    assert(panel->record_preview && !panel->preview_pending);
+    panel->preview_pending = 4;
+    panel->preview_pending_generation = 8;
+    acknowledge_preview(panel, &ack);
+    assert(!panel->record_preview && !panel->preview_pending);
+
+    panel->preview_pending = 5;
+    panel->preview_pending_record = false;
+    Widget manual_preview = {.enabled = true, .action = A_PREVIEW, .index = 1};
+    activate(panel, &manual_preview);
+    assert(panel->record_preview && !panel->preview_pending);
+    ack.command_completed = 5;
+    acknowledge_preview(panel, &ack);
+    assert(panel->record_preview);
+
+    panel->snapshot.connected = true;
+    panel->snapshot.config.live_enabled = true;
+    panel->snapshot.state.live_paused = false;
+    panel->snapshot.state.live_frozen = panel->snapshot.state.live_blurred = true;
+    assert(!strcmp(live_status(&panel->snapshot), "Live blurred"));
+    panel->snapshot.state.live_paused = true;
+    assert(!strcmp(live_status(&panel->snapshot), "Live paused"));
+    panel->snapshot.state.recording = true;
+    panel->snapshot.state.record_frozen = panel->snapshot.state.record_blurred = true;
+    assert(!strcmp(record_status(&panel->snapshot), "Recording blurred"));
+    panel->snapshot.state.record_paused = true;
+    assert(!strcmp(record_status(&panel->snapshot), "Recording paused"));
+    panel->snapshot.state.record_cut = true;
+    assert(!strcmp(record_status(&panel->snapshot), "Recording cut"));
+    panel->snapshot.countdown = true;
+    assert(!strcmp(record_status(&panel->snapshot), "Resume countdown"));
 
     /* Native controls cancel the controller's actual countdown without starting
      * a recording; the independent live pause command does not cancel it. */
@@ -185,7 +265,7 @@ int main(void)
     frame_free(&app->neutral);
     free(panel);
     free(app);
-    puts("panel edits: centered resize, free position, camera commands, remembered zoom, advanced "
-         "settings, countdown cancellation and privacy pause passed");
+    puts("panel edits: camera anchors/backdrops, preview acknowledgements, output mode labels, "
+         "presentation settings, countdown cancellation and privacy pause passed");
     return 0;
 }

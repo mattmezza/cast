@@ -75,7 +75,7 @@ components:
 
 **Creative North Star: "A compact remote control"**
 
-The panel is an Operate surface used beside a presentation or call. Home provides actual output, current state, the next relevant output actions, and five section links. Opening a section replaces the navigation list with that section's controls. This direction replaces the former dashboard of simultaneous tabs, presets, layouts, and settings.
+The panel is an Operate surface used beside a presentation or call. Home provides actual output, current state, the next relevant output actions, and six section links. Opening a section replaces the navigation list with that section's controls. This direction replaces the former dashboard of simultaneous tabs, presets, layouts, and settings.
 
 The visual character is crisp and quiet: neutral near-black backgrounds, clear white labels, flat controls and one font family. The preview carries the visual interest. Colour signals state, selection and focus.
 
@@ -91,11 +91,11 @@ Bundled Inter uses fixed logical sizes for titles, section headings, controls an
 
 The default window is 480 × 760 logical pixels; the minimum is 360 × 640. Content stays within a 520-pixel-wide centered column in larger windows. State, preview, relevant output actions and the capture-exclusion notice remain outside the scrolling section content.
 
-Home uses a large preview followed by output controls and Source, Camera, Audio, Effects and Settings navigation rows. At short window heights, navigation scrolls rather than shrinking type or hiding controls. Source owns composition layouts and presets.
+Home uses a large preview followed by output controls and Outputs, Source, Camera, Audio, Effects and Settings navigation rows. At short window heights, navigation scrolls rather than shrinking type or hiding controls. Outputs owns independent Live and Recording freeze, blur, solid pause, and omitted-time cut controls. Source owns composition layouts and presets.
 
 Section screens have Back and the section title, the persistent output state, a compact preview, output actions and a scrolling form. The compact preview starts in the upper right and can be dragged horizontally there or over settings content. Its movement is constrained so it cannot obscure the heading, Back, output actions or footer notice. Position and Live/Recording target survive section navigation. Home always restores the large preview.
 
-Text and numeric field labels sit above full-width inputs. Boolean and enum controls share a row with their labels. Advanced controls use explicit Show/Hide disclosure buttons. Camera device selection is in its own disclosure. Dirty fields reveal Apply; Enter also submits. Drafts survive navigation.
+Text and numeric field labels sit above full-width inputs. Boolean and enum controls share a row with their labels. Advanced controls use explicit Show/Hide disclosure buttons. Camera device selection is in its own disclosure; Appearance also controls the fitted camera's blurred, gradient or solid backdrop, its color, blur strength and brightness. Settings has separate Pause screen and Blur screen disclosures for optional titles/subtitles, template text, colors, sizes, blur radius and tint opacity. Fonts remain configurable through the config file. Dirty fields reveal Apply; Enter also submits. Drafts survive navigation.
 
 ## Elevation & Depth
 
@@ -109,7 +109,7 @@ Controls and fields have square corners. The Back action is a drawn left arrow a
 
 ### Buttons
 
-Action labels name the operation. Start record is distinct from the Recording preview target. Freeze appears when live output can freeze; recording pause and stop appear during recording. Hover and keyboard focus remain visible. Unavailable actions use muted text, while selections pair colour with text.
+Action labels name the operation. Start record is distinct from the Recording preview target. Live privacy and record Start/Stop/Cancel remain outside the scrolling form. Outputs holds independent freeze/blur controls and recording Pause/Cut/Resume. Pause writes a solid screen and silence; Cut removes media time and Resume continues the same file after the countdown. A resume countdown offers Cancel resume without finalizing the file. Hover and keyboard focus remain visible. Unavailable actions use muted text, while selections pair colour with text.
 
 ### Inputs / Fields
 
@@ -117,7 +117,7 @@ Each field has a persistent label, a visible focus outline, text selection and c
 
 ### Navigation
 
-Home lists five sections. Back returns Home, and Escape returns Home when it is not dismissing a dropdown or cancelling text editing. The scrolling section contains only relevant settings and advanced disclosures. Navigation does not alter outputs or preview target.
+Home lists six sections, with Outputs first. Back returns Home, and Escape returns Home when it is not dismissing a dropdown or cancelling text editing. The scrolling section contains only relevant settings and advanced disclosures. Navigation does not alter outputs or preview target. Successful acknowledged record actions select the Recording preview; Resume live selects Live. Failed actions and replaced daemon generations preserve the selected preview. Manual preview selection takes precedence over a pending automatic change.
 
 ### Cards / Containers
 
@@ -125,7 +125,7 @@ There are no decorative cards. The section is a scrolling form on the window can
 
 ### Output preview and status
 
-Both preview sizes show actual daemon frames, with explicit disconnected and waiting states. Live and recording state are independent. Active recording includes elapsed time. A pending recording shows an understated film leader within the native preview: two fine circles, guide lines, a rotating hand and the whole seconds remaining. The actual frame stays visible behind the dimmed guide. The guide follows daemon countdown state on every section and never enters the captured or recorded frames. Cancel and Pause all remain outside it. Live actions occupy their own row; record actions and the combined privacy action remain accessible even at minimum width. The daemon's capture-exclusion statement remains visible on every screen; unavailable or neutral-masked exclusion is never implied to reconstruct covered content.
+Both preview sizes show actual daemon frames, with explicit disconnected and waiting states. Live and recording state are independent. Active recording includes elapsed time. Visible mode labels follow precedence: paused overrides blur, which overrides freeze; record cut overrides all three while its media clock is stopped. Freeze/blur settings remain remembered underneath pause or cut. A pending recording shows an understated film leader within the native preview: two fine circles, guide lines, a rotating hand and the whole seconds remaining. The actual frame stays visible behind the dimmed guide. The guide follows daemon countdown state on every section and never enters the captured or recorded frames. Start/Cancel, Stop record, Cancel resume and Pause all remain outside it. Persistent Live and record actions occupy separate rows; extra output controls stay in the focused Outputs section, keeping Home compact at minimum width. The daemon's capture-exclusion statement remains visible on every screen; unavailable or neutral-masked exclusion is never implied to reconstruct covered content.
 
 ## Do's and Don'ts
 

@@ -28,8 +28,11 @@ enum {
     TAB_CAMERA,
     TAB_AUDIO,
     TAB_EFFECTS,
-    TAB_SETTINGS
+    TAB_SETTINGS,
+    TAB_OUTPUT,
+    TAB_COUNT
 };
+#define GROUP_COUNT 6
 typedef enum {
     FIELD_BOOL,
     FIELD_INT,
@@ -89,8 +92,8 @@ static const FieldSpec fields[] = {
     FT("camera.device", "Camera device", camera_device, TAB_CAMERA, 3, 0),
     FN("camera.width_percent", "Camera width (%)", camera_width_percent, 1, 100, TAB_CAMERA, 0, 0),
     FE("camera.shape", "Shape", shape, "rectangle,rounded,circle", TAB_CAMERA, 0, 0),
-    FE("camera.anchor", "Anchor", anchor, "top-left,top-right,bottom-left,bottom-right,free",
-       TAB_CAMERA, 0, 0),
+    FE("camera.anchor", "Anchor", anchor,
+       "top-left,top,top-right,left,right,bottom-left,bottom,bottom-right,free", TAB_CAMERA, 0, 0),
     FE("camera.aspect", "Aspect ratio", aspect, "native,16:9,4:3,1:1", TAB_CAMERA, 0, 0),
     FB("camera.mirror", "Mirror", mirror, TAB_CAMERA, 0, 0),
     FE("composition.split_side", "Split camera side", split_side, "left,right", TAB_CAMERA, 1, 0),
@@ -103,6 +106,13 @@ static const FieldSpec fields[] = {
     FI("camera.radius", "Corner radius (px)", radius, 0, 2048, TAB_CAMERA, 2, 0),
     FI("camera.border_width", "Border width (px)", border_width, 0, 256, TAB_CAMERA, 2, 0),
     FC("camera.border_color", "Border color", border_color, TAB_CAMERA, 2, 0),
+    FE("camera.background", "Background", camera_background, "blurred,gradient,solid", TAB_CAMERA,
+       2, 0),
+    FC("camera.background_color", "Background color", camera_background_color, TAB_CAMERA, 2, 0),
+    FI("camera.background_blur_radius", "Background blur (px)", camera_background_blur_radius, 1,
+       128, TAB_CAMERA, 2, 0),
+    FN("camera.background_brightness", "Background brightness (0–1)", camera_background_brightness,
+       0, 1, TAB_CAMERA, 2, 0),
     FT("camera.corner_order", "Corner cycle order", corner_order, TAB_CAMERA, 2, 0),
     FB("audio.mic", "Microphone", mic, TAB_AUDIO, 0, 0),
     FT("audio.mic_source", "Microphone source", mic_source, TAB_AUDIO, 0, 0),
@@ -145,8 +155,24 @@ static const FieldSpec fields[] = {
     FC("keys.background", "Keystroke background", keys_background, TAB_EFFECTS, 3, REQUIRE_INPUT),
     FT("keys.filter", "Hidden shortcuts", keys_filter, TAB_EFFECTS, 3, REQUIRE_INPUT),
     FT("keys.navigation", "Navigation keys", keys_navigation, TAB_EFFECTS, 3, REQUIRE_INPUT),
-    FT("output.pause_text", "Pause message", pause_text, TAB_SETTINGS, 0, 0),
-    FC("output.pause_color", "Pause background", pause_color, TAB_SETTINGS, 0, 0),
+    FT("output.pause_text", "Pause title", pause_text, TAB_SETTINGS, 4, 0),
+    FT("output.pause_subtitle", "Pause subtitle", pause_subtitle, TAB_SETTINGS, 4, 0),
+    FC("output.pause_color", "Pause background", pause_color, TAB_SETTINGS, 4, 0),
+    FC("output.pause_foreground", "Pause text color", pause_foreground, TAB_SETTINGS, 4, 0),
+    FI("output.pause_title_size", "Pause title size (px)", pause_title_size, 8, 256, TAB_SETTINGS,
+       4, 0),
+    FI("output.pause_subtitle_size", "Pause subtitle size (px)", pause_subtitle_size, 8, 256,
+       TAB_SETTINGS, 4, 0),
+    FT("output.blur_title", "Blur title", blur_title, TAB_SETTINGS, 5, 0),
+    FT("output.blur_subtitle", "Blur subtitle", blur_subtitle, TAB_SETTINGS, 5, 0),
+    FC("output.blur_color", "Blur tint", blur_color, TAB_SETTINGS, 5, 0),
+    FC("output.blur_foreground", "Blur text color", blur_foreground, TAB_SETTINGS, 5, 0),
+    FI("output.blur_radius", "Blur radius (px)", blur_radius, 1, 128, TAB_SETTINGS, 5, 0),
+    FN("output.blur_opacity", "Blur tint opacity (0–1)", blur_opacity, 0, 1, TAB_SETTINGS, 5, 0),
+    FI("output.blur_title_size", "Blur title size (px)", blur_title_size, 8, 256, TAB_SETTINGS, 5,
+       0),
+    FI("output.blur_subtitle_size", "Blur subtitle size (px)", blur_subtitle_size, 8, 256,
+       TAB_SETTINGS, 5, 0),
     FT("record.directory", "Recording directory", record_dir, TAB_SETTINGS, 0, RECORD_LOCK),
     FI("record.countdown", "Recording countdown (s)", record_countdown, 0, 60, TAB_SETTINGS, 0,
        RECORD_LOCK),
@@ -206,6 +232,8 @@ typedef enum {
     ICON_RECORD,
     ICON_CLOSE,
     ICON_FREEZE,
+    ICON_BLUR,
+    ICON_CUT,
     ICON_SCREEN,
     ICON_CAMERA,
     ICON_AUDIO,
@@ -243,7 +271,7 @@ typedef struct {
     FieldEdit edit[FIELD_COUNT];
     Widget widgets[WIDGET_MAX];
     int widget_count, tab;
-    bool groups[5][4], record_preview, quit, mouse_down, click;
+    bool groups[TAB_COUNT][GROUP_COUNT], record_preview, quit, mouse_down, click;
     uint32_t focus, active_text, dropdown;
     int dropdown_field, dropdown_choice;
     bool select_all;
@@ -254,6 +282,8 @@ typedef struct {
     float preview_x, preview_y, drag_x, drag_y;
     char error[CAST_ERR], reply[CAST_ERR];
     uint64_t command_seen, draw_frame;
+    uint64_t preview_pending, preview_pending_generation;
+    bool preview_pending_record;
     uint64_t frame_generation, frame_epoch;
     Frame frame;
     SDL_Texture *preview;
@@ -338,19 +368,29 @@ static Icon button_icon(const Panel *p, uint32_t id, Action action)
     if (id == 30) {
         return p->snapshot.state.live_paused ? ICON_PLAY : ICON_PAUSE;
     }
-    if (id == 31) {
+    if (id == 31 || id == 37) {
         return ICON_FREEZE;
     }
     if (id == 32) {
-        return p->snapshot.countdown         ? ICON_CLOSE
-               : p->snapshot.state.recording ? ICON_STOP
-                                             : ICON_RECORD;
+        return p->snapshot.countdown && !p->snapshot.state.recording ? ICON_CLOSE
+               : p->snapshot.state.recording                         ? ICON_STOP
+                                                                     : ICON_RECORD;
     }
     if (id == 33) {
-        return p->snapshot.state.record_paused ? ICON_PLAY : ICON_PAUSE;
+        return p->snapshot.state.record_paused || p->snapshot.state.record_cut ? ICON_PLAY
+                                                                               : ICON_PAUSE;
     }
     if (id == 34) {
         return p->snapshot.state.group_paused ? ICON_PLAY : ICON_PAUSE;
+    }
+    if (id == 35) {
+        return ICON_CLOSE;
+    }
+    if (id == 36 || id == 38) {
+        return ICON_BLUR;
+    }
+    if (id == 39) {
+        return ICON_CUT;
     }
     if (id == 41 || id == 74) {
         return ICON_FORWARD;
@@ -418,7 +458,11 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
 static void command_button(Panel *p, uint32_t id, const char *text, bool enabled, const char *a,
                            const char *b, const char *c)
 {
-    button(p, id, text, enabled, false, A_COMMAND, 0);
+    const State *s = &p->snapshot.state;
+    bool selected = (id == 31 && s->live_frozen) || (id == 36 && s->live_blurred) ||
+                    (id == 37 && s->record_frozen) || (id == 38 && s->record_blurred) ||
+                    (id == 39 && s->record_cut);
+    button(p, id, text, enabled, selected, A_COMMAND, 0);
     Widget *w = &p->widgets[p->widget_count - 1];
     w->arg[0] = a;
     w->argc = 1;
@@ -587,7 +631,29 @@ static void text_wrapped(const char *text, Clay_Color color)
         CLAY_TEXT_CONFIG(
             {.fontId = 0, .fontSize = 13, .textColor = color, .wrapMode = CLAY_TEXT_WRAP_WORDS}));
 }
-static const char *const section_names[] = {"Source", "Camera", "Audio", "Effects", "Settings"};
+static const char *const section_names[] = {"Source",  "Camera",   "Audio",
+                                            "Effects", "Settings", "Outputs"};
+
+static const char *live_status(const PanelSnapshot *s)
+{
+    return !s->connected             ? "Disconnected"
+           : !s->config.live_enabled ? "Live output off"
+           : s->state.live_paused    ? "Live paused"
+           : s->state.live_blurred   ? "Live blurred"
+           : s->state.live_frozen    ? "Live frozen"
+                                     : "Live";
+}
+static const char *record_status(const PanelSnapshot *s)
+{
+    return s->countdown          ? (s->state.recording ? "Resume countdown" : "Recording countdown")
+           : s->finalizing       ? "Saving recording"
+           : !s->state.recording ? "Not recording"
+           : s->state.record_cut ? "Recording cut"
+           : s->state.record_paused  ? "Recording paused"
+           : s->state.record_blurred ? "Recording blurred"
+           : s->state.record_frozen  ? "Recording frozen"
+                                     : "Recording";
+}
 
 static void status_line(Panel *p)
 {
@@ -605,7 +671,7 @@ static void status_line(Panel *p)
         }
         if (s->state.recording || s->countdown || s->finalizing) {
             uint64_t secs = s->duration_ns / 1000000000ULL;
-            label(s->countdown ? "Starting…"
+            label(s->countdown ? (s->state.recording ? "Resuming…" : "Starting…")
                   : s->finalizing
                       ? "Saving…"
                       : format(p, "%02llu:%02llu:%02llu", (unsigned long long)(secs / 3600),
@@ -614,24 +680,15 @@ static void status_line(Panel *p)
                   1, danger);
         }
     }
-    const char *live = !s->connected             ? "Disconnected"
-                       : !s->config.live_enabled ? "Live output off"
-                       : s->state.live_paused    ? "Live paused"
-                       : s->state.live_frozen    ? "Live frozen"
-                                                 : "Live";
-    const char *record = s->countdown ? "Recording countdown"
-                         : s->state.recording
-                             ? (s->state.record_paused ? "Recording paused" : "Recording")
-                             : "Not recording";
     CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 12}})
     {
-        label(live, 0,
+        label(live_status(s), 0,
               s->connected && s->config.live_enabled && !s->state.live_paused &&
-                      !s->state.live_frozen
+                      !s->state.live_frozen && !s->state.live_blurred
                   ? (Clay_Color){131, 221, 182, 255}
                   : secondary);
         if (s->connected) {
-            label(record, 0, s->state.recording || s->countdown ? danger : secondary);
+            label(record_status(s), 0, s->state.recording || s->countdown ? danger : secondary);
         }
     }
 }
@@ -644,10 +701,6 @@ static void output_controls(Panel *p)
     {
         command_button(p, 30, s->state.live_paused ? "Resume live" : "Pause live", live, "live",
                        s->state.live_paused ? "resume" : "pause", NULL);
-        if (live && !s->state.live_paused) {
-            command_button(p, 31, s->state.live_frozen ? "Unfreeze" : "Freeze", true, "live",
-                           s->state.live_frozen ? "unfreeze" : "freeze", NULL);
-        }
     }
     CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 8}})
     {
@@ -656,12 +709,12 @@ static void output_controls(Panel *p)
                            s->connected && !s->finalizing, "record", "start", NULL);
         } else {
             if (s->state.recording || s->countdown) {
-                command_button(p, 32, s->countdown ? "Cancel" : "Stop record", s->connected,
-                               "record", "stop", NULL);
+                command_button(p, 32,
+                               s->countdown && !s->state.recording ? "Cancel" : "Stop record",
+                               s->connected, "record", "stop", NULL);
             }
-            if (s->state.recording) {
-                command_button(p, 33, s->state.record_paused ? "Resume" : "Pause", s->connected,
-                               "record", s->state.record_paused ? "resume" : "pause", NULL);
+            if (s->countdown && s->state.recording) {
+                command_button(p, 35, "Cancel resume", s->connected, "record", "cut", NULL);
             }
         }
     }
@@ -774,7 +827,10 @@ static void home_navigation(Panel *p)
                      .padding = {0, 0, 8, 0}},
           .clip = {.vertical = true, .childOffset = Clay_GetScrollOffset()}})
     {
-        for (int i = 0; i < 5; i++) {
+        static const int order[] = {TAB_OUTPUT, TAB_SOURCE,  TAB_CAMERA,
+                                    TAB_AUDIO,  TAB_EFFECTS, TAB_SETTINGS};
+        for (int row = 0; row < TAB_COUNT; row++) {
+            int i = order[row];
             uint32_t id = 100 + (uint32_t)i;
             Widget *w = widget(p, id, W_BUTTON, A_TAB, true);
             if (w) {
@@ -791,8 +847,8 @@ static void home_navigation(Panel *p)
                              .width =
                                  p->focus == id ? outline_width : (Clay_BorderWidth){.bottom = 1}}})
             {
-                static const Icon icons[] = {ICON_SCREEN, ICON_CAMERA, ICON_AUDIO, ICON_EFFECTS,
-                                             ICON_SETTINGS};
+                static const Icon icons[] = {ICON_SCREEN,  ICON_CAMERA,   ICON_AUDIO,
+                                             ICON_EFFECTS, ICON_SETTINGS, ICON_PLAY};
                 icon_slot(icons[i], true, false);
                 CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}}})
                 {
@@ -879,7 +935,45 @@ static void source_actions(Panel *p)
 }
 static void tab_actions(Panel *p)
 {
-    if (p->tab == TAB_SOURCE) {
+    if (p->tab == TAB_OUTPUT) {
+        const PanelSnapshot *s = &p->snapshot;
+        bool live = s->connected && s->config.live_enabled;
+        bool record = s->connected && s->state.recording && !s->countdown;
+        label("Live output", 2, foreground);
+        CLAY({.layout = {.childGap = 8}})
+        {
+            command_button(p, 31, s->state.live_frozen ? "Unfreeze" : "Freeze", live, "live",
+                           s->state.live_frozen ? "unfreeze" : "freeze", NULL);
+            command_button(p, 36, s->state.live_blurred ? "Blur off" : "Blur on", live, "live",
+                           "blur", s->state.live_blurred ? "off" : "on");
+        }
+        text_wrapped("Pause shows a solid screen. Freeze and blur are kept underneath.", secondary);
+        CLAY({.layout = {.padding = {0, 0, 12, 0}}})
+        {
+            label("Recording", 2, foreground);
+        }
+        CLAY({.layout = {.childGap = 8}})
+        {
+            bool resume = s->state.record_paused || s->state.record_cut;
+            command_button(p, 33, resume ? "Resume record" : "Pause record", record, "record",
+                           resume ? "resume" : "pause", NULL);
+            command_button(p, 39, "Cut time", record && !s->state.record_cut, "record", "cut",
+                           NULL);
+        }
+        CLAY({.layout = {.childGap = 8}})
+        {
+            command_button(p, 37, s->state.record_frozen ? "Unfreeze" : "Freeze", record, "record",
+                           s->state.record_frozen ? "unfreeze" : "freeze", NULL);
+            command_button(p, 38, s->state.record_blurred ? "Blur off" : "Blur on", record,
+                           "record", "blur", s->state.record_blurred ? "off" : "on");
+        }
+        text_wrapped("Pause writes a solid screen and silence. Cut removes media time; resuming "
+                     "a cut continues the same file after the countdown.",
+                     secondary);
+        if (!s->state.recording && !s->countdown) {
+            text_wrapped("Start recording to enable these controls.", secondary);
+        }
+    } else if (p->tab == TAB_SOURCE) {
         selection_row(p);
         source_actions(p);
     } else if (p->tab == TAB_CAMERA) {
@@ -920,12 +1014,13 @@ static void tab_actions(Panel *p)
                      secondary);
     }
 }
-static const char *const group_names[5][4] = {
+static const char *const group_names[TAB_COUNT][GROUP_COUNT] = {
     {"", "Region geometry", "Zoom behavior", ""},
     {"", "Position and crop", "Appearance", "Device"},
     {"", "Virtual microphone", "", ""},
     {"", "Output annotations", "Cursor and clicks", "Keystroke style"},
-    {"", "Recording format", "Cycle order", "Output and connection"}};
+    {"", "Recording format", "Cycle order", "Output and connection", "Pause screen", "Blur screen"},
+    {""}};
 static void settings_area(Panel *p)
 {
     CLAY({.id = CLAY_ID("SettingsScroll"),
@@ -941,8 +1036,8 @@ static void settings_area(Panel *p)
                 field_row(p, i);
             }
         }
-        for (int group = 1; group < 4; group++) {
-            if (!group_names[p->tab][group][0]) {
+        for (int group = 1; group < GROUP_COUNT; group++) {
+            if (!group_names[p->tab][group] || !group_names[p->tab][group][0]) {
                 continue;
             }
             bool any = false;
@@ -955,11 +1050,16 @@ static void settings_area(Panel *p)
             if (!any) {
                 continue;
             }
-            button(p, 200 + (uint32_t)p->tab * 4 + (uint32_t)group,
+            button(p, 200 + (uint32_t)p->tab * 8 + (uint32_t)group,
                    format(p, "%s  %s", p->groups[p->tab][group] ? "Hide" : "Show",
                           group_names[p->tab][group]),
                    true, false, A_GROUP, group);
             if (p->groups[p->tab][group]) {
+                if (p->tab == TAB_SETTINGS && group >= 4) {
+                    text_wrapped("Leave a title or subtitle blank to hide it. Templates: {date}, "
+                                 "{time}, {datetime}, or {date:%Y-%m-%d}.",
+                                 secondary);
+                }
                 for (size_t i = 0; i < FIELD_COUNT; i++) {
                     if (fields[i].tab == p->tab && fields[i].group == group) {
                         field_row(p, i);
@@ -1199,6 +1299,18 @@ static void draw_icon(Panel *p, SDL_FRect box, uintptr_t data)
         L(8, 2, 8, 14);
         L(3, 5, 13, 11);
         L(3, 11, 13, 5);
+        break;
+    case ICON_BLUR:
+        L(4, 3, 12, 3);
+        L(2, 6, 14, 6);
+        L(4, 9, 12, 9);
+        L(6, 12, 10, 12);
+        break;
+    case ICON_CUT:
+        circle(p, box.x + 4, box.y + 12, 2, 1.4f);
+        circle(p, box.x + 12, box.y + 12, 2, 1.4f);
+        L(5, 10, 13, 2);
+        L(11, 10, 3, 2);
         break;
     case ICON_SCREEN:
         L(2, 3, 14, 3);
@@ -1456,8 +1568,13 @@ static void draw_field(Panel *p, size_t index, Clay_BoundingBox b, SDL_Rect oute
                            y + TTF_GetFontHeight(p->font[1]) - 2);
         }
     }
-    draw_text(p, value[0] ? value : "Default", strlen(value[0] ? value : "Default"), 1,
-              value[0] ? foreground : muted, x, y);
+    const char *placeholder =
+        strstr(fields[index].key, "subtitle") ? "No subtitle"
+        : strstr(fields[index].key, "title") || !strcmp(fields[index].key, "output.pause_text")
+            ? "No title"
+            : "Default";
+    const char *text = value[0] ? value : placeholder;
+    draw_text(p, text, strlen(text), 1, value[0] ? foreground : muted, x, y);
     SDL_SetRenderClipRect(p->renderer, &outer_clip);
 }
 static void render(Panel *p, Clay_RenderCommandArray commands)
@@ -1601,6 +1718,12 @@ static Widget *find_widget(Panel *p, uint32_t id)
     }
     return NULL;
 }
+static bool widget_in_scroll(const Panel *p, const Widget *w)
+{
+    return w->id >= 1000 || (w->id >= 200 && w->id < 300) || (w->id >= 40 && w->id < 90) ||
+           (w->id >= 100 && w->id < 100 + TAB_COUNT) ||
+           (p->tab == TAB_OUTPUT && (w->id == 31 || w->id == 33 || (w->id >= 36 && w->id <= 39)));
+}
 static void stop_editing(Panel *p)
 {
     p->active_text = 0;
@@ -1624,8 +1747,7 @@ static void set_focus(Panel *p, Widget *w)
         SDL_Rect area = clip_rect(w->box);
         SDL_SetTextInputArea(p->window, &area, (int)p->caret);
     }
-    if (w->id >= 1000 || (w->id >= 200 && w->id < 300) || (w->id >= 40 && w->id < 90) ||
-        (w->id >= 100 && w->id < 105)) {
+    if (widget_in_scroll(p, w)) {
         Clay_ElementData area = Clay_GetElementData(CLAY_ID("SettingsScroll"));
         Clay_ScrollContainerData scroll = Clay_GetScrollContainerData(CLAY_ID("SettingsScroll"));
         if (scroll.found) {
@@ -1742,6 +1864,30 @@ static void apply_setting(Panel *p, int index, const char *value, bool draft)
         p->edit[index].submitted_revision = p->edit[index].revision;
     }
 }
+static void select_preview(Panel *p, bool record)
+{
+    if (p->record_preview == record) {
+        return;
+    }
+    p->record_preview = record;
+    SDL_DestroyTexture(p->preview);
+    p->preview = NULL;
+    frame_free(&p->frame);
+}
+static void acknowledge_preview(Panel *p, const PanelSnapshot *s)
+{
+    if (!p->preview_pending) {
+        return;
+    }
+    if (!s->connected || s->daemon_generation != p->preview_pending_generation) {
+        p->preview_pending = 0;
+    } else if (s->command_completed >= p->preview_pending) {
+        if (!s->command_failed) {
+            select_preview(p, p->preview_pending_record);
+        }
+        p->preview_pending = 0;
+    }
+}
 static void activate(Panel *p, Widget *w)
 {
     if (!w || !w->enabled) {
@@ -1752,6 +1898,13 @@ static void activate(Panel *p, Widget *w)
         p->error[0] = 0;
         if (!panel_client_command(p->client, w->argc, w->arg, p->error, sizeof p->error)) {
             p->reply[0] = 0;
+            bool record = w->argc >= 2 && !strcmp(w->arg[0], "record");
+            bool live = w->argc >= 2 && !strcmp(w->arg[0], "live") && !strcmp(w->arg[1], "resume");
+            if (record || live) {
+                p->preview_pending = p->snapshot.command_queued + 1;
+                p->preview_pending_generation = p->snapshot.daemon_generation;
+                p->preview_pending_record = record;
+            }
         }
         break;
     case A_SETTING:
@@ -1811,10 +1964,8 @@ static void activate(Panel *p, Widget *w)
         p->dropdown = 0;
         break;
     case A_PREVIEW:
-        p->record_preview = w->index != 0;
-        SDL_DestroyTexture(p->preview);
-        p->preview = NULL;
-        frame_free(&p->frame);
+        p->preview_pending = 0;
+        select_preview(p, w->index != 0);
         break;
     default:
         break;
@@ -2036,8 +2187,7 @@ static void click_event(Panel *p, float x, float y)
             y >= w->box.y + w->box.height) {
             continue;
         }
-        if (w->id >= 1000 || (w->id >= 200 && w->id < 300) || (w->id >= 40 && w->id < 90) ||
-            (w->id >= 100 && w->id < 105)) {
+        if (widget_in_scroll(p, w)) {
             Clay_ElementData area = Clay_GetElementData(CLAY_ID("SettingsScroll"));
             if (y < area.boundingBox.y || y >= area.boundingBox.y + area.boundingBox.height) {
                 continue;
@@ -2127,6 +2277,7 @@ static void poll_client(Panel *p)
         p->frame_generation = fresh.daemon_generation;
         p->frame_epoch = fresh.privacy_epoch;
         p->snapshot = fresh;
+        acknowledge_preview(p, &fresh);
         if (fresh.command_completed != p->command_seen) {
             p->command_seen = fresh.command_completed;
             snprintf(p->reply, sizeof p->reply, "%s", fresh.last_reply);
@@ -2279,6 +2430,14 @@ static void write_ui_state(Panel *p, const char *path)
     json_string(file, edit ? edit->value : "");
     fputs(",\"pause_message\":", file);
     json_string(file, p->snapshot.config.pause_text);
+    fputs(",\"camera_anchor\":", file);
+    json_string(file, p->snapshot.config.anchor);
+    fputs(",\"camera_background\":", file);
+    json_string(file, p->snapshot.config.camera_background);
+    fputs(",\"live_status\":", file);
+    json_string(file, live_status(&p->snapshot));
+    fputs(",\"record_status\":", file);
+    json_string(file, record_status(&p->snapshot));
     fputs(",\"error\":", file);
     json_string(file, p->error[0] ? p->error : p->snapshot.error);
     fputs("}\n", file);
@@ -2304,9 +2463,18 @@ int panel_run(const Config *config, char *error, size_t n)
         cleanup(p, NULL);
         return -1;
     }
-    p->window =
-        SDL_CreateWindow("cast control panel", 480, 760,
-                         SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN);
+    /* X11 uses physical window dimensions. Create at its final scaled size so
+     * SDL's saved position and mwm's first centering both use the same bounds. */
+    float initial_scale = 1;
+    if (!strcmp(SDL_GetCurrentVideoDriver(), "x11")) {
+        float scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
+        if (scale > 0) {
+            initial_scale = scale;
+        }
+    }
+    p->window = SDL_CreateWindow(
+        "cast control panel", (int)roundf(480 * initial_scale), (int)roundf(760 * initial_scale),
+        SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN);
     if (!p->window) {
         snprintf(error, n, "cannot create control panel window: %s", SDL_GetError());
         cleanup(p, NULL);
