@@ -17,8 +17,10 @@ frame. Main-loop reads copy that snapshot; privacy epochs and per-buffer queue e
 reject pre-boundary capture/decoding without waiting for device work.
 Recording has a bounded worker queue, independent control/encoder locks and monotonic
 active-time timestamps. Status and frame admission never wait for codec work. Stop
-requests worker finalization; status exposes completion and shutdown waits for it. Pause
+requests worker finalization; status exposes completion and shutdown waits for it. Cut
 flushes queued samples and excludes its interval, preserving one open container.
+Solid pause continues encoding neutral video and silence at the normal cadence.
+Recording audio silence has its own epoch gate, independent of the cut clock.
 PipeWire provides audio capture and an optional virtual source; no physical playback
 sink is created. Software encoding is the baseline. Matroska is the default container.
 
@@ -26,11 +28,25 @@ Configuration uses maintained BSD-3-Clause-licensed inih, vendored without local
 A strict schema layer validates sections, units and duplicate keys with source lines.
 Precedence is defaults, config file, startup overrides, then session commands.
 
-Live privacy pause and recording pause are independent. Group pause remembers only
-running outputs it changes; an independent command supersedes that output's remembered
-state. Repeated group pause is idempotent. Freeze keeps one composed live frame and
-silences virtual audio; privacy pause overrides it. Composition reset/presets do not
-change either output state. Runtime configuration is never persisted automatically.
+Live and recording each have independent solid-pause, freeze and blur flags.
+Composition is copied or frozen first, then blurred and tinted; solid pause selects
+neutral content above both. Recording cut gates file admission above every visual
+mode. Freeze captures screen and camera together without transient keys/clicks.
+Privacy pause and source changes replace retained frozen pixels with neutral content.
+Blur is a presentation effect, not a confidentiality guarantee. Pause, freeze, blur
+and cut silence their audio lanes and discard queued audio before acknowledgement.
+Group pause remembers only solid states it changes; independent solid commands
+supersede remembered restoration. Orthogonal freeze/blur/cut controls preserve it.
+Group resume cannot reopen a cut recording. Cut resume uses the configured start
+countdown before reopening media admission on the same encoder/container; cancelling
+leaves it cut. Composition reset/presets never change output flags. Runtime
+configuration is never persisted automatically.
+
+Fontconfig resolves the configured system fonts and FreeType renders optional UTF-8
+titles/subtitles. Font changes are file-only and prepared before applying reload.
+Text templates expand bounded date/time placeholders against one local wall-clock
+snapshot, while recording/cut timing remains monotonic. Blur uses bounded reduced
+images and separable passes so the radius does not multiply full-frame work.
 
 Hardware validation is distinguished from synthetic acceptance. Optional Wayland
 features report capabilities; global input and interactive selection can be unsupported.

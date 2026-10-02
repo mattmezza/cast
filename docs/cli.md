@@ -26,7 +26,10 @@ sets its share. Camera hidden state and geometry persist when changing layouts.
 Anchored resizing fixes that corner, free sizing fixes center, and valid positions
 are clamped within the canvas. Impossible sizes fail. `camera move DX DY` is relative;
 `camera position X Y` is absolute output pixels, and both switch to free positioning.
-`camera anchor top-left|top-right|bottom-left|bottom-right|next` follows camera.corner_order.
+`camera anchor top-left|top-right|bottom-left|bottom-right|top|bottom|left|right|next`
+selects a corner or the middle of an edge. Edge anchors keep the corresponding
+margin and remain centered on the other axis while resizing. `next` follows
+camera.corner_order; that list may include edge anchors.
 `camera shape rectangle|rounded|circle|next` cycles rectangle→rounded→circle.
 `camera aspect native|16:9|4:3|1:1` controls centered crop independently of mask;
 circle forces square crop. `camera crop move DX DY` adjusts source-pixel crop offsets.
@@ -66,36 +69,64 @@ counts refresh that row, and older rows expire independently.
 Configure keys.filter to exclude every cast-control shortcut you bind.
 `annotations live|record keys|clicks on|off` selects annotation visibility per lane.
 
-`pause` privacy-pauses both applicable outputs, remembers only states it changes,
-and cancels pending recording countdown. It emits neutral live frames and silence.
-Repeated pause is idempotent. `resume` restores only remembered states; it cannot
-start a recording or resume one paused independently. Any independent live/record
-state command supersedes that lane's remembered restoration, even an idempotent pause.
-`live pause|resume|toggle` controls live privacy state; toggle reverses pause.
-`live freeze|unfreeze` deliberately holds/releases composed content and silences
-cast virtual audio. Privacy pause overrides freeze and replaces retained content
-with neutral. Neither freeze nor unfreeze can bypass privacy pause.
+`pause` solid-pauses both applicable outputs, remembers only states it changes,
+and cancels a pending recording start or cut-resume countdown. Live emits neutral
+frames and recording continues writing neutral frames, with silence in both lanes.
+Repeated pause is idempotent. `resume` restores only remembered solid states;
+it never starts a recording or clears recording cut. Independent solid commands
+supersede that lane's remembered restoration; freeze/blur/cut are orthogonal.
 
-`live message "TEXT"` changes the neutral pause label immediately without resuming
-video or altering recording state. Pass `""` for no label. Messages are at most
-127 bytes and use the pause frame's limited bitmap font. This is a session change;
-use `[output] pause_text` for a persistent default.
+`live pause|resume|toggle` selects solid privacy pause; toggle reverses that flag.
+`live freeze|unfreeze` holds/releases the complete screen and camera composition.
+`live blur [on|off|toggle]` applies/removes/toggles a configurable blurred, tinted
+composition with optional title/subtitle. Bare `blur` enables it; `unblur` disables
+it. Blur is above freeze, and solid pause overrides both. Blur alone keeps capturing
+moving content. None of these effects resumes solid pause. Freeze and blur silence
+cast virtual audio. Blur can leave information recognizable; use solid pause for privacy.
+
+`live message "TEXT"` changes the shared solid-pause title without resuming any
+output. Pass `""` to remove the title. The limit is 127 UTF-8 bytes. Use the shared
+settings below to edit titles/subtitles and colours in either output:
+
+```sh
+cast settings output.pause_title "Back soon" output.pause_subtitle "{date:%A} {time:%H:%M}"
+cast settings output.pause_background '#20252b' output.pause_foreground '#ffffff'
+cast settings output.blur_title "Break" output.blur_subtitle "{datetime}"
+cast settings output.blur_radius 48 output.blur_opacity 0.6
+```
+
+`output.pause_text` and `output.pause_color` remain aliases. `output.pause_font`
+and `output.blur_font` are config-file-only; edit the file and use `config reload`.
+Both title and subtitle are optional. [Text placeholders](configuration.md#pause-and-blur-text)
+expand in local time, including custom strftime formats.
 
 `record start [PATH]` starts one new file, optionally after configured countdown.
 The panel shows a local numbered countdown. Without an attached panel, Xorg
-shows a utility countdown window; Escape or closing it cancels the pending start.
-The guide disappears before recording and is excluded from screen capture.
+shows a utility countdown window; Escape or closing it cancels the pending action.
+The guide disappears before media admission and is excluded from screen capture.
 Automatic names are generated in record.directory; existing paths are never
-overwritten. Starting during group pause creates a paused recording; group resume
-does not resume it because it was not a running output changed by that pause.
-`record stop` ends media admission and requests worker finalization, printing the
-filename immediately, or cancels countdown. `status --json` reports record.finalizing;
-wait for false before using the file or starting another recording. The foreground
-daemon prints finalization completion/error, and quit waits for completion.
-`record pause|resume|toggle` appends no media while paused and resumes the SAME
-file with interruption time removed. Toggle NEVER starts/stops and errors without
-a recording. Recording is independent of live privacy/freeze. Encoder/disk failures
-stop that recording and retain recoverable partial data; live controls continue.
+overwritten. Starting during group pause creates a solid-paused recording; group
+resume does not change it because group pause did not pause that new recording.
+`record stop` requests finalization or cancels an initial start countdown.
+During a cut-resume countdown it finalizes the existing file. `status --json`
+reports record.finalizing; wait for false before using the file or starting another
+recording. The foreground daemon prints completion/error, and quit waits for it.
+
+`record pause` writes the configured solid screen plus silence. `record resume`
+clears solid pause unless the recording is cut. `record toggle` toggles only solid
+pause, never cut/start/stop. `record freeze|unfreeze` and
+`record blur [on|off|toggle]` / `record unblur` match live presentation effects.
+Recording uses the same style settings but has independent visual flags.
+
+`record cut` interrupts file writing without ending the encoder/container.
+`record resume` from cut reuses the configured start countdown, then continues the
+same file with interruption and countdown time removed. It preserves the existing
+solid/freeze/blur flags. `record cut` again cancels a pending resume; Escape/closing
+the standalone guide also leaves the file cut. All controls require an existing
+recording. Pause/freeze/blur record silence; cut admits neither video nor audio.
+**Migration from v0.3:** use `record cut` where you previously used `record pause`
+to remove interruption time. Encoder/disk failures retain recoverable partial data
+and leave live controls operational.
 
 `audio list` lists PipeWire sources. `audio mic|desktop|virtual on|off|toggle` controls
 lanes/virtual source; `audio mic|desktop source NAME` selects explicitly;
@@ -103,13 +134,13 @@ lanes/virtual source; `audio mic|desktop source NAME` selects explicitly;
 source; it starts off. A speaker-monitor source can include call participants;
 application capture avoids broad mixes where PipeWire supports it. Disappearing
 sources silence the lane and report errors; there is no broad-source fallback.
-Live pause/freeze silences cast's optional virtual microphone. A physical mic selected
+Live pause/freeze/blur silences cast's optional virtual microphone. A physical mic selected
 directly by a conference app needs the app's own mute control. cast creates no
 physical-speaker playback route; video and audio devices are selected separately.
 
 `preset NAME|next` applies composition-only named settings and configured cycle.
 `preview on|off|toggle` controls local preview; `preview target live|record` chooses
-its lane. Local LIVE/PAUSED/FROZEN/RECORDING labels stay out of exported frames.
+its lane. Local LIVE/PAUSED/FROZEN/BLURRED/CUT/RECORDING labels stay out of exported frames.
 `status [--json]` reports capabilities, source, layout, camera visibility, zoom,
 live/record state, path/active duration/countdown/finalization, audio routing, errors and drops.
 `doctor` performs read-only dependency/device/directory checks with setup advice.
@@ -121,8 +152,8 @@ a daemon or configuration file.
 Arch x86_64 release package and verifies its SHA-256 checksum. With no version it
 selects the latest release. Installation uses pacman and asks for sudo when needed;
 download-only saves a checked package and its checksum without installation.
-Stop the daemon before updating and restart it afterwards. `cast update v0.3`
-selects the release tag v0.3 and package version 0.3.0.
+Stop the daemon before updating and restart it afterwards. `cast update v0.4`
+selects the release tag v0.4 and package version 0.4.0.
 `panel` opens the optional Clay/SDL3 control panel (`PANEL=1` build). Closing it
 leaves the daemon running. See [panel behavior and exclusion](control-panel.md).
 `settings SECTION.KEY VALUE [SECTION.KEY VALUE ...]` applies an atomic batch of

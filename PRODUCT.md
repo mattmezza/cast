@@ -21,14 +21,15 @@ provides visible controls for the same daemon already controlled through the CLI
 ## Operating context
 
 The daemon runs independently of its control clients. Live output starts paused.
-Live and recording have independent state machines; recording pause resumes the
-same file. Composition changes never implicitly resume either output. The panel
+Live and recording have independent state machines; recording cut/resume removes interruption time from the same file. Solid recording
+pause continues writing a styled screen with silence; freeze and blur are independent
+presentation effects, with blur over freeze and solid pause above both. Composition changes never implicitly resume either output. The panel
 must remain stable while live, paused or frozen, and closing it leaves cast running.
 
 ## Capabilities and constraints
 
 The panel uses a compact Home screen and reachable Source, Camera, Audio, Effects
-and Settings screens. Reveal settings progressively instead of displaying the
+Settings and Outputs screens. Reveal settings progressively instead of displaying the
 whole control surface at once. Actual output preview remains visible on every
 screen, becomes compact while editing, and can be moved out of the way. Output
 state and privacy actions remain easy to reach. Render crisp text at native display

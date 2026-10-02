@@ -1,6 +1,8 @@
 # Requirements traceability
 
-This maps `cast-build-prompt.md` to implementation and verification. Checked items
+This maps `cast-build-prompt.md` and subsequent user requests to implementation and verification.
+The v0.4 request explicitly changes recording pause to append solid video/silence;
+the original same-file timeline pause is retained as recording cut/resume. Checked items
 mean implementation with independent automated evidence. They do not establish
 hardware compatibility. Integration-only acceptance remains unchecked below.
 
@@ -14,7 +16,7 @@ hardware compatibility. Integration-only acceptance remains unchecked below.
 | M2 monitors, regions, active/selected windows, cancellation/hotplug/failures | x11.c, platform.c | Isolated Xvfb smoke passes windows, selections/remap/errors; physical hotplug remains manual |
 | M3 mic/explicit desktop sources/gain/disappearance and virtual source | audio.c, media.c | Synthetic mixing/clipping/stale tests; physical mic and virtual-source readiness/silence verified |
 | M3 recording codecs/container, exclusive filenames, bounded queue/backpressure, failure isolation | record.c, media.c | Real encoded/decoded files; slow in-flight encoder, restart and injected ENOSPC tests |
-| M3 same-file pause, monotonic active timeline, AV synchronization and privacy queues | record.c, audio.c | Repeated pause AV timestamps; sensitive queued pixels/audio absent after barriers |
+| M3 same-file cut/resume, monotonic active timeline, AV synchronization and privacy queues | record.c, audio.c | Repeated cut AV timestamps; sensitive queued pixels/audio absent after barriers |
 | M3 countdown cancellation, async finalization and partial-file preservation | main.c, commands.c, record.c | Production commands, zero late starts, no overwrite, finalization/error tests |
 | M4 presets/reset preserve output state, zoom easing/follow/locking, cursor/click/key transforms | commands.c, compositor.c | Source generation, same-frame lane consistency, coordinate/annotation pixel tests |
 | M4 passive XI2/XKB, layouts/filter/repeat and privacy history | x11.c | Isolated Xvfb input/layout/filter/privacy passes; real user layouts/IME remain manual; no raw log |
@@ -41,3 +43,15 @@ See verification.md for measured results and environment restrictions, and
 hardware-acceptance.md for the exact integration acceptance procedure. The repository
 and v0.1 release are published on GitHub. Privileged camera setup is performed by
 the user; the application does not load modules or change system configuration.
+
+## v0.4 requested controls
+
+| Request | Implementation | Evidence |
+|---|---|---|
+| Middle-edge camera anchors and resizing | config.c, compositor.c, commands.c, panel.c | Synthetic geometry, preset/schema and panel routes |
+| Shared optional pause/blur titles, subtitles, file-only system fonts and colours | presentation_text.c, config.c, compositor.c | UTF-8/fallback, bounded templates, atomic font preparation, pixel tests |
+| Independent freeze → blur → solid precedence | state.c, main.c, commands.c | Pure state + actual decoded recordings + acknowledged preview transport |
+| Recording solid pause vs timeline cut, silence and same-file resume countdown | media.c, record.c, commands.c | Decoded audio/video timestamps, silence, synthetic daemon and native countdown cancellation |
+| Automatic panel preview follows acknowledged output action | panel.c | Failed/generation-aware command tests and native click tests |
+| Temporary native film preview, fully hidden before admission | x11.c, platform.c, main.c | SHM/fallback capture, fake delayed WM frame, CLI start/resume/cancel and first-frame decode |
+| Per-frame blurred camera-slot backdrop and gradient fallback | compositor.c, config.c, panel.c | Actual slot pixels, fresh/absent/hidden camera, bounded blur buffers and 1080p benchmark |

@@ -34,11 +34,15 @@ fields apply explicitly and commands never write the user's configuration. Live,
 recording and group-pause controls preserve their independent semantics.
 
 Home shows the current output and the controls appropriate to its state. Open
-Source, Camera, Audio, Effects or Settings to edit one section at a time; Back or
+Outputs, Source, Camera, Audio, Effects or Settings to edit one section at a time; Back or
 Escape returns Home. Advanced options expand within their section. The preview
 stays visible while navigating, becomes compact on settings screens and can be
 dragged by its header. Essential navigation, privacy controls and capture warnings
 remain unobscured. Select Live or Recording to inspect that output's composition.
+A successful Start record or cut-resume action selects Recording automatically;
+Start/Resume live selects Live. Failed commands leave the current preview target intact.
+Outputs contains independent lane freeze/blur and recording pause/cut controls.
+Solid recording pause writes a screen with silence; cut removes time from the file.
 
 Square buttons pair text with consistent drawn line icons; the Back control uses
 a left arrow and a clear Back label. Icons never replace action names.
@@ -53,25 +57,36 @@ synthetic daemon on a private display; it requires Xvfb, xdotool, xprop and xcli
 Set a recording countdown in Settings or use `cast --countdown 3` at startup.
 Starting a recording shows a local numbered film-style guide in the persistent
 preview on every screen. Cancel stops the pending start; `cast pause` also cancels
-it. The guide disappears when recording begins and is never burned into outgoing
-video or the recorded file. On Xorg, a separate centered guide appears for
-CLI starts when the panel is closed, including when the preview is closed. Escape or closing
-that guide cancels the countdown. Wayland has the panel guide; a standalone
+it. Cut-resume uses the same countdown without creating a new file; Cancel resume
+leaves the recording cut. The guide is never burned into outgoing video or the file.
+When the panel is closed on Xorg, the floating CastPreview window temporarily opens,
+even with preview off, showing the composition beneath the same film-style guide.
+At the end it toggles off and disappears, including WM decorations, before media
+admission starts/resumes. This also closes a preview that was previously enabled.
+Escape or closing the window cancels the pending action. A WM frame that fails to
+hide within the bounded barrier cancels start/resume rather than entering the file. Wayland has the panel guide; a standalone
 countdown window is not implemented there.
 
-## Custom paused message
+## Pause and blur styles
 
 ```sh
-./cast live message "Back in five minutes"
-./cast live message ""  # neutral background without a label
+./cast live message "Back in five minutes"  # shared solid-pause title
+./cast settings output.pause_subtitle "{date:%A} · {time:%H:%M}"
+./cast settings output.blur_title "Break" output.blur_subtitle "{datetime}"
 ```
 
-In the panel's Settings section, edit the paused-message field and apply it.
-Changing the message never resumes video or changes recording state. For a
-persistent default, set `pause_text` in the configuration's `[output]` section.
-The outgoing pause frame uses cast's bundled bitmap font; its supported glyphs
-are more limited than the panel's Inter font. Messages fit the existing 127-byte
-configuration limit.
+In Settings, expand **Pause screen** or **Blur screen** to edit titles/subtitles,
+colours, text sizes, blur radius and tint opacity. Apply or Enter submits a draft;
+blank titles and subtitles are valid. Style edits never change output flags or
+write the config file. Templates support [local date/time formats](configuration.md#pause-and-blur-text).
+System Noto Sans renders the exported text by default. Font choices are available
+only through `pause_font` / `blur_font` in the `[output]` config section, followed
+by config reload. The panel itself continues using bundled Inter.
+
+Camera appearance includes a camera-slot background selector. The default uses
+an enlarged, heavily blurred and dimmed camera frame behind uncovered camera-slot
+pixels; Gradient is the subdued fallback, and Solid restores a uniform backdrop.
+These controls leave screen-layer letterboxing and the foreground camera unchanged.
 
 ## Capture visibility
 

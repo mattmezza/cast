@@ -258,3 +258,35 @@ fallback. The old limited path averaged 0.54 ms per call because it skipped most
 frame copies. This measures isolated preview publication, not hardware or conference
 latency. Keyboard software autorepeat that does not enter XI2's global raw stream
 is not synthesized; actual observed presses and flagged repeats are counted.
+
+## v0.4 presentation modes and camera backdrop
+
+This version changes the old recording-pause contract deliberately: solid pause
+writes the configured screen and silence, while cut/resume retains the prior
+same-file active-time clock. Core, command, pixel and decoded media tests cover
+independent solid/freeze/blur flags, precedence, empty and UTF-8 text, local-time
+templates and bounded expansion, per-lane audio gates, cut admission and countdown
+cancellation. The synthetic daemon test decodes actual FFV1 video, checks styled
+segments, repeated frozen composition, blurred pixels and monotonic gapless PTS.
+
+The standalone countdown uses the real floating CastPreview window. Native tests
+exercise preview originally off and on, initial start and same-file cut-resume,
+Escape/WM-close/privacy cancellation, capture exclusion and decoded first-frame
+pixels. A synthetic reparenting WM that refuses to retire its visible decoration
+causes the hide barrier to fail; recording cannot start/resume in that case.
+
+Camera backdrop measurements use synthetic RGBA 1920×1080 output and camera,
+4:3 foreground, fresh camera timestamps and the existing compositor benchmark.
+Solid camera-only median 23.02 ms vs fresh blurred 28.27 ms (increment 5.26 ms); split
+median 6.60 ms vs 8.05 ms (increment 1.45 ms). Repeating the same camera snapshot reuses
+the cached backdrop with approximately zero added cost. Reduced backdrop plus
+temporary blur storage is at most 675 KiB, and missing/hidden cameras discard it.
+These are compositor-only timings on the development host; capture, actual webcam,
+encoder and conference latency are outside that measurement. Per-frame refresh
+is implemented rather than a slower animation timer.
+
+Font/template/backdrop tests pass ASan/UBSan with leak checking. Native panel tests
+cover the focused Outputs screen, new controls and drafts, automatic acknowledged
+preview target, utility window placement, all sections and minimum width at 1×/2×.
+These synthetic/private-display checks do not establish remote conference or
+real Wayland compositor compatibility.

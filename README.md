@@ -20,7 +20,7 @@ up-to-date Arch x86_64 system with curl installed:
 
 ```sh
 curl -fsSL --proto '=https' --proto-redir '=https' \
-  https://raw.githubusercontent.com/mattmezza/cast/v0.3/packaging/install.sh | sh -s -- v0.3
+  https://raw.githubusercontent.com/mattmezza/cast/v0.4/packaging/install.sh | sh -s -- v0.4
 cast setup
 ```
 
@@ -34,7 +34,7 @@ Virtual-camera setup is a separate step explained by `cast setup`; the installer
 does not create devices or change your configuration.
 
 ```sh
-cast update v0.3
+cast update v0.4
 cast completions
 ```
 
@@ -50,7 +50,8 @@ with no response-time commitment.
 ## Build and run
 
 Build dependencies: C compiler, GNU make, pkg-config, FFmpeg development libraries
-(libavcodec/libavformat/libavutil/libswscale/libswresample), PipeWire, and for Xorg
+(libavcodec/libavformat/libavutil/libswscale/libswresample), PipeWire, Fontconfig,
+FreeType and a system font (default Noto Sans), and for Xorg
 Xlib/Xext/XRandR/XInput2/XFixes/XComposite. Vendored inih requires no separate installation.
 Wayland adds GLib GDBus (`gio-unix-2.0`). Software libx264/AAC encoding is the default.
 
@@ -82,7 +83,7 @@ Before live output, create an existing loopback device. These commands are for a
 Arch user running the `linux` kernel to execute; cast does not run them:
 
 ```sh
-sudo pacman -S --needed base-devel pkgconf ffmpeg pipewire libx11 libxext libxrandr libxi libxfixes libxcomposite
+sudo pacman -S --needed base-devel pkgconf ffmpeg pipewire fontconfig freetype2 noto-fonts libx11 libxext libxrandr libxi libxfixes libxcomposite
 sudo pacman -S --needed v4l2loopback-dkms linux-headers v4l-utils
 sudo modprobe v4l2loopback devices=1 video_nr=10 card_label=cast exclusive_caps=1
 ```
@@ -115,8 +116,10 @@ terminal, explicitly enable live video and then select `cast` in the conference:
 ./cast pause
 ./cast resume
 ./cast record start
-./cast record pause
+./cast record pause                 # write a solid title/subtitle screen
 ./cast record resume
+./cast record cut                   # omit this interval from the file
+./cast record resume                # same file, with the configured countdown
 ./cast record stop
 ./cast quit
 ```
@@ -130,8 +133,26 @@ Camera content is mirrored by default; the screen stays unmirrored. Use
 `./cast camera mirror off` to disable it for the session, or set `mirror = false`
 in the configuration's `[camera]` section.
 
-`./cast live message "Back in five minutes"` changes the neutral pause label for
-this session without resuming video. Set `[output] pause_text` for a persistent default.
+`./cast live message "Back in five minutes"` changes the solid pause title for
+this session. **Settings → Pause screen** and **Blur screen** edit optional titles,
+subtitles, colours and blur strength. **Outputs** provides independent live and
+recording freeze/blur controls and recording cut/resume. The preview follows a
+successful Start record or Start live action automatically.
+
+```sh
+cast camera anchor top             # middle of the top edge; also bottom/left/right
+cast live freeze
+cast live blur on                  # blur the frozen frame; unfreeze keeps blur on
+cast live pause                    # solid screen overrides freeze and blur
+cast settings output.pause_title "Back soon" output.pause_subtitle "{date:%A} {time:%H:%M}"
+```
+
+Persistent styles live in `[output]`: `pause_title`, `pause_subtitle`,
+`pause_background`, `pause_foreground`, and the corresponding `blur_*` settings.
+Choose `pause_font` / `blur_font` only in the config file, then `cast config reload`.
+Noto Sans is the default. Both text fields may be empty. [Date/time placeholders
+and custom formats](docs/configuration.md#pause-and-blur-text) update while displayed.
+Existing `pause_text` and `pause_color` configurations remain supported.
 
 With exclusive_caps=1, some consumers detect the camera only after the producer starts.
 Virtual audio is a separate optional device. cast cannot mute a physical mic selected
@@ -140,7 +161,9 @@ Desktop audio is off by default and requires explicit source selection. All-key 
 are off by default and can expose sensitive typing. Recent keystrokes stay visible
 for three seconds by default, with consecutive repeats grouped as `j`, `jx2`,
 `jx3`; use `cast settings keys.timeout_ms 4000` for a four-second history. Freeze deliberately holds content;
-use pause for privacy. A recording pause removes interruption time from the same file.
+use solid pause for privacy. Blur is a presentation effect and can leave content
+recognizable. Recording pause now writes a solid screen with silence; **cut** removes
+interruption time from the same file. Pause, freeze and blur silence cast audio.
 
 For recording without a virtual camera, use `./cast --no-live`; for screen-only use
 `./cast --no-camera` and `./cast layout screen`. Device paths and output dimensions can

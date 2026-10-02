@@ -49,7 +49,7 @@ _cast_complete()
             camera:1) offer='show hide toggle size move position anchor shape aspect crop mirror list device' ;;
             camera:2)
                 case $first in
-                    anchor) offer='top-left top-right bottom-left bottom-right next' ;;
+                    anchor) offer='top-left top-right bottom-left bottom-right top bottom left right next' ;;
                     shape) offer='rectangle rounded circle next' ;;
                     aspect) offer='native 16:9 4:3 1:1' ;;
                     mirror) offer='on off toggle' ;;
@@ -74,9 +74,13 @@ _cast_complete()
             annotations:1) offer='live record' ;;
             annotations:2) offer='keys clicks' ;;
             annotations:3) offer='on off' ;;
-            live:1) offer='pause resume toggle freeze unfreeze message' ;;
-            record:1) offer='start stop pause resume toggle' ;;
-            record:2) [[ $first == start ]] && mode=file ;;
+            live:1) offer='pause resume toggle freeze unfreeze blur unblur message' ;;
+            live:2) [[ $first == blur ]] && offer='on off toggle' ;;
+            record:1) offer='start stop pause resume toggle freeze unfreeze blur unblur cut' ;;
+            record:2)
+                if [[ $first == start ]]; then mode=file
+                elif [[ $first == blur ]]; then offer='on off toggle'
+                fi ;;
             audio:1) offer='list mic desktop virtual' ;;
             audio:2)
                 if [[ $first == virtual ]]; then offer='on off toggle'
@@ -107,7 +111,8 @@ _cast_complete()
                         composition.fit) offer='contain cover' ;;
                         capture.kind) offer='monitor region window' ;;
                         camera.shape) offer='rectangle rounded circle' ;;
-                        camera.anchor) offer='top-left top-right bottom-left bottom-right free' ;;
+                        camera.background) offer='blurred gradient solid' ;;
+                        camera.anchor) offer='top-left top-right bottom-left bottom-right top bottom left right free' ;;
                         camera.aspect) offer='native 16:9 4:3 1:1' ;;
                         keys.mode) offer='shortcuts all' ;;
                         keys.position) offer='top-left top-right bottom-left bottom-right' ;;

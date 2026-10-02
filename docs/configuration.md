@@ -40,7 +40,7 @@ Startup flags are reapplied on reload. Runtime changes affect only the current s
 cast never writes configuration automatically. `config check [PATH]` validates locally.
 `config reload` parses the complete candidate before any application, then rejects
 unsafe changes as a whole. Successful reload replaces prior runtime overrides for
-reloadable settings and preserves live pause/freeze, recording pause, and group state.
+reloadable settings and preserves each lane's solid/freeze/blur flags, recording cut, and group state.
 It never starts/stops a recording or resumes an output. There is no automatic watcher.
 
 Backend, socket, output device/dimensions/fps/enabled state and virtual microphone name
@@ -81,13 +81,27 @@ The following table is the supported schema. `examples/cast.conf` includes every
 | output | height | `1080` | 64–4320 (integer) |
 | output | fps | `30` | 1–120 (integer) |
 | output | enabled | `true` | true / false |
-| output | pause_color | `#20252b` | #RRGGBB |
-| output | pause_text | `Paused` | Literal string |
+| output | pause_background | `#20252b` | #RRGGBB; pause_color alias |
+| output | pause_title | `Paused` | Optional UTF-8 template, ≤127 bytes; pause_text alias |
+| output | pause_subtitle | `` | Optional UTF-8 template, ≤255 bytes |
+| output | pause_font | `Noto Sans` | Fontconfig font name/pattern; config-file-only |
+| output | pause_foreground | `#ffffff` | #RRGGBB |
+| output | pause_title_size | `48` | 8–256 output pixels; scales down to fit |
+| output | pause_subtitle_size | `24` | 8–256 output pixels; scales down to fit |
+| output | blur_title | `Blurred` | Optional UTF-8 template, ≤127 bytes |
+| output | blur_subtitle | `` | Optional UTF-8 template, ≤255 bytes |
+| output | blur_font | `Noto Sans` | Fontconfig font name/pattern; config-file-only |
+| output | blur_color | `#101113` | Tint #RRGGBB |
+| output | blur_foreground | `#ffffff` | Text #RRGGBB |
+| output | blur_radius | `32` | 1–128 output pixels |
+| output | blur_opacity | `0.6` | Tint opacity 0–1; blur still applies at 0 |
+| output | blur_title_size | `48` | 8–256 output pixels; scales down to fit |
+| output | blur_subtitle_size | `24` | 8–256 output pixels; scales down to fit |
 | camera | device | `/dev/video0` | Literal string |
 | camera | enabled | `true` | true / false |
 | camera | visible | `true` | true / false |
 | camera | shape | `rounded` | rectangle,rounded,circle |
-| camera | anchor | `bottom-right` | top-left,top-right,bottom-left,bottom-right,free |
+| camera | anchor | `bottom-right` | top-left,top-right,bottom-left,bottom-right,top,bottom,left,right,free |
 | camera | aspect | `native` | native,16:9,4:3,1:1 |
 | camera | width_percent | `22` | 1–100 |
 | camera | margin | `24` | 0–4096 (integer) |
@@ -99,6 +113,10 @@ The following table is the supported schema. `examples/cast.conf` includes every
 | camera | crop_x | `0` | -16384–16384 (integer) |
 | camera | crop_y | `0` | -16384–16384 (integer) |
 | camera | mirror | `true` | true / false |
+| camera | background | `blurred` | blurred,gradient,solid; camera slot only |
+| camera | background_color | `#20252b` | #RRGGBB tint/base |
+| camera | background_blur_radius | `96` | 1–128 output pixels |
+| camera | background_brightness | `0.25` | 0–1 brightness multiplier |
 | camera | corner_order | `bottom-right,bottom-left,top-left,top-right` | Literal string |
 | composition | layout | `overlay` | overlay,split,screen,camera |
 | composition | layout_order | `overlay,split,screen,camera` | Literal string |
@@ -166,3 +184,61 @@ The following table is the supported schema. `examples/cast.conf` includes every
 | ipc | timeout_ms | `5000` | 100–30000 (integer) |
 
 Capture kind=window selects the active Xorg window once at startup; interactive window selection remains session state.
+
+## Pause and blur text
+
+Solid pause and blur share their configured styles across live and recording;
+the output flags remain independent. Set both title and subtitle to empty values
+for a screen with no text. `pause_text` aliases `pause_title`, and `pause_color`
+aliases `pause_background`; specifying either spelling twice is a duplicate.
+
+```ini
+[output]
+pause_title = Back soon
+pause_subtitle = {date:%A, %d %B} · {time:%H:%M}
+pause_font = Noto Sans
+pause_background = #20252b
+pause_foreground = #ffffff
+blur_title = Taking a break
+blur_subtitle = {datetime}
+blur_font = Noto Sans
+blur_radius = 48
+blur_opacity = 0.6
+```
+
+`{date}` expands to YYYY-MM-DD, `{time}` to HH:MM:SS, and `{datetime}` to
+YYYY-MM-DD HH:MM:SS in the daemon's local timezone. Add a colon and a strftime
+format to any of them: `{time:%H:%M}`, `{date:%A}`, or `{datetime:%Y-%m-%d %H:%M}`.
+`{{` and `}}` emit literal braces. Placeholders update while the screen is shown;
+title/subtitle use the same time snapshot. Unknown placeholders, unmatched braces,
+invalid formats and expansion beyond the bounded text capacity fail validation.
+Other config strings remain literal and never expand shell expressions.
+
+Fontconfig resolves the font pattern through system fonts; use `fc-match 'Noto Sans'`
+to inspect it. FreeType draws the resolved font at the requested output pixel size,
+scaling down to fit the canvas. The Arch package includes noto-fonts as a dependency.
+Fonts may be chosen only in the config file and applied with `cast config reload`;
+CLI/panel session settings cannot change them. A failed font load rejects the reload.
+This renderer supports UTF-8 glyphs provided by the selected face; it does not
+implement complex-script shaping or an input-method editor.
+
+Camera edge anchors `top`, `bottom`, `left`, `right` center the camera on that edge;
+`top-center`, `bottom-center`, `center-left`, `center-right` are equivalent aliases.
+They retain the configured margin and keep that edge centered when resized.
+
+## Camera-slot background
+
+In split and camera-only layouts, uncovered pixels in the camera's allocated area
+use `camera.background`. The default `blurred` backdrop enlarges the current camera
+frame, blurs a reduced image and dims/tints it. It refreshes with each camera frame
+used in composition; a repeated snapshot can reuse cached work. `gradient` uses a
+subdued static gradient derived from `background_color`, and `solid` fills that
+colour uniformly. Missing/hidden camera input uses fresh static content, never a
+previous camera frame. The foreground webcam and screen-layer fitting are unchanged.
+
+```sh
+cast settings camera.background blurred camera.background_brightness 0.25
+cast settings camera.background_blur_radius 96 camera.background_color '#20252b'
+```
+
+These session controls are available in **Camera → Camera appearance** too.

@@ -79,6 +79,10 @@ with tempfile.TemporaryDirectory(prefix="cast-help-test-") as directory:
     assert bash_complete("cast", "--backend", "") == {"xorg", "wayland", "synthetic"}
     assert {"pause", "resume", "freeze", "unfreeze", "message"} <= \
         bash_complete("cast", "--backend", "xorg", "live", "")
+    assert {"top", "bottom", "left", "right"} <= bash_complete("cast", "camera", "anchor", "")
+    assert {"cut", "freeze", "unfreeze", "blur"} <= bash_complete("cast", "record", "")
+    assert bash_complete("cast", "live", "blur", "") == {"on", "off", "toggle"}
+    assert bash_complete("cast", "record", "blur", "") == {"on", "off", "toggle"}
     assert bash_complete("cast", "camera", "mirror", "") == {"on", "off", "toggle"}
     assert bash_complete("cast", "camera", "aspect", "4", ":", "") == {"3"}
     assert bash_complete("cast", "annotations", "record", "keys", "") == {"on", "off"}
@@ -86,7 +90,7 @@ with tempfile.TemporaryDirectory(prefix="cast-help-test-") as directory:
     assert bash_complete("cast", "audio", "virtual", "") == {"on", "off", "toggle"}
     assert bash_complete("cast", "completions", "--script", "") == set(SCRIPTS)
     keys = bash_complete("cast", "settings", "")
-    assert {"output.pause_text", "camera.border_color", "record.queue"} <= keys
+    assert {"output.pause_title", "output.pause_subtitle", "output.blur_radius", "camera.border_color", "record.queue"} <= keys
     assert not any(key.startswith("preset.") for key in keys)
     assert bash_complete("cast", "settings", "camera.mirror", "") == {"true", "false"}
     assert bash_complete("cast", "--width", "") == set()

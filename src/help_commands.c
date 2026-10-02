@@ -70,7 +70,7 @@ static const char setup_guide[] =
     "    sudo pacman -U ./cast-VERSION-archlinux-x86_64.pkg.tar.zst\n"
     "  After cloning the source, a typical Arch build is:\n"
     "    sudo pacman -S --needed base-devel pkgconf ffmpeg pipewire libx11 libxext libxrandr libxi "
-    "libxfixes libxcomposite glib2 sdl3 sdl3_ttf\n"
+    "libxfixes libxcomposite glib2 sdl3 sdl3_ttf fontconfig freetype2 noto-fonts\n"
     "    make X11=1 WAYLAND=1 PANEL=1\n"
     "    sudo make X11=1 WAYLAND=1 PANEL=1 install\n"
     "  Other distributions need a source build with matching FFmpeg, PipeWire,\n"

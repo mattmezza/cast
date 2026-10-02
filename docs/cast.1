@@ -1,4 +1,4 @@
-.TH CAST 1 "October 2026" "cast 0.1.0" "User Commands"
+.TH CAST 1 "October 2026" "cast 0.4.0" "User Commands"
 .SH NAME
 cast \- presentation camera and recorder
 .SH SYNOPSIS
@@ -31,7 +31,9 @@ camera size +5%|\-5%|25% adjusts five percentage points or sets 25% of canvas wi
 Anchored resizing fixes that corner, free sizing fixes center, and valid positions
 are clamped within the canvas. Impossible sizes fail. camera move DX DY is relative;
 camera position X Y is absolute output pixels, and both switch to free positioning.
-camera anchor top\-left|top\-right|bottom\-left|bottom\-right|next follows camera.corner_order.
+camera anchor top\-left|top\-right|bottom\-left|bottom\-right|top|bottom|left|right|next
+selects a corner or the middle of an edge. Edge resizing retains the margin and
+centering; next follows camera.corner_order, which may include edge anchors.
 camera shape rectangle|rounded|circle|next cycles rectangle→rounded→circle.
 camera aspect native|16:9|4:3|1:1 controls centered crop independently of mask;
 circle forces square crop. camera crop move DX DY adjusts source\-pixel crop offsets.
@@ -71,36 +73,48 @@ counts refresh that row, and older rows expire independently.
 Configure keys.filter to exclude every cast\-control shortcut you bind.
 annotations live|record keys|clicks on|off selects annotation visibility per lane.
 .PP
-pause privacy\-pauses both applicable outputs, remembers only states it changes,
-and cancels pending recording countdown. It emits neutral live frames and silence.
-Repeated pause is idempotent. resume restores only remembered states; it cannot
-start a recording or resume one paused independently. Any independent live/record
-state command supersedes that lane's remembered restoration, even an idempotent pause.
-live pause|resume|toggle controls live privacy state; toggle reverses pause.
-live freeze|unfreeze deliberately holds/releases composed content and silences
-cast virtual audio. Privacy pause overrides freeze and replaces retained content
-with neutral. Neither freeze nor unfreeze can bypass privacy pause.
+pause solid-pauses both applicable outputs and cancels pending start/cut-resume
+countdown. Recording continues writing neutral video and silence. resume restores
+only remembered solid states, never starts a recording or clears a cut. Independent
+solid commands supersede remembered restoration; freeze/blur/cut preserve it.
 .PP
-live message "TEXT" changes the neutral pause label without resuming video or
-altering recording state. Pass an empty argument for no label. The limit is 127
-bytes; the pause frame uses a limited bitmap font. Set output.pause_text in config
-for a persistent default.
+live pause|resume|toggle controls solid privacy pause. live freeze|unfreeze
+holds/releases screen and camera together. live blur [on|off|toggle] applies a
+configurable blurred/tinted composition with optional title/subtitle; bare blur
+turns it on, unblur turns it off. Blur overlays freeze; solid pause overrides both.
+Pause/freeze/blur silence cast audio. Blur can leave content recognizable: use solid
+pause for privacy. Neither unfreeze nor unblur resumes a solid pause.
 .PP
-record start [PATH] starts one new file, optionally after configured countdown.
-The panel shows a local numbered countdown. Without an attached panel, Xorg
-shows a utility countdown window; Escape or closing it cancels the pending start.
-The guide disappears before recording and is excluded from screen capture.
-Automatic names are generated in record.directory; existing paths are never
-overwritten. Starting during group pause creates a paused recording; group resume
-does not resume it because it was not a running output changed by that pause.
-record stop ends media admission and requests worker finalization, printing the
-filename immediately, or cancels countdown. status \-\-json reports record.finalizing;
-wait for false before using the file or starting another recording. The foreground
-daemon prints finalization completion/error, and quit waits for completion.
-record pause|resume|toggle appends no media while paused and resumes the SAME
-file with interruption time removed. Toggle NEVER starts/stops and errors without
-a recording. Recording is independent of live privacy/freeze. Encoder/disk failures
-stop that recording and retain recoverable partial data; live controls continue.
+live message "TEXT" changes the shared solid-pause title without changing output
+states. Empty title/subtitle values are valid. settings output.pause_title TEXT,
+output.pause_subtitle TEXT, output.pause_background #RRGGBB and
+output.pause_foreground #RRGGBB edit solid-screen style. The corresponding blur_title,
+blur_subtitle, blur_color, blur_foreground, blur_radius (1..128) and blur_opacity
+(0..1) control blur. pause_text/pause_color remain aliases. Fonts pause_font and
+blur_font are config-file-only, default Noto Sans, applied through config reload.
+Titles allow 127 UTF-8 bytes; subtitles allow 255. {date}, {time}, {datetime} expand
+in local time; a colon adds a strftime format, e.g. {date:%Y-%m-%d} or {time:%H:%M}.
+Double braces {{ and }} produce literal braces. Invalid templates fail atomically.
+.PP
+record start [PATH] creates one file without overwriting. record stop requests
+finalization; status --json reports record.finalizing; quit waits for completion.
+record pause writes the solid title/subtitle screen and silence. record resume clears
+solid pause unless cut; record toggle toggles solid pause, never cut/start/stop.
+record freeze|unfreeze and record blur [on|off|toggle] / unblur match live effects,
+with independent flags and shared styles.
+.PP
+record cut interrupts video/audio file admission. record resume from cut reuses the
+record.countdown start delay, then continues the SAME file with interruption and
+countdown time removed. Existing solid/freeze/blur flags remain. record cut again
+cancels a pending resume and retains the file. These controls need a recording.
+Migration from v0.3: use record cut where record pause previously removed time.
+.PP
+With a panel, the film-style guide stays in the local preview. Without a panel on
+Xorg, CastPreview temporarily opens even when preview was off. It closes completely
+and preview toggles off before recording starts/resumes; this includes a previously
+enabled preview. Escape/closing cancels the action. WM decorations must disappear
+before admission; a hide failure cancels start/resume. Guides never enter the file.
+Wayland provides the panel guide; standalone native countdown is unsupported.
 .PP
 audio list lists PipeWire sources. audio mic|desktop|virtual on|off|toggle controls
 lanes/virtual source; audio mic|desktop source NAME selects explicitly;
@@ -108,7 +122,7 @@ audio mic|desktop gain 80% sets gain (0..400%). Desktop capture requires an expl
 source; it starts off. A speaker\-monitor source can include call participants;
 application capture avoids broad mixes where PipeWire supports it. Disappearing
 sources silence the lane and report errors; there is no broad\-source fallback.
-Live pause/freeze silences cast's optional virtual microphone. A physical mic selected
+Live pause/freeze/blur silences cast's optional virtual microphone. A physical mic selected
 directly by a conference app needs the app's own mute control. cast creates no
 physical\-speaker playback route; video and audio devices are selected separately.
 .PP
