@@ -135,7 +135,7 @@ The following table is the supported schema. `examples/cast.conf` includes every
 | keys | mode | `shortcuts` | shortcuts,all |
 | keys | position | `bottom-left` | top-left,top-right,bottom-left,bottom-right |
 | keys | font_size | `24` | 8–96 (integer) |
-| keys | timeout_ms | `1800` | 100–30000 (integer) |
+| keys | timeout_ms | `3000` | 100–30000 (integer) |
 | keys | color | `#ffffff` | #RRGGBB |
 | keys | background | `#20252b` | #RRGGBB |
 | keys | filter | `Super+Pause,Super+F9,Super+F10,Super+F11,Super+F12,Super+Shift+P,Super+Shift+R,Super+P,Super+Shift+Space,Super+Shift+C,Super+=,Super+-,Super+Shift+A,Super+Shift+L,Super+Shift+D,Super+Shift+M,Super+Shift+S,Super+Z,Super+Shift++,Super+Shift+_,Super+Shift+K,Super+Shift+B,Super+Shift+V,Ctrl+Super+Shift+R,Ctrl+Super+Shift+S,Ctrl+Super+F,Ctrl+Super+Shift+F` | Literal string |

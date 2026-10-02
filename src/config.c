@@ -96,7 +96,7 @@ static const Setting settings[] = {
     E("keys", "position", keys_position, "top-left,top-right,bottom-left,bottom-right",
       "bottom-left"),
     I("keys", "font_size", keys_font_size, 8, 96, "24"),
-    I("keys", "timeout_ms", keys_timeout_ms, 100, 30000, "1800"),
+    I("keys", "timeout_ms", keys_timeout_ms, 100, 30000, "3000"),
     C("keys", "color", keys_color, "#ffffff"),
     C("keys", "background", keys_background, "#20252b"),
     S("keys", "filter", keys_filter,
