@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#define CAST_VERSION "0.2.0"
+#define CAST_VERSION "0.3.0"
 #define CAST_TEXT 256
 #define CAST_ERR 1024
 #define CAST_MAX_PRESETS 24
@@ -102,6 +102,8 @@ int platform_command(Platform *, Config *, int, char **, char *, size_t);
 int platform_reconfigure(Platform *, const Config *, char *, size_t);
 void platform_events(Platform *, Compositor *, const Config *, bool privacy);
 int platform_preview(Platform *, const Frame *, const State *, const Config *, char *, size_t);
+/* Transient local countdown; remaining_ns=0 hides it, return 1 cancels, -1 errors. */
+int platform_countdown(Platform *, uint64_t remaining_ns, char *, size_t);
 void platform_doctor(const Config *, char *, size_t);
 /* Only the authenticated panel transport may register its own native window. */
 int platform_panel_register(Platform *, uint64_t window, int peer_pid, char *, size_t);
@@ -123,7 +125,8 @@ int compositor_render(Compositor *, const Config *, const Frame *, const Frame *
 void compositor_neutral(const Config *, Frame *);
 void compositor_clear(Compositor *);
 void compositor_click(Compositor *, int, int, int, uint64_t);
-void compositor_key(Compositor *, const char *, uint64_t);
+/* Keep only bounded transient display labels; adjacent repeats refresh one row. */
+void compositor_key(Compositor *, const char *, uint64_t, int timeout_ms);
 int compositor_geometry(const Config *, int, int, int *, int *, int *, int *, char *, size_t);
 /* Media owns bounded recording/audio workers; barriers synchronously flush pending samples. */
 Media *media_open(const Config *, char *, size_t);

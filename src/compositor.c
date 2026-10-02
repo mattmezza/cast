@@ -1,16 +1,23 @@
 /* Shared RGBA composition. Original bitmap glyphs below are part of cast's license. */
 #include "cast.h"
 #include <errno.h>
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define CLICK_MAX 32
+#define KEY_MAX 8
 typedef struct {
     int x, y, button;
     uint64_t at;
 } Click;
+typedef struct {
+    char label[CAST_TEXT];
+    unsigned repeats;
+    uint64_t at;
+} Key;
 struct Compositor {
     double zoom, from, target, cx, cy;
     uint64_t transition, last;
@@ -18,8 +25,8 @@ struct Compositor {
     bool centered;
     Click clicks[CLICK_MAX];
     unsigned next;
-    char key[CAST_TEXT];
-    uint64_t key_at;
+    Key keys[KEY_MAX];
+    unsigned key_count;
 };
 typedef struct {
     double sx, sy, sw, sh, dx, dy, dw, dh;
@@ -96,8 +103,8 @@ void compositor_clear(Compositor *c)
     if (c) {
         memset(c->clicks, 0, sizeof(c->clicks));
         c->next = 0;
-        c->key[0] = 0;
-        c->key_at = 0;
+        memset(c->keys, 0, sizeof(c->keys));
+        c->key_count = 0;
     }
 }
 void compositor_click(Compositor *c, int x, int y, int button, uint64_t at)
@@ -106,12 +113,46 @@ void compositor_click(Compositor *c, int x, int y, int button, uint64_t at)
         c->clicks[c->next++ % CLICK_MAX] = (Click){x, y, button, at};
     }
 }
-void compositor_key(Compositor *c, const char *key, uint64_t at)
+static void keys_expire(Compositor *c, uint64_t now, int timeout_ms)
 {
-    if (c && key) {
-        snprintf(c->key, sizeof(c->key), "%s", key);
-        c->key_at = at;
+    unsigned keep = 0;
+    uint64_t timeout = timeout_ms > 0 ? (uint64_t)timeout_ms * 1000000 : 0;
+    for (unsigned i = 0; i < c->key_count; i++) {
+        Key *key = &c->keys[i];
+        if (timeout && (now < key->at || now - key->at < timeout)) {
+            c->keys[keep++] = *key;
+        }
     }
+    /* Erase expired labels as well as releasing their queue slots. */
+    memset(c->keys + keep, 0, (KEY_MAX - keep) * sizeof(*c->keys));
+    c->key_count = keep;
+}
+void compositor_key(Compositor *c, const char *key, uint64_t at, int timeout_ms)
+{
+    if (!c || !key || !*key) {
+        return;
+    }
+    keys_expire(c, at, timeout_ms);
+    if (timeout_ms <= 0) {
+        return;
+    }
+    char label[CAST_TEXT];
+    snprintf(label, sizeof(label), "%s", key);
+    if (c->key_count && !strcmp(c->keys[c->key_count - 1].label, label)) {
+        Key *latest = &c->keys[c->key_count - 1];
+        if (latest->repeats < UINT_MAX) {
+            latest->repeats++;
+        }
+        latest->at = at;
+        return;
+    }
+    if (c->key_count == KEY_MAX) {
+        memmove(c->keys, c->keys + 1, (KEY_MAX - 1) * sizeof(*c->keys));
+        c->key_count--;
+    }
+    Key *latest = &c->keys[c->key_count++];
+    *latest = (Key){.repeats = 1, .at = at};
+    memcpy(latest->label, label, strlen(label) + 1);
 }
 static void pixel(Frame *f, int x, int y, uint32_t color, double alpha)
 {
@@ -176,12 +217,22 @@ static const struct {
               {'|', {4, 4, 4, 4, 4, 4, 4}},        {'^', {4, 10, 17, 0, 0, 0, 0}},
               {'~', {0, 0, 9, 22, 0, 0, 0}},       {'`', {8, 4, 2, 0, 0, 0, 0}},
               {'$', {4, 15, 20, 14, 5, 30, 4}},    {'{', {2, 4, 4, 8, 4, 4, 2}},
-              {'}', {8, 4, 4, 2, 4, 4, 8}}};
+              {'}', {8, 4, 4, 2, 4, 4, 8}},        {'a', {0, 0, 14, 1, 15, 17, 15}},
+              {'b', {16, 16, 30, 17, 17, 17, 30}}, {'c', {0, 0, 14, 17, 16, 17, 14}},
+              {'d', {1, 1, 15, 17, 17, 17, 15}},   {'e', {0, 0, 14, 17, 31, 16, 14}},
+              {'f', {6, 8, 8, 28, 8, 8, 8}},       {'g', {0, 14, 17, 17, 15, 1, 14}},
+              {'h', {16, 16, 30, 17, 17, 17, 17}}, {'i', {4, 0, 12, 4, 4, 4, 14}},
+              {'j', {2, 0, 6, 2, 2, 18, 12}},      {'k', {16, 16, 18, 20, 24, 20, 18}},
+              {'l', {12, 4, 4, 4, 4, 4, 14}},      {'m', {0, 0, 26, 21, 21, 21, 21}},
+              {'n', {0, 0, 30, 17, 17, 17, 17}},   {'o', {0, 0, 14, 17, 17, 17, 14}},
+              {'p', {0, 30, 17, 17, 30, 16, 16}},  {'q', {0, 15, 17, 17, 15, 1, 1}},
+              {'r', {0, 0, 22, 25, 16, 16, 16}},   {'s', {0, 0, 15, 16, 14, 1, 30}},
+              {'t', {8, 8, 28, 8, 8, 9, 6}},       {'u', {0, 0, 17, 17, 17, 19, 13}},
+              {'v', {0, 0, 17, 17, 17, 10, 4}},    {'w', {0, 0, 17, 17, 21, 21, 10}},
+              {'x', {0, 0, 17, 10, 4, 10, 17}},    {'y', {0, 17, 17, 17, 15, 1, 14}},
+              {'z', {0, 0, 31, 2, 4, 8, 31}}};
 static const uint8_t *glyph(char ch)
 {
-    if (ch >= 'a' && ch <= 'z') {
-        ch = (char)(ch - 'a' + 'A');
-    }
     for (size_t i = 0; i < sizeof(glyphs) / sizeof(*glyphs); i++) {
         if (glyphs[i].c == ch) {
             return glyphs[i].rows;
@@ -204,6 +255,84 @@ static void text(Frame *f, const char *s, int x, int y, int scale, uint32_t colo
                 }
             }
         }
+    }
+}
+static void keys_draw(Compositor *c, const Config *cfg, Frame *out, uint64_t now)
+{
+    unsigned indices[KEY_MAX], active = 0;
+    for (unsigned i = 0; i < c->key_count; i++) {
+        if (c->keys[i].at <= now) {
+            indices[active++] = i;
+        }
+    }
+    if (!active) {
+        return;
+    }
+    int padding = (int)fmin(8, fmin(out->width, out->height) / 4);
+    int scale = cfg->keys_font_size / 7;
+    if (scale < 1) {
+        scale = 1;
+    }
+    /* Keep at least one glyph and a repeat suffix within even a small canvas. */
+    int suffix_width = 0;
+    for (unsigned i = 0; i < active; i++) {
+        if (c->keys[indices[i]].repeats > 1) {
+            char suffix[16];
+            int width = snprintf(suffix, sizeof(suffix), "x%u", c->keys[indices[i]].repeats);
+            if (width > suffix_width) {
+                suffix_width = width;
+            }
+        }
+    }
+    int maxscale = (out->width - 2 * padding) / (6 * (1 + suffix_width));
+    int maxheightscale = (out->height - 2 * padding) / 7;
+    if (maxheightscale < maxscale) {
+        maxscale = maxheightscale;
+    }
+    if (maxscale < 1) {
+        return;
+    }
+    if (scale > maxscale) {
+        scale = maxscale;
+    }
+    int h = 7 * scale + 2 * padding, gap = 4;
+    unsigned visible = (unsigned)((out->height + gap) / (h + gap));
+    if (visible > active) {
+        visible = active;
+    }
+    int stack_h = (int)visible * (h + gap) - gap;
+    bool bottom = strstr(cfg->keys_position, "bottom") != NULL;
+    int y = bottom ? out->height - cfg->margin - stack_h : cfg->margin;
+    y = (int)clampd(y, 0, out->height - stack_h);
+    int maxchars = (out->width - 2 * padding) / (6 * scale);
+    for (unsigned row = 0; row < visible; row++) {
+        const Key *key = &c->keys[indices[active - 1 - row]];
+        char suffix[16] = "", label[CAST_TEXT + 16];
+        if (key->repeats > 1) {
+            snprintf(suffix, sizeof(suffix), "x%u", key->repeats);
+        }
+        size_t len = strlen(key->label), suffix_len = strlen(suffix);
+        if (len > (size_t)maxchars - suffix_len) {
+            len = (size_t)maxchars - suffix_len;
+        }
+        memcpy(label, key->label, len);
+        memcpy(label + len, suffix, suffix_len + 1);
+        int w = (int)(len + suffix_len) * 6 * scale + 2 * padding;
+        int x = cfg->margin;
+        if (strstr(cfg->keys_position, "right")) {
+            x = out->width - cfg->margin - w;
+        } else if (strstr(cfg->keys_position, "center")) {
+            x = (out->width - w) / 2;
+        }
+        x = (int)clampd(x, 0, out->width - w);
+        /* The newest row stays at the configured edge, with older rows inward. */
+        int row_y = y + (int)(bottom ? visible - 1 - row : row) * (h + gap);
+        for (int j = 0; j < h; j++) {
+            for (int i = 0; i < w; i++) {
+                pixel(out, x + i, row_y + j, cfg->keys_background, .85);
+            }
+        }
+        text(out, label, x + padding, row_y + padding, scale, cfg->keys_color);
     }
 }
 void compositor_neutral(const Config *cfg, Frame *f)
@@ -517,6 +646,7 @@ int compositor_render(Compositor *c, const Config *cfg, const Frame *screen, con
         return fail(err, n, "cannot allocate composition canvas");
     }
     uint64_t now = screen && screen->ts_ns ? screen->ts_ns : cast_now_ns();
+    keys_expire(c, now, cfg->keys_timeout_ms);
     fill(out, cfg->pause_color);
     out->ts_ns = now;
     bool show_clicks =
@@ -593,41 +723,8 @@ int compositor_render(Compositor *c, const Config *cfg, const Frame *screen, con
         }
         camera_blit(out, camera, cfg, x, y, w, h);
     }
-    if (show_keys && cfg->keys && c->key[0] && now >= c->key_at &&
-        (now - c->key_at) / 1000000 < (uint64_t)cfg->keys_timeout_ms) {
-        int scale = cfg->keys_font_size / 7;
-        if (scale < 1) {
-            scale = 1;
-        }
-        size_t len = strlen(c->key);
-        int maxchars = (out->width - 16) / (6 * scale);
-        if (maxchars < 1) {
-            maxchars = 1;
-        }
-        if (len > (size_t)maxchars) {
-            len = (size_t)maxchars;
-        }
-        char label[CAST_TEXT];
-        memcpy(label, c->key, len);
-        label[len] = 0;
-        int w = (int)len * 6 * scale + 16, h = 7 * scale + 16;
-        int x = cfg->margin, y = cfg->margin;
-        if (strstr(cfg->keys_position, "right")) {
-            x = out->width - cfg->margin - w;
-        } else if (strstr(cfg->keys_position, "center")) {
-            x = (out->width - w) / 2;
-        }
-        if (strstr(cfg->keys_position, "bottom")) {
-            y = out->height - cfg->margin - h;
-        }
-        x = (int)clampd(x, 0, fmax(0, out->width - w));
-        y = (int)clampd(y, 0, fmax(0, out->height - h));
-        for (int j = 0; j < h; j++) {
-            for (int i = 0; i < w; i++) {
-                pixel(out, x + i, y + j, cfg->keys_background, .85);
-            }
-        }
-        text(out, label, x + 8, y + 8, scale, cfg->keys_color);
+    if (show_keys && cfg->keys) {
+        keys_draw(c, cfg, out, now);
     }
     return 0;
 }

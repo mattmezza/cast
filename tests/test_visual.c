@@ -218,7 +218,7 @@ static void test_zoom_and_annotations(void)
     render(c, &cfg, &screen, NULL, NULL, false, &out);
     assert(at(&out, 53, 25) == at(&plain, 53, 25));
     cfg.keys = true;
-    compositor_key(c, "Ctrl+A", now);
+    compositor_key(c, "Ctrl+A", now, cfg.keys_timeout_ms);
     render(c, &cfg, &screen, NULL, NULL, false, &out);
     assert(at(&out, 9, 35) == 0xffffff);
     cfg.annotations_record_keys = false;
@@ -248,6 +248,174 @@ static void test_neutral(void)
         }
     }
     assert(found && out.ts_ns == now);
+    frame_free(&out);
+}
+
+/* Compare the synthetic input sequence with literal display labels, so repeat
+ * counts, retained rows, ordering and expiry are checked in the rendered frame. */
+static void expect_keys(Compositor *c, Config *cfg, const char **labels, size_t count)
+{
+    Compositor *reference = compositor_create();
+    assert(reference);
+    for (size_t i = 0; i < count; i++) {
+        compositor_key(reference, labels[i], now, cfg->keys_timeout_ms);
+    }
+    Frame actual = {0}, expected = {0};
+    render(c, cfg, NULL, NULL, NULL, false, &actual);
+    render(reference, cfg, NULL, NULL, NULL, false, &expected);
+    assert(memcmp(actual.data, expected.data, (size_t)actual.stride * actual.height) == 0);
+    frame_free(&actual);
+    frame_free(&expected);
+    compositor_destroy(reference);
+}
+
+static void test_key_history(void)
+{
+    Config cfg = config(320, 256);
+    cfg.keys = true;
+    cfg.keys_timeout_ms = 3000;
+    cfg.margin = 12;
+    cfg.keys_background = 0x123456;
+    cfg.pause_color = 0x345678;
+    Compositor *c = compositor_create();
+    assert(c);
+    now += 1000000000;
+    compositor_key(c, "j", now, cfg.keys_timeout_ms);
+    expect_keys(c, &cfg, (const char *[]){"j"}, 1);
+    now += 50000000;
+    compositor_key(c, "j", now, cfg.keys_timeout_ms);
+    expect_keys(c, &cfg, (const char *[]){"jx2"}, 1);
+    Frame out = {0};
+    render(c, &cfg, NULL, NULL, NULL, false, &out);
+    /* Lowercase j and literal lowercase x must remain visually distinct from
+     * the original uppercase-only bitmap font. Verify the pixels directly. */
+    const uint8_t bits[3][7] = {
+        {2, 0, 6, 2, 2, 18, 12}, {0, 0, 17, 10, 4, 10, 17}, {14, 17, 1, 2, 4, 8, 31}};
+    for (int ch = 0; ch < 3; ch++) {
+        for (int y = 0; y < 7; y++) {
+            for (int x = 0; x < 5; x++) {
+                bool white = at(&out, cfg.margin + 8 + 6 * ch + x,
+                                cfg.height - cfg.margin - 23 + 8 + y) == cfg.keys_color;
+                assert(white == !!(bits[ch][y] & (1 << (4 - x))));
+            }
+        }
+    }
+    now += 50000000;
+    compositor_key(c, "j", now, cfg.keys_timeout_ms);
+    expect_keys(c, &cfg, (const char *[]){"jx3"}, 1);
+    now += 25000000;
+    compositor_key(c, "k", now, cfg.keys_timeout_ms);
+    expect_keys(c, &cfg, (const char *[]){"jx3", "k"}, 2);
+    now += 25000000;
+    compositor_key(c, "j", now, cfg.keys_timeout_ms);
+    expect_keys(c, &cfg, (const char *[]){"jx3", "k", "j"}, 3);
+    now += 25000000;
+    compositor_key(c, "Ctrl+S", now, cfg.keys_timeout_ms);
+    now += 25000000;
+    compositor_key(c, "Ctrl+S", now, cfg.keys_timeout_ms);
+    expect_keys(c, &cfg, (const char *[]){"jx3", "k", "j", "Ctrl+Sx2"}, 4);
+    /* A burst between frames still counts every adjacent observation. */
+    compositor_clear(c);
+    for (int i = 0; i < 12; i++) {
+        compositor_key(c, "j", now + (uint64_t)i * 1000000, cfg.keys_timeout_ms);
+    }
+    now += 12000000;
+    expect_keys(c, &cfg, (const char *[]){"jx12"}, 1);
+    /* The timeout refreshes only the repeated row, not unrelated history. */
+    compositor_clear(c);
+    uint64_t started = now;
+    compositor_key(c, "j", now, cfg.keys_timeout_ms);
+    now += 1000000000;
+    compositor_key(c, "k", now, cfg.keys_timeout_ms);
+    now += 1000000000;
+    compositor_key(c, "k", now, cfg.keys_timeout_ms);
+    now = started + 2999999999;
+    expect_keys(c, &cfg, (const char *[]){"j", "kx2"}, 2);
+    now++;
+    expect_keys(c, &cfg, (const char *[]){"kx2"}, 1);
+    now = started + 5000000000;
+    expect_keys(c, &cfg, NULL, 0);
+    /* Expiry is also applied on input even if no frame was rendered. */
+    compositor_key(c, "j", now, cfg.keys_timeout_ms);
+    now += 3000000000;
+    compositor_key(c, "j", now, cfg.keys_timeout_ms);
+    expect_keys(c, &cfg, (const char *[]){"j"}, 1);
+    now += 2900000000;
+    compositor_key(c, "j", now, cfg.keys_timeout_ms);
+    now += 200000000;
+    expect_keys(c, &cfg, (const char *[]){"jx2"}, 1);
+    now += 2800000000;
+    expect_keys(c, &cfg, NULL, 0);
+    /* Bursts retain the latest eight labels, with predictable oldest eviction. */
+    compositor_clear(c);
+    for (char ch = 'a'; ch <= 'j'; ch++) {
+        char label[2] = {ch, 0};
+        compositor_key(c, label, now, cfg.keys_timeout_ms);
+    }
+    const char *last_eight[] = {"c", "d", "e", "f", "g", "h", "i", "j"};
+    expect_keys(c, &cfg, last_eight, 8);
+    for (int top = 0; top < 2; top++) {
+        for (int side = 0; side < 3; side++) {
+            snprintf(cfg.keys_position, sizeof(cfg.keys_position), "%s-%s", top ? "top" : "bottom",
+                     side == 0   ? "left"
+                     : side == 1 ? "center"
+                                 : "right");
+            cfg.height = 50; /* Only the most recent two rows fit. */
+            expect_keys(c, &cfg, (const char *[]){"i", "j"}, 2);
+        }
+    }
+    /* Privacy/source/keys-clear barriers erase the whole history and counts. */
+    compositor_clear(c);
+    cfg.height = 256;
+    expect_keys(c, &cfg, NULL, 0);
+    compositor_key(c, "j", now, cfg.keys_timeout_ms);
+    expect_keys(c, &cfg, (const char *[]){"j"}, 1);
+    cfg.annotations_record_keys = false;
+    Frame plain = {0};
+    render(c, &cfg, NULL, NULL, NULL, true, &plain);
+    for (int y = 0; y < plain.height; y++) {
+        for (int x = 0; x < plain.width; x++) {
+            assert(at(&plain, x, y) == cfg.pause_color);
+        }
+    }
+    cfg.annotations_live_keys = false;
+    now += 3000000000;
+    render(c, &cfg, NULL, NULL, NULL, false, &out); /* Expire while hidden. */
+    cfg.annotations_live_keys = true;
+    compositor_key(c, "j", now, cfg.keys_timeout_ms);
+    expect_keys(c, &cfg, (const char *[]){"j"}, 1);
+    compositor_destroy(c);
+    frame_free(&out);
+    frame_free(&plain);
+}
+
+static void test_key_canvas_bounds(void)
+{
+    Config cfg = config(80, 32);
+    cfg.keys = true;
+    cfg.keys_font_size = 96;
+    cfg.keys_background = 0xff0000;
+    cfg.margin = 500;
+    strcpy(cfg.keys_position, "bottom-right");
+    char long_key[CAST_TEXT + 100];
+    memset(long_key, 'j', sizeof(long_key) - 1);
+    long_key[sizeof(long_key) - 1] = 0;
+    Compositor *c = compositor_create();
+    assert(c);
+    compositor_key(c, long_key, now, cfg.keys_timeout_ms);
+    compositor_key(c, long_key, now, cfg.keys_timeout_ms);
+    Frame out = {0};
+    render(c, &cfg, NULL, NULL, NULL, false, &out);
+    assert(at(&out, 4, 2) != 0); /* Clamped background remains on the canvas. */
+    /* Every box dimension and text scale fits, including the repeat suffix. */
+    expect_keys(c, &cfg, (const char *[]){"jjjx2"}, 1);
+    cfg.width = 8;
+    cfg.height = 8;
+    render(c, &cfg, NULL, NULL, NULL, false, &out);
+    cfg.width = cfg.height = 1;
+    render(c, &cfg, NULL, NULL, NULL, false, &out);
+    assert(at(&out, 0, 0) == cfg.pause_color);
+    compositor_destroy(c);
     frame_free(&out);
 }
 
@@ -325,7 +493,9 @@ int main(void)
     test_follow_lane_consistency();
     test_screen_sampling();
     test_neutral();
+    test_key_history();
+    test_key_canvas_bounds();
     puts("visual: owned frames, geometry, masks, fitting, crop/mirror, zoom transforms and lane "
-         "privacy passed");
+         "privacy, bounded key history and repeat counts passed");
     return 0;
 }
