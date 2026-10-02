@@ -38,5 +38,6 @@ hardware compatibility. Integration-only acceptance remains unchecked below.
 - [ ] Remote conferencing compatibility, endurance, physical AV drift and glass-to-glass latency.
 
 See verification.md for measured results and environment restrictions, and
-hardware-acceptance.md for the exact integration acceptance procedure. No privileged
-system setup, deployment or repository publication has been performed.
+hardware-acceptance.md for the exact integration acceptance procedure. The repository
+and v0.1 release are published on GitHub. Privileged camera setup is performed by
+the user; the application does not load modules or change system configuration.

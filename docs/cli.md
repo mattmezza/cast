@@ -107,6 +107,16 @@ its lane. Local LIVE/PAUSED/FROZEN/RECORDING labels stay out of exported frames.
 `status [--json]` reports capabilities, source, layout, camera visibility, zoom,
 live/record state, path/active duration/countdown/finalization, audio routing, errors and drops.
 `doctor` performs read-only dependency/device/directory checks with setup advice.
+`setup` prints virtual-camera, configuration and conferencing instructions without
+changing the system. `completions [bash|zsh|fish]` prints shell setup instructions;
+`completions --script SHELL` emits the embedded completion script. Both work without
+a daemon or configuration file.
+`update [vMAJOR.MINOR[.PATCH]] [--download-only DIRECTORY]` downloads an official
+Arch x86_64 release package and verifies its SHA-256 checksum. With no version it
+selects the latest release. Installation uses pacman and asks for sudo when needed;
+download-only saves a checked package and its checksum without installation.
+Stop the daemon before updating and restart it afterwards. `cast update v0.2`
+selects the release tag v0.2 and package version 0.2.0.
 `panel` opens the optional Clay/SDL3 control panel (`PANEL=1` build). Closing it
 leaves the daemon running. See [panel behavior and exclusion](control-panel.md).
 `settings SECTION.KEY VALUE [SECTION.KEY VALUE ...]` applies an atomic batch of
