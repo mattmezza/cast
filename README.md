@@ -1,5 +1,7 @@
 # cast
 
+![cast — Your screen. Your camera. Your call.](assets/readme-cover.png)
+
 Your screen, your camera, your call. `cast` is a foreground Linux utility written in C
 that composes screen capture and a webcam into an existing virtual camera, with optional
 presentation annotations, PipeWire audio and independent local recording. Runtime
@@ -10,6 +12,37 @@ PipeWire; selection, input and preview capabilities differ by backend. A confere
 receives the composition as a webcam. Each participant can use their own camera tile;
 cast does not change call layouts, resolution limits or compression. Text readability
 depends on the conferencing app and viewers enlarging/pinning the tile.
+
+## Install on Arch Linux
+
+The release package includes Xorg, Wayland and the native control panel. On an
+up-to-date Arch x86_64 system with curl installed:
+
+```sh
+curl -fsSL --proto '=https' --proto-redir '=https' \
+  https://raw.githubusercontent.com/mattmezza/cast/v0.2/packaging/install.sh | sh -s -- v0.2
+cast setup
+```
+
+The installer downloads the release package, verifies its SHA-256 checksum and
+uses pacman to install it with dependencies. sudo is needed for installation.
+For an inspectable download, save the script first and read it before running it.
+Virtual-camera setup is a separate step explained by `cast setup`; the installer
+does not create devices or change your configuration.
+
+```sh
+cast update v0.2
+cast completions
+```
+
+`cast update` without a version selects the latest release. Stop your running cast
+daemon before updating, then restart it. Other distributions can build from source.
+
+## Project status
+
+cast is open source under the MIT license. This is a personal project; contributions
+and pull requests are not currently accepted. Issues may be used to report bugs,
+with no response-time commitment.
 
 ## Build and run
 
