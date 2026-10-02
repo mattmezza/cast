@@ -1,5 +1,61 @@
 # Publishing a release
 
+## Automated Arch packages
+
+`.github/workflows/release-arch.yml` runs when a GitHub release is published. It
+builds the exact tagged commit in the official Arch Linux container with Xorg,
+Wayland and the Clay/SDL3 panel enabled. A dedicated ordinary user runs makepkg;
+unit, IPC, mock portal, Xorg and native panel checks must pass before asset upload.
+Only the publishing job gets release write permission. External actions are pinned
+to commits, and the installed Arch package versions are recorded in the build manifest.
+
+For v0.2 (executable/package version 0.2.0):
+
+```sh
+git push origin main
+git tag -a v0.2 -m 'cast v0.2'
+git push origin refs/tags/v0.2
+make release-ci RELEASE_TAG=v0.2 RELEASE_NOTES=docs/release-notes/0.2.0.md
+gh run list --workflow release-arch.yml
+```
+
+`release-ci` validates the clean, pushed tagged revision and creates the release
+using gh. It delegates the build and upload to Actions. A release page exists while
+the build is running; wait for a successful workflow and inspect its assets before
+announcing it. Existing releases and existing asset names are never overwritten.
+Keep v0.1 unchanged. The tag must be `vVERSION`, or `vMAJOR.MINOR` for a zero patch
+version; both the Makefile and executable version must match.
+
+The six x86_64 assets use the prefix `cast-VERSION-archlinux-x86_64`:
+
+- `.pkg.tar.zst`: installable pacman package with declared runtime dependencies.
+- `.tar.gz`: staged `/usr` executable, documentation, examples and licenses.
+- `-source.tar.gz`: exact project source, including vendored code and fonts.
+- `-build-info.txt`: package build metadata and direct runtime libraries.
+- `-source-commit.txt`: exact commit.
+- `-SHA256SUMS`: checksums for the other five files.
+
+These binaries target current Arch x86_64 library ABIs. Other distributions and
+architectures can build from source. The package does not create a camera device,
+start a service, or replace user configuration. `cast setup` explains the separate
+camera/conferencing steps. `cast update [VERSION]` and the curl installer download
+the package and verify its checksum before invoking pacman. A checksum from the
+same HTTPS release checks download integrity; it is not a separate signing key.
+
+Test the workflow without publishing or pushing a tag:
+
+```sh
+gh workflow run release-arch.yml --ref main
+```
+
+An empty `release_tag` input tests the selected commit and preserves downloadable
+Actions artifacts for 14 days. To attach missing assets after a build/upload failure,
+dispatch with `-f release_tag=v0.2`; this verifies the existing release and exact
+tag before building. Any already-uploaded asset name causes publication to stop;
+inspect partial uploads rather than silently replacing them.
+
+## Local host release builds
+
 GitHub releases contain four explicit assets: `cast-VERSION-source.tar.gz`,
 `cast-VERSION-linux-ARCH.tar.gz`, `cast-VERSION-dependency-sources.tar.gz`, and
 `SHA256SUMS`. The project source asset is a Git

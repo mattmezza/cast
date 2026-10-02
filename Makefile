@@ -185,6 +185,8 @@ release-check:
 	sh packaging/release.sh check '$(VERSION)' '$(RELEASE_NOTES)' '$(X11)' '$(WAYLAND)' '$(RELEASE_TAG)' '$(PANEL)'
 release:
 	sh packaging/release.sh release '$(VERSION)' '$(RELEASE_NOTES)' '$(X11)' '$(WAYLAND)' '$(RELEASE_TAG)' '$(PANEL)'
+release-ci:
+	sh packaging/release.sh release-ci '$(VERSION)' '$(RELEASE_NOTES)' 1 1 '$(RELEASE_TAG)' 1
 clean:
 	rm -rf build cast
-.PHONY: FORCE all check check-unit check-panel-routes check-wayland check-wayland-unit check-xorg check-loopback check-panel benchmark sanitize install uninstall package-check package release-check release clean
+.PHONY: FORCE all check check-unit check-panel-routes check-wayland check-wayland-unit check-xorg check-loopback check-panel benchmark sanitize install uninstall package-check package release-check release-ci release clean

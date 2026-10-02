@@ -10,7 +10,7 @@ notes=${3:-}
 x11=${4:-1}
 wayland=${5:-0}
 panel=${7:-0}
-case "$action" in check|release) ;; *) fail 'expected check or release' ;; esac
+case "$action" in check|release|release-ci) ;; *) fail 'expected check, release or release-ci' ;; esac
 case "$version" in ''|*[!0-9A-Za-z.-]*) fail 'invalid release version' ;; esac
 case "$x11:$wayland" in 0:0|0:1|1:0|1:1) ;; *) fail 'X11 and WAYLAND must be 0 or 1' ;; esac
 case "$panel" in 0|1) ;; *) fail 'PANEL must be 0 or 1' ;; esac
@@ -53,6 +53,14 @@ check_release() {
 
 check_release
 printf 'Release checks passed: %s at %s (%s), X11=%s WAYLAND=%s PANEL=%s\n' "$tag" "$commit" "$repo" "$x11" "$wayland" "$panel"
+if [ "$action" = release-ci ]; then
+    # Creating a release with the user's gh token triggers the published workflow.
+    # The workflow checks out this tag and attaches tested Arch artifacts afterwards.
+    gh release create "$tag" --repo "https://github.com/$repo" --verify-tag \
+        --fail-on-no-commits --title "cast $tag" --notes-file "$notes"
+    printf 'Published %s; follow the Arch Linux release workflow for package uploads.\n' "$tag"
+    exit 0
+fi
 [ "$action" = release ] || exit 0
 
 arch=$(uname -m)
