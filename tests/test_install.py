@@ -172,7 +172,7 @@ class InstallerTests(unittest.TestCase):
         self.assert_failed_cleanly(result, 'unsupported version tag')
 
     def test_invalid_tags_and_arguments_never_download(self):
-        for arguments in [('v0.2;touch bad',), ('../v0.2',), ('v0',), ('v0..2',),
+        for arguments in [('v0.2;touch bad',), ('v0.2\nother',), ('../v0.2',), ('v0',), ('v0..2',),
                           ('v0.2.0.1',), ('--download-only',), ('v0.2', 'v0.3')]:
             for embedded in (False, True):
                 with self.subTest(arguments=arguments, embedded=embedded):

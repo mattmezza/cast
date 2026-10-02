@@ -10,7 +10,9 @@ usage() {
         'Stop the cast daemon before installing; start it again after the update.'
 }
 valid_tag() {
-    printf '%s\n' "$1" | awk 'length($0) <= 64 && /^v[0-9]+\.[0-9]+(\.[0-9]+)?$/ { ok=1 } END { exit !ok }'
+    printf '%s\n' "$1" | awk 'NR > 1 { invalid=1 }
+        length($0) <= 64 && /^v[0-9]+\.[0-9]+(\.[0-9]+)?$/ { ok=1 }
+        END { exit !ok || invalid }'
 }
 
 tag=latest

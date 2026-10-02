@@ -199,3 +199,24 @@ the combined executable remains installed in the checkout. Staged install ran
 --version and matched ./cast exactly, and staged uninstall removed it. Man page,
 configuration example and license files were present; no system install or user
 configuration modification was performed.
+
+## Optional panel and distribution validation
+
+The combined Xorg/Wayland/panel build passed `-Werror`, the full unit/IPC/mock
+portal suite, and native panel interaction checks on a private Xvfb display.
+Transport checks cover peer ownership, sealed bounded frame mappings, pause/freeze
+privacy barriers, session settings, stale generations, reconnect and cancellable
+shutdown. Camera edits preserve centered resizing and free positioning; zoom
+toggle remembers the factor selected through the panel. Both Xorg capture paths
+verify authenticated panel and window-manager frame exclusion. A Wayland-only
+panel build passed in an isolated source tree. No panel tests used the user's
+desktop or physical camera; actual Wayland panel/capture integration remains manual.
+
+Arch packaging was checked through ordinary-user makepkg with distribution
+hardening and LTO, using an isolated official SDL3_ttf SDK without system installation.
+The CI recipe passed all checks and emitted six matching Arch-qualified release
+assets with verified checksums, declared runtime dependencies and no bundled SDK.
+This local check is not a clean Arch chroot result; the release workflow provides
+the fresh Arch environment. Installer tests use offline stubs and real private
+terminals, checking package integrity, malformed metadata, privilege routing,
+download failures and relocated embedded execution without invoking real sudo.
