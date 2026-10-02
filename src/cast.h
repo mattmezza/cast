@@ -71,7 +71,7 @@ typedef struct {
 } State;
 typedef struct {
     bool capture, cursor_metadata, embedded_cursor, input, region_selection, window_selection,
-        preview;
+        preview, panel_exclusion;
     char description[256];
 } Capabilities;
 typedef struct {
@@ -101,6 +101,10 @@ int platform_reconfigure(Platform *, const Config *, char *, size_t);
 void platform_events(Platform *, Compositor *, const Config *, bool privacy);
 int platform_preview(Platform *, const Frame *, const State *, const Config *, char *, size_t);
 void platform_doctor(const Config *, char *, size_t);
+/* Only the authenticated panel transport may register its own native window. */
+int platform_panel_register(Platform *, uint64_t window, int peer_pid, char *, size_t);
+void platform_panel_unregister(Platform *);
+void platform_panel_status(Platform *, char *, size_t);
 /* Optional portal backend selected by the platform factory. */
 Platform *wayland_open(const Config *, char *, size_t);
 void wayland_close(Platform *);

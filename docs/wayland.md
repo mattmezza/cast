@@ -47,7 +47,15 @@ require metadata. No second cursor is drawn over an embedded cursor.
 | Embedded cursor | Desktop capture excludes cursor; drawn separately | Implemented when portal advertises it |
 | Passive keys and click observation | Implemented XI2; desktop acceptance pending | Unsupported |
 | Preview | Implemented; recursion constraints apply | Unsupported |
+| Separate panel exclusion | Authenticated panel and WM frame neutral-masked in monitor/region; absent from application pixmaps | Unsupported; portal captures may include the panel |
 | V4L2 camera/output, layouts, recording/audio | Shared implementation | Shared implementation |
+
+The optional control panel can display daemon-produced frames on Wayland, but the
+ScreenCast portal does not provide a general way for cast to exclude that local
+window from a shared monitor. Panel status explicitly reports unsupported exclusion.
+Place the panel on an unshared display, choose a separate application window in the
+portal when offered, or hide the panel before sharing. Its authenticated connection
+and local preview do not imply that the compositor removes it from portal pixels.
 
 Implemented describes code paths, not a claim of hardware or conferencing
 validation. See [hardware acceptance](hardware-acceptance.md) for required tests.

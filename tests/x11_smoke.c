@@ -278,6 +278,186 @@ static void preview_tests(Display *d, Platform *p, Config *cfg, Compositor *c)
     frame_free(&capture);
 }
 
+/* A fake WM frame exercises decoration exclusion without a desktop WM. */
+static void panel_tests(Display *d, Platform *p, Config *cfg, Compositor *comp)
+{
+    char error[CAST_ERR], status[CAST_ERR];
+    Frame capture = {0}, live = {0}, recording = {0};
+    Cursor cursor;
+    Window root = DefaultRootWindow(d);
+    Window frame = XCreateSimpleWindow(d, root, 60, 70, 230, 150, 3, 0x123456, 0x456789);
+    Window panel = XCreateSimpleWindow(d, frame, 10, 25, 210, 115, 0, 0, 0xff3377);
+    XClassHint hint = {.res_name = "cast-panel", .res_class = "CastPanel"};
+    XSetClassHint(d, panel, &hint);
+    Atom pid_atom = XInternAtom(d, "_NET_WM_PID", false);
+    Atom type_atom = XInternAtom(d, "_NET_WM_WINDOW_TYPE", false);
+    Atom normal = XInternAtom(d, "_NET_WM_WINDOW_TYPE_NORMAL", false);
+    unsigned long pid = (unsigned long)getpid();
+    XChangeProperty(d, panel, pid_atom, XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&pid, 1);
+    XChangeProperty(d, panel, type_atom, XA_ATOM, 32, PropModeReplace, (unsigned char *)&normal, 1);
+    XMapWindow(d, panel);
+    XMapWindow(d, frame);
+    XSync(d, false);
+    assert(platform_capabilities(p).panel_exclusion);
+    assert(platform_panel_register(p, panel, (int)pid + 1, error, sizeof(error)) < 0);
+    assert(platform_panel_register(p, root, (int)pid, error, sizeof(error)) < 0);
+    hint.res_class = "SomeOtherApplication";
+    XSetClassHint(d, panel, &hint);
+    XSync(d, false);
+    assert(platform_panel_register(p, panel, (int)pid, error, sizeof(error)) < 0);
+    hint.res_class = "CastPanel";
+    XSetClassHint(d, panel, &hint);
+    Atom dock = XInternAtom(d, "_NET_WM_WINDOW_TYPE_DOCK", false);
+    XChangeProperty(d, panel, type_atom, XA_ATOM, 32, PropModeReplace, (unsigned char *)&dock, 1);
+    XSync(d, false);
+    assert(platform_panel_register(p, panel, (int)pid, error, sizeof(error)) < 0);
+    XChangeProperty(d, panel, type_atom, XA_ATOM, 32, PropModeReplace, (unsigned char *)&normal, 1);
+    XSync(d, false);
+    assert(platform_panel_register(p, panel, (int)pid, error, sizeof(error)) == 0);
+    XWindowAttributes attr;
+    assert(XGetWindowAttributes(d, frame, &attr));
+    assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) == 0);
+    assert_preview_mask(&capture, &attr, 0, 0, cfg->pause_color);
+    platform_panel_status(p, status, sizeof(status));
+    assert(strstr(status, "overlap") && strstr(status, "neutral-masked"));
+    /* Both output lanes receive already-excluded pixels through zoom and layout. */
+    Config output = *cfg;
+    output.width = capture.width;
+    output.height = capture.height;
+    output.zoom_factor = 2;
+    output.zoom_follow = false;
+    output.keys = output.clicks = output.cursor = false;
+    assert(compositor_render(comp, &output, &capture, NULL, NULL, false, &live, error,
+                             sizeof(error)) == 0);
+    assert(compositor_render(comp, &output, &capture, NULL, NULL, true, &recording, error,
+                             sizeof(error)) == 0);
+    assert(!memcmp(live.data, recording.data, (size_t)live.stride * live.height));
+    for (int y = 0; y < live.height; y++) {
+        for (int x = 0; x < live.width; x++) {
+            assert(pixel(&live, x, y) == 0 || pixel(&live, x, y) == cfg->pause_color);
+        }
+    }
+    XSelectInput(d, panel, StructureNotifyMask);
+    XSelectInput(d, frame, StructureNotifyMask);
+    XSync(d, false);
+    while (XPending(d)) {
+        XEvent event;
+        XNextEvent(d, &event);
+    }
+    for (int i = 0; i < 5; i++) {
+        assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) == 0);
+    }
+    XSync(d, false);
+    while (XPending(d)) {
+        XEvent event;
+        XNextEvent(d, &event);
+        assert(event.type != MapNotify && event.type != UnmapNotify);
+    }
+    XMoveResizeWindow(d, frame, 120, 130, 260, 190);
+    XMoveResizeWindow(d, panel, 10, 25, 240, 155);
+    XSync(d, false);
+    assert(XGetWindowAttributes(d, frame, &attr));
+    assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) == 0);
+    assert_preview_mask(&capture, &attr, 0, 0, cfg->pause_color);
+    Window new_frame = XCreateSimpleWindow(d, root, 200, 170, 300, 220, 5, 0x123456, 0x456789);
+    XReparentWindow(d, panel, new_frame, 10, 25);
+    XMapWindow(d, new_frame);
+    XUnmapWindow(d, frame);
+    XSync(d, false);
+    assert(XGetWindowAttributes(d, new_frame, &attr));
+    assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) == 0);
+    assert_preview_mask(&capture, &attr, 0, 0, cfg->pause_color);
+    XReparentWindow(d, panel, frame, 10, 25);
+    XMapWindow(d, frame);
+    XDestroyWindow(d, new_frame);
+    XSync(d, false);
+    assert(XGetWindowAttributes(d, frame, &attr));
+    char *region[] = {"capture", "region", "150", "150", "140", "110"};
+    command(p, cfg, 6, region);
+    assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) == 0);
+    assert_preview_mask(&capture, &attr, 150, 150, cfg->pause_color);
+    char *clipped[] = {"capture", "region", "350", "290", "140", "110"};
+    command(p, cfg, 6, clipped);
+    assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) == 0);
+    assert_preview_mask(&capture, &attr, 350, 290, cfg->pause_color);
+    XMoveWindow(d, frame, 600, 450);
+    XSync(d, false);
+    assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) == 0);
+    assert(XGetWindowAttributes(d, frame, &attr));
+    assert_preview_mask(&capture, &attr, 350, 290, cfg->pause_color);
+    platform_panel_status(p, status, sizeof(status));
+    assert(strstr(status, "outside source"));
+    char *monitor[] = {"capture", "monitor"};
+    command(p, cfg, 2, monitor);
+    XMoveWindow(d, frame, 450, 350);
+    XSync(d, false);
+    /* Selected app pixels remain intact when the separate panel overlaps. */
+    Window app = XCreateSimpleWindow(d, root, 430, 330, 180, 120, 0, 0, 0x778899);
+    Atom wm_state = XInternAtom(d, "WM_STATE", false);
+    unsigned long app_state[2] = {1, 0};
+    XChangeProperty(d, app, wm_state, wm_state, 32, PropModeReplace, (unsigned char *)app_state, 2);
+    Atom active = XInternAtom(d, "_NET_ACTIVE_WINDOW", false);
+    XChangeProperty(d, root, active, XA_WINDOW, 32, PropModeReplace, (unsigned char *)&app, 1);
+    XMapWindow(d, app);
+    XSync(d, false);
+    char *select[] = {"capture", "window", "active"};
+    command(p, cfg, 3, select);
+    XClearWindow(d, app);
+    XRaiseWindow(d, frame);
+    XSync(d, false);
+    assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) == 0);
+    for (int y = 0; y < capture.height; y++) {
+        for (int x = 0; x < capture.width; x++) {
+            assert(pixel(&capture, x, y) == 0x778899);
+        }
+    }
+    platform_panel_status(p, status, sizeof(status));
+    assert(strstr(status, "XComposite"));
+    XChangeProperty(d, root, active, XA_WINDOW, 32, PropModeReplace, (unsigned char *)&panel, 1);
+    XSync(d, false);
+    assert(platform_command(p, cfg, 3, select, error, sizeof(error)) < 0);
+    XChangeProperty(d, root, active, XA_WINDOW, 32, PropModeReplace, (unsigned char *)&frame, 1);
+    XSync(d, false);
+    assert(platform_command(p, cfg, 3, select, error, sizeof(error)) < 0);
+    command(p, cfg, 2, monitor);
+    XDestroyWindow(d, app);
+    /* Property identity changes revoke registration instead of claiming another window. */
+    pid++;
+    XChangeProperty(d, panel, pid_atom, XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&pid, 1);
+    pump(d, p, cfg, comp, false);
+    platform_panel_status(p, status, sizeof(status));
+    assert(strstr(status, "no panel window registered"));
+    pid--;
+    XChangeProperty(d, panel, pid_atom, XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&pid, 1);
+    XSync(d, false);
+    assert(platform_panel_register(p, panel, (int)pid, error, sizeof(error)) == 0);
+    XUnmapWindow(d, frame);
+    pump(d, p, cfg, comp, false);
+    assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) == 0);
+    for (int y = 0; y < capture.height; y++) {
+        for (int x = 0; x < capture.width; x++) {
+            assert(pixel(&capture, x, y) == 0);
+        }
+    }
+    platform_panel_status(p, status, sizeof(status));
+    assert(strstr(status, "hidden"));
+    XMapWindow(d, frame);
+    XSync(d, false);
+    platform_panel_unregister(p);
+    assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) == 0);
+    assert(pixel(&capture, 470, 390) == 0xff3377);
+    assert(platform_panel_register(p, panel, (int)pid, error, sizeof(error)) == 0);
+    XDestroyWindow(d, frame);
+    pump(d, p, cfg, comp, false);
+    assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) == 0);
+    platform_panel_status(p, status, sizeof(status));
+    assert(strstr(status, "no panel window registered"));
+    assert(platform_panel_register(p, panel, (int)pid, error, sizeof(error)) < 0);
+    frame_free(&capture);
+    frame_free(&live);
+    frame_free(&recording);
+}
+
 static void keyboard_tests(Display *d, Platform *p, Config *cfg, Compositor *c)
 {
     cfg->keys = true;
@@ -480,11 +660,12 @@ static void exercise(Display *d, Platform *p, Config *cfg)
     assert(strstr(error, "destroyed"));
     command(p, cfg, 2, monitor);
     preview_tests(d, p, cfg, c);
+    panel_tests(d, p, cfg, c);
     frame_free(&capture);
     compositor_destroy(c);
     puts("Xvfb: root/window pixels, resize, remap/minimize/destroy, atomic regions, selection "
          "cancellation, XI2/XKB mapping/modifiers/repeat, input privacy, stable floating preview "
-         "mapping/drag and neutral footprint exclusion "
+         "mapping/drag, authenticated panel/frame geometry and output exclusion "
          "passed");
 }
 

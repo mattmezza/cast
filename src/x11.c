@@ -44,7 +44,8 @@ typedef struct {
 } Preview;
 typedef struct {
     Display *d;
-    Window root, selected, preview, selection;
+    Window root, selected, preview, selection, panel;
+    int panel_pid;
     Atom wm_delete, wm_state, active_window;
     int screen, xi_opcode, randr_base, xkb_base;
     bool xi, shm, composite, xkb, redirected, shm_attached, privacy, preview_disabled;
@@ -297,9 +298,37 @@ static bool client_window(Xorg *p, Window win)
     }
     return rc == Success && type != None;
 }
+static bool panel_window(Xorg *p, Window candidate)
+{
+    if (!p->panel || candidate == p->root) {
+        return false;
+    }
+    bool found = false;
+    begin(p);
+    Window window = p->panel;
+    for (int level = 0; window && window != p->root && level < 32; level++) {
+        if (candidate == window) {
+            found = true;
+            break;
+        }
+        Window root, parent, *children = NULL;
+        unsigned count;
+        Status queried = XQueryTree(p->d, window, &root, &parent, &children, &count);
+        if (children) {
+            XFree(children);
+        }
+        if (!queried || root != p->root) {
+            break;
+        }
+        window = parent;
+    }
+    return end(p) && found;
+}
+
 static Window find_client(Xorg *p, Window win, int depth, int *remaining)
 {
-    if (!win || win == p->preview || win == p->selection || depth > 12 || --*remaining < 0) {
+    if (!win || win == p->preview || win == p->selection || panel_window(p, win) || depth > 12 ||
+        --*remaining < 0) {
         return 0;
     }
     if (client_window(p, win)) {
@@ -321,8 +350,10 @@ static Window find_client(Xorg *p, Window win, int depth, int *remaining)
 }
 static int window_select(Xorg *p, Window win, char *e, size_t n)
 {
-    if (!win || win == p->root || win == p->preview || win == p->selection) {
-        return fail(e, n, "select a normal application window, not the desktop or cast preview");
+    if (!win || win == p->root || win == p->preview || win == p->selection ||
+        panel_window(p, win)) {
+        return fail(e, n,
+                    "select a normal application window, not the desktop or cast preview/panel");
     }
     XWindowAttributes a;
     begin(p);
@@ -549,7 +580,8 @@ Capabilities x11_capabilities(Platform *platform)
                       .input = p->xi && p->xkb,
                       .region_selection = true,
                       .window_selection = p->composite,
-                      .preview = true};
+                      .preview = true,
+                      .panel_exclusion = true};
     snprintf(
         c.description, sizeof(c.description),
         "Xorg: %s capture, XRandR monitors, %s input, %s window pixmaps; cursor drawn separately",
@@ -707,6 +739,209 @@ static int source_rect(Xorg *p, Drawable *drawable, Visual **visual, int *depth,
     *depth = DefaultDepth(p->d, p->screen);
     return 0;
 }
+typedef struct {
+    int x, y, width, height;
+    bool visible;
+} WindowRect;
+
+/* The root child enclosing a managed client includes its WM decorations. */
+static bool window_rect(Xorg *p, Window window, bool include_frame, WindowRect *rect)
+{
+    memset(rect, 0, sizeof(*rect));
+    XWindowAttributes attr;
+    Window child;
+    begin(p);
+    Status exists = XGetWindowAttributes(p->d, window, &attr);
+    bool visible = exists && attr.map_state == IsViewable;
+    Window outer = window;
+    bool tree_ok = true;
+    if (exists && include_frame) {
+        bool reached_root = false;
+        for (int level = 0; level < 32; level++) {
+            Window root, parent, *children = NULL;
+            unsigned count;
+            Status queried = XQueryTree(p->d, outer, &root, &parent, &children, &count);
+            if (children) {
+                XFree(children);
+            }
+            if (!queried || root != p->root || !parent) {
+                tree_ok = false;
+                break;
+            }
+            if (parent == p->root) {
+                reached_root = true;
+                break;
+            }
+            outer = parent;
+        }
+        tree_ok = tree_ok && reached_root;
+        if (tree_ok) {
+            exists = XGetWindowAttributes(p->d, outer, &attr);
+        }
+    }
+    Status positioned = exists && tree_ok ? XTranslateCoordinates(p->d, outer, p->root, 0, 0,
+                                                                  &rect->x, &rect->y, &child)
+                                          : 0;
+    bool checked = end(p);
+    if (!checked || !exists || !tree_ok || !positioned) {
+        return false;
+    }
+    rect->x -= attr.border_width;
+    rect->y -= attr.border_width;
+    rect->width = attr.width + 2 * attr.border_width;
+    rect->height = attr.height + 2 * attr.border_width;
+    rect->visible = visible && attr.map_state == IsViewable;
+    return true;
+}
+
+static bool panel_identity(Xorg *p, Window window, int peer_pid)
+{
+    XWindowAttributes attr;
+    XClassHint hint = {0};
+    Atom pid_atom = XInternAtom(p->d, "_NET_WM_PID", False);
+    Atom type_atom = XInternAtom(p->d, "_NET_WM_WINDOW_TYPE", False);
+    Atom normal_atom = XInternAtom(p->d, "_NET_WM_WINDOW_TYPE_NORMAL", False);
+    Atom type;
+    int format;
+    unsigned long count, remaining;
+    unsigned char *value = NULL;
+    begin(p);
+    Status exists = XGetWindowAttributes(p->d, window, &attr);
+    bool normal = exists && attr.class == InputOutput && !attr.override_redirect;
+    bool class_ok = XGetClassHint(p->d, window, &hint) && hint.res_class &&
+                    !strcmp(hint.res_class, "CastPanel");
+    if (hint.res_name) {
+        XFree(hint.res_name);
+    }
+    if (hint.res_class) {
+        XFree(hint.res_class);
+    }
+    bool pid_ok = XGetWindowProperty(p->d, window, pid_atom, 0, 1, False, XA_CARDINAL, &type,
+                                     &format, &count, &remaining, &value) == Success &&
+                  type == XA_CARDINAL && format == 32 && count == 1 && !remaining && value &&
+                  *(unsigned long *)value == (unsigned long)peer_pid;
+    if (value) {
+        XFree(value);
+        value = NULL;
+    }
+    if (XGetWindowProperty(p->d, window, type_atom, 0, 16, False, XA_ATOM, &type, &format, &count,
+                           &remaining, &value) != Success) {
+        normal = false;
+    } else if (type != None) {
+        bool found = false;
+        if (type == XA_ATOM && format == 32 && value && !remaining) {
+            for (unsigned long i = 0; i < count; i++) {
+                found = found || ((Atom *)value)[i] == normal_atom;
+            }
+        }
+        normal = normal && found;
+    }
+    if (value) {
+        XFree(value);
+    }
+    return end(p) && normal && class_ok && pid_ok;
+}
+
+int x11_panel_register(Platform *platform, uint64_t window, int peer_pid, char *e, size_t n)
+{
+    Xorg *p = (Xorg *)platform;
+    if (!window || window > UINT32_MAX || peer_pid <= 0 || window == p->root ||
+        window == p->selected || window == p->preview || window == p->selection ||
+        !panel_identity(p, (Window)window, peer_pid)) {
+        return fail(
+            e, n,
+            "panel window must be a normal CastPanel window owned by the authenticated peer PID");
+    }
+    WindowRect rect;
+    if (!window_rect(p, (Window)window, true, &rect)) {
+        return fail(e, n, "panel window geometry is unavailable");
+    }
+    begin(p);
+    XSelectInput(p->d, (Window)window, StructureNotifyMask | PropertyChangeMask);
+    if (!end(p)) {
+        return fail(e, n, "panel window disappeared during registration");
+    }
+    p->panel = (Window)window;
+    p->panel_pid = peer_pid;
+    snprintf(e, n, "panel registered: overlapping monitor/region pixels will be neutral-masked");
+    return 0;
+}
+
+void x11_panel_unregister(Platform *platform)
+{
+    Xorg *p = (Xorg *)platform;
+    p->panel = None;
+    p->panel_pid = 0;
+}
+
+static bool rect_overlaps_source(const Xorg *p, const WindowRect *rect)
+{
+    return rect->visible && rect->x < p->sx + p->sw && p->sx < rect->x + rect->width &&
+           rect->y < p->sy + p->sh && p->sy < rect->y + rect->height;
+}
+
+void x11_panel_status(Platform *platform, char *e, size_t n)
+{
+    Xorg *p = (Xorg *)platform;
+    if (!p->panel) {
+        snprintf(e, n, "available: Xorg neutral masking; no panel window registered");
+        return;
+    }
+    WindowRect rect;
+    if (!window_rect(p, p->panel, true, &rect)) {
+        x11_panel_unregister(platform);
+        snprintf(e, n, "available: registered panel window disappeared");
+    } else if (!rect.visible) {
+        snprintf(e, n, "hidden: panel is outside visible captured pixels");
+    } else if (!strcmp(p->kind, "window")) {
+        snprintf(e, n,
+                 "excluded: separate panel is absent from the application's XComposite pixmap");
+    } else {
+        Drawable drawable;
+        Visual *visual;
+        int depth;
+        char error[CAST_ERR];
+        if (source_rect(p, &drawable, &visual, &depth, error, sizeof(error)) < 0) {
+            snprintf(e, n, "unavailable: capture source geometry is unavailable");
+        } else {
+            snprintf(e, n,
+                     rect_overlaps_source(p, &rect)
+                         ? "overlap: panel and WM frame are neutral-masked; covered content is lost"
+                         : "outside source: panel does not overlap the captured rectangle");
+        }
+    }
+}
+
+static void mask_window_rect(Xorg *p, Frame *out, const WindowRect *rect)
+{
+    if (!rect_overlaps_source(p, rect)) {
+        return;
+    }
+    int left = rect->x - p->sx, top = rect->y - p->sy;
+    int right = left + rect->width, bottom = top + rect->height;
+    if (left < 0) {
+        left = 0;
+    }
+    if (top < 0) {
+        top = 0;
+    }
+    if (right > out->width) {
+        right = out->width;
+    }
+    if (bottom > out->height) {
+        bottom = out->height;
+    }
+    for (int y = top; y < bottom; y++) {
+        uint8_t *d = out->data + (size_t)y * out->stride + 4 * left;
+        for (int x = left; x < right; x++, d += 4) {
+            d[0] = (uint8_t)(p->preview_mask_color >> 16);
+            d[1] = (uint8_t)(p->preview_mask_color >> 8);
+            d[2] = (uint8_t)p->preview_mask_color;
+            d[3] = 255;
+        }
+    }
+}
+
 int x11_capture(Platform *platform, Frame *out, Cursor *cursor, char *e, size_t n)
 {
     Xorg *p = (Xorg *)platform;
@@ -726,23 +961,13 @@ int x11_capture(Platform *platform, Frame *out, Cursor *cursor, char *e, size_t 
         return fail(e, n, "cannot allocate Xorg capture frame");
     }
     bool outline = p->selecting && p->dragging && p->selection;
-    bool mask_preview = false;
-    int px = 0, py = 0, pw = 0, ph = 0;
-    if (drawable == p->root && p->preview && !p->preview_disabled) {
-        XWindowAttributes attr;
-        Window child;
-        begin(p);
-        Status exists = XGetWindowAttributes(p->d, p->preview, &attr);
-        Status position =
-            exists ? XTranslateCoordinates(p->d, p->preview, p->root, 0, 0, &px, &py, &child) : 0;
-        bool checked = end(p);
-        if (checked && exists && position && attr.map_state == IsViewable) {
-            px -= attr.border_width;
-            py -= attr.border_width;
-            pw = attr.width + 2 * attr.border_width;
-            ph = attr.height + 2 * attr.border_width;
-            mask_preview =
-                px < p->sx + p->sw && p->sx < px + pw && py < p->sy + p->sh && p->sy < py + ph;
+    WindowRect preview = {0}, panel = {0};
+    if (drawable == p->root) {
+        if (p->preview && !p->preview_disabled) {
+            window_rect(p, p->preview, false, &preview);
+        }
+        if (p->panel && !window_rect(p, p->panel, true, &panel)) {
+            x11_panel_unregister(platform);
         }
     }
     if (outline) {
@@ -778,32 +1003,10 @@ int x11_capture(Platform *platform, Frame *out, Cursor *cursor, char *e, size_t 
     /* Pixmap readback has no associated visual: XGetImage/XShmGetImage may return
      * zero channel masks. The selected window visual describes its backing pixmap. */
     image_to_frame(image, visual, out);
-    if (mask_preview) {
-        /* Root readback includes the floating preview. Replace its entire footprint
-         * in our owned frame, including the local-only header and window border. */
-        int left = px - p->sx, top = py - p->sy;
-        int right = left + pw, bottom = top + ph;
-        if (left < 0) {
-            left = 0;
-        }
-        if (top < 0) {
-            top = 0;
-        }
-        if (right > out->width) {
-            right = out->width;
-        }
-        if (bottom > out->height) {
-            bottom = out->height;
-        }
-        for (int j = top; j < bottom; j++) {
-            uint8_t *d = out->data + (size_t)j * out->stride + 4 * left;
-            for (int i = left; i < right; i++, d += 4) {
-                d[0] = (uint8_t)(p->preview_mask_color >> 16);
-                d[1] = (uint8_t)(p->preview_mask_color >> 8);
-                d[2] = (uint8_t)p->preview_mask_color;
-                d[3] = 255;
-            }
-        }
+    /* Neutral masking happens in source pixels, before output zoom/layout composition. */
+    if (drawable == p->root) {
+        mask_window_rect(p, out, &preview);
+        mask_window_rect(p, out, &panel);
     }
     if (image != p->image) {
         XDestroyImage(image);
@@ -1274,6 +1477,13 @@ void x11_events(Platform *platform, Compositor *comp, const Config *cfg, bool pr
         if (ev.type == p->randr_base + RRScreenChangeNotify) {
             XRRUpdateConfiguration(&ev);
             continue;
+        }
+        if (ev.type == PropertyNotify && ev.xproperty.window == p->panel &&
+            !panel_identity(p, p->panel, p->panel_pid)) {
+            x11_panel_unregister(platform);
+        }
+        if (ev.type == DestroyNotify && ev.xdestroywindow.window == p->panel) {
+            x11_panel_unregister(platform);
         }
         if (ev.type == UnmapNotify && ev.xunmap.window == p->selected) {
             p->window_unmapped = true;

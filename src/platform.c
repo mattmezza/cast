@@ -258,3 +258,43 @@ void platform_doctor(const Config *cfg, char *e, size_t n)
                                            : "capture: requested backend unavailable in this "
                                              "build; rebuild with X11=1 and/or WAYLAND=1");
 }
+
+int platform_panel_register(Platform *p, uint64_t window, int peer_pid, char *e, size_t n)
+{
+#ifdef WITH_X11
+    if (p->backend == XORG) {
+        return x11_panel_register(p->impl, window, peer_pid, e, n);
+    }
+#else
+    (void)p;
+    (void)window;
+    (void)peer_pid;
+#endif
+    if (!window) {
+        snprintf(e, n, "panel attached; exclusion is unsupported by this capture backend");
+        return 0;
+    }
+    return error(e, n, "panel exclusion is unsupported by this capture backend");
+}
+void platform_panel_unregister(Platform *p)
+{
+#ifdef WITH_X11
+    if (p->backend == XORG) {
+        x11_panel_unregister(p->impl);
+    }
+#else
+    (void)p;
+#endif
+}
+void platform_panel_status(Platform *p, char *e, size_t n)
+{
+#ifdef WITH_X11
+    if (p->backend == XORG) {
+        x11_panel_status(p->impl, e, n);
+        return;
+    }
+#else
+    (void)p;
+#endif
+    snprintf(e, n, "unsupported: this backend cannot exclude the panel from captured pixels");
+}

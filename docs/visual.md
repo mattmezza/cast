@@ -144,6 +144,25 @@ visible. The preview's status labels and image are never copied into this rectan
 preventing recursive preview capture without per-frame unmapping or desktop flashes.
 An XComposite application-window capture reads that application's named pixmap,
 which excludes cast's separate preview window and requires no neutral rectangle.
+The optional separate-process control panel uses the same source neutral masking on
+Xorg. Only the authenticated panel connection can register an X window; cast checks
+its `_NET_WM_PID` against the socket peer PID, its `CastPanel` class and its normal
+window type. X11 window properties are integrity checks within the user's desktop,
+not a security boundary against another client of that X server. The current enclosing
+root child supplies the whole managed window footprint, including WM decorations and
+border. Moving, resizing, hiding, reparenting or destroying the panel updates its
+footprint; monitor and numeric-region edges clip the rectangle. Panel status reports
+whether exclusion is available, the window is hidden or outside the source, or covered
+content is being replaced. Separate application-window capture retains the application's
+pixmap pixels even beneath the panel. The panel cannot be selected as a source while
+registered, including selecting its enclosing WM frame. Closing its authenticated connection removes registration.
+
+Panel and preview masking occurs before composition, so live, recording, zoom, fit,
+freeze and the panel's program preview receive already-masked source pixels. This
+covers underlying desktop content; it does not recover that content or remove arbitrary
+windows. The panel remains mapped throughout ordinary acquisition. Wayland portals
+provide no equivalent exclusion guarantee; see [wayland.md](wayland.md).
+
 The interactive region-selection outline is still temporarily hidden during capture.
 Inspect actual virtual-camera or recording pixels on the target desktop.
 
@@ -163,7 +182,11 @@ and interactive regions, Escape cancellation, keymap/modifier/repeat/filter beha
 input privacy, unrelated click rejection and preview exclusion. It compiles with
 the project's warning flags. After reboot this complete suite passed with MIT-SHM enabled and disabled,
 including stable mapped preview, dragging, neutral footprint/geometry and application
-pixmap exclusion. Earlier sandbox socket/display restrictions no longer apply. Do not run `--exercise` on the user's desktop.
+pixmap exclusion. The panel regressions also check authenticated PID/class/type rejection,
+managed frame/border coverage, moved/resized and clipped geometry, exclusion in both
+composed output lanes, reparenting, property identity revocation, disappearance and
+unregister. Earlier sandbox socket/display restrictions no longer apply. Do not run
+`--exercise` on the user's desktop.
 
 To run on a system permitting a disposable X server, install Xvfb and the XTest
 development package, then run `make X11=1 WAYLAND=1 check-xorg`, or compile the
