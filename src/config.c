@@ -58,7 +58,7 @@ static const Setting settings[] = {
     I("camera", "y", camera_y, -4320, 4320, "0"),
     I("camera", "crop_x", crop_x, -16384, 16384, "0"),
     I("camera", "crop_y", crop_y, -16384, 16384, "0"),
-    B("camera", "mirror", mirror, "false"),
+    B("camera", "mirror", mirror, "true"),
     S("camera", "corner_order", corner_order, "bottom-right,bottom-left,top-left,top-right"),
     E("composition", "layout", layout, "overlay,split,screen,camera", "overlay"),
     S("composition", "layout_order", layout_order, "overlay,split,screen,camera"),

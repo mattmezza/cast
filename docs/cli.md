@@ -30,7 +30,9 @@ are clamped within the canvas. Impossible sizes fail. `camera move DX DY` is rel
 `camera shape rectangle|rounded|circle|next` cycles rectangle→rounded→circle.
 `camera aspect native|16:9|4:3|1:1` controls centered crop independently of mask;
 circle forces square crop. `camera crop move DX DY` adjusts source-pixel crop offsets.
-`camera mirror on|off|toggle` affects camera content only. `camera list` enumerates
+`camera mirror on|off|toggle` affects camera content only and defaults to on; the screen
+stays unmirrored. Use `cast camera mirror off` to disable it for the session, or set
+`mirror = false` in `[camera]` for a persistent default. `camera list` enumerates
 camera formats/devices. `camera device PATH` acquires the candidate before replacing
 current camera; permissions/format errors are actionable.
 

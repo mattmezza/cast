@@ -77,6 +77,10 @@ for a local view of the actual output. The physical camera LED can turn on durin
 startup privacy pause: cast opens the input device, while transmitted video stays
 neutral until explicit live resume.
 
+Camera content is mirrored by default; the screen stays unmirrored. Use
+`./cast camera mirror off` to disable it for the session, or set `mirror = false`
+in the configuration's `[camera]` section.
+
 With exclusive_caps=1, some consumers detect the camera only after the producer starts.
 Virtual audio is a separate optional device. cast cannot mute a physical mic selected
 directly by the call app; use the app's mute control or select cast's virtual microphone.

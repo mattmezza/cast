@@ -63,6 +63,8 @@ switches reset zoom and annotations. Camera move/position and crop move use pixe
 region x/y/width/height are relative to the selected monitor. Anchor sizing uses canvas
 width and a native 4:3 fallback until the camera's dimensions are known. Explicit
 aspect changes use centered cropping with bounded offsets. Circle uses a square crop.
+Camera content is mirrored by default; the screen stays unmirrored. Set `mirror = false`
+in `[camera]` to disable it persistently, or use `cast camera mirror off` for the session.
 
 The following table is the supported schema. `examples/cast.conf` includes every key.
 
@@ -91,7 +93,7 @@ The following table is the supported schema. `examples/cast.conf` includes every
 | camera | y | `0` | -4320–4320 (integer) |
 | camera | crop_x | `0` | -16384–16384 (integer) |
 | camera | crop_y | `0` | -16384–16384 (integer) |
-| camera | mirror | `false` | true / false |
+| camera | mirror | `true` | true / false |
 | camera | corner_order | `bottom-right,bottom-left,top-left,top-right` | Literal string |
 | composition | layout | `overlay` | overlay,split,screen,camera |
 | composition | layout_order | `overlay,split,screen,camera` | Literal string |
