@@ -290,3 +290,30 @@ cover the focused Outputs screen, new controls and drafts, automatic acknowledge
 preview target, utility window placement, all sections and minimum width at 1×/2×.
 These synthetic/private-display checks do not establish remote conference or
 real Wayland compositor compatibility.
+
+## v0.5 independent preview and footer typography
+
+The panel no longer fetches or renders actual-output frames. Route tests poison
+frame-fetch calls so reintroducing the old embedded preview fails the build. Home
+contains independent Live and Recording controls; the five configuration screens
+retain preview-window toggling and target selection. Native tests exercise utility
+window placement, faster wheel movement and reversal, drafts, footer/gap controls,
+preview target acknowledgement and the separate Xorg preview window at minimum and
+default widths and 1×/2× display scaling.
+
+Presentation pixel tests verify bottom-centered optional footers, exact configured
+title/subtitle gaps independent of font size, retained center position, shared
+wall-clock expansion, small-canvas fitting and disjoint clipping for pathological
+multiline text. Actual system-font replacement and restoration are compared in
+rendered pause/blur frames; production controller tests reload both fonts from a
+config file and reject runtime font edits. Core/visual tests pass Werror and
+ASan/UBSan with leak detection. Invalid legacy pause-message templates now fail
+before session mutation.
+
+Combined Xorg/Wayland/panel and isolated Wayland-only Werror checks pass. The latter
+links Fontconfig/FreeType and the panel without Xorg source or direct Xorg library
+dependencies. Xorg countdown checks run with a real panel attached in panel builds:
+initial start, cancellation and same-file cut-resume leave CastPanel open, fully
+hide CastPreview before media admission, and decode first-frame pixels to reject
+the cinematic guide. These are synthetic/private-display checks, not a claim of
+remote-conference or physical-camera coverage.

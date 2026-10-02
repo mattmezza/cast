@@ -118,7 +118,7 @@ terminal, explicitly enable live video and then select `cast` in the conference:
 ./cast pause
 ./cast resume
 ./cast record start
-./cast record pause                 # write a solid title/subtitle screen
+./cast record pause                 # write a solid title/subtitle/footer screen
 ./cast record resume
 ./cast record cut                   # omit this interval from the file
 ./cast record resume                # same file, with the configured countdown

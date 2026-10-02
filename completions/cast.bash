@@ -76,7 +76,7 @@ _cast_complete()
             annotations:3) offer='on off' ;;
             live:1) offer='pause resume toggle freeze unfreeze blur unblur message title subtitle footer' ;;
             live:2) [[ $first == blur ]] && offer='on off toggle' ;;
-            record:1) offer='start stop pause resume toggle freeze unfreeze blur unblur cut title subtitle footer' ;;
+            record:1) offer='start stop pause resume toggle freeze unfreeze blur unblur cut cancel title subtitle footer' ;;
             record:2)
                 if [[ $first == start ]]; then mode=file
                 elif [[ $first == blur ]]; then offer='on off toggle'

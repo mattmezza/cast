@@ -103,7 +103,7 @@ complete -c cast -n '__cast_at annotations' -a 'live record'
 complete -c cast -n '__cast_at annotations live; or __cast_at annotations record' -a 'keys clicks'
 complete -c cast -n '__cast_at annotations live keys; or __cast_at annotations live clicks; or __cast_at annotations record keys; or __cast_at annotations record clicks' -a 'on off'
 complete -c cast -n '__cast_at live' -a 'pause resume toggle freeze unfreeze blur unblur message title subtitle footer'
-complete -c cast -n '__cast_at record' -a 'start stop pause resume toggle freeze unfreeze blur unblur cut title subtitle footer'
+complete -c cast -n '__cast_at record' -a 'start stop pause resume toggle freeze unfreeze blur unblur cut cancel title subtitle footer'
 complete -c cast -n '__cast_at live blur; or __cast_at record blur' -a 'on off toggle'
 complete -c cast -n '__cast_at record start' -F
 complete -c cast -n '__cast_at audio' -a 'list mic desktop virtual'
