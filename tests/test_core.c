@@ -49,6 +49,11 @@ static void test_presentation_config(void)
     load_test("[output]\nblur_subtitle={date\n", false, &c);
     load_test("[output]\npause_subtitle={time:%Q}\n", false, &c);
     load_test("[output]\npause_subtitle={time:%99999999999Y}\n", false, &c);
+    load_test("[output]\npause_title={date:%1000Y}{date:%1000Y}\n", false, &c);
+    char oversized[300];
+    memset(oversized, 'x', 200);
+    snprintf(oversized + 200, sizeof oversized - 200, "{date:%%1400Y}");
+    assert(config_set_value(&c, "output.blur_subtitle", oversized, error, sizeof error) < 0);
     load_test("[output]\nblur_radius=0\n", false, &c);
     load_test("[output]\nblur_radius=129\n", false, &c);
     load_test("[output]\nblur_opacity=nan\n", false, &c);

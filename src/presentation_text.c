@@ -95,15 +95,17 @@ static int utf8_validate(const char *s, char *error, size_t n)
     }
     return 0;
 }
-static int format_validate(const char *format, char *error, size_t n)
+static int format_validate(const char *format, size_t *maximum, char *error, size_t n)
 {
+    size_t total = 0;
     while (*format) {
         if (*format++ != '%') {
+            total++;
             continue;
         }
+        unsigned width = 0;
         while (*format && (strchr("_-0^#", *format) || isdigit((unsigned char)*format))) {
             if (isdigit((unsigned char)*format)) {
-                unsigned width = 0;
                 while (isdigit((unsigned char)*format)) {
                     width = width * 10 + (unsigned)(*format++ - '0');
                     if (width >= EXPANDED_TEXT) {
@@ -122,22 +124,42 @@ static int format_validate(const char *format, char *error, size_t n)
             return fail(error, n,
                         "invalid date/time format: expected a strftime conversion after %%");
         }
+        /* Reserve room for future timestamps as well as explicit padding. Locale
+         * names/composite formats receive a generous budget; validation below
+         * also expands against the active locale before accepting configuration. */
+        size_t field = strchr("aAbBchprxXZ+", *format) ? 128 : 12;
+        if (strchr("nt%", *format)) {
+            field = 1;
+        } else if (*format == 's') {
+            field = 20;
+        } else if (*format == 'F') {
+            field = 24;
+        }
+        if (field < width) {
+            field = width;
+        }
+        total += field;
+        if (total >= EXPANDED_TEXT) {
+            return fail(error, n, "date/time format exceeds its bounded expansion");
+        }
         format++;
     }
+    *maximum = total;
     return 0;
 }
 static int append(char *output, size_t capacity, size_t *used, const char *text, size_t bytes,
                   char *error, size_t n)
 {
-    if (!output) {
-        return 0;
-    }
     if (bytes >= capacity - *used) {
         return fail(error, n, "expanded presentation text exceeds %zu bytes", capacity - 1);
     }
-    memcpy(output + *used, text, bytes);
+    if (output) {
+        memcpy(output + *used, text, bytes);
+    }
     *used += bytes;
-    output[*used] = 0;
+    if (output) {
+        output[*used] = 0;
+    }
     return 0;
 }
 int presentation_template_expand(const char *input, const struct tm *when, char *output,
@@ -148,6 +170,9 @@ int presentation_template_expand(const char *input, const struct tm *when, char 
     }
     if (utf8_validate(input, error, n)) {
         return -1;
+    }
+    if (!output) {
+        capacity = EXPANDED_TEXT;
     }
     size_t used = 0;
     if (output) {
@@ -197,7 +222,8 @@ int presentation_template_expand(const char *input, const struct tm *when, char 
             }
             memcpy(format, colon ? colon + 1 : default_format, length);
             format[length] = 0;
-            if (format_validate(format, error, n)) {
+            size_t maximum;
+            if (format_validate(format, &maximum, error, n)) {
                 return -1;
             }
             if (output) {
@@ -216,6 +242,8 @@ int presentation_template_expand(const char *input, const struct tm *when, char 
                 if (append(output, capacity, &used, expanded, bytes, error, n)) {
                     return -1;
                 }
+            } else if (append(NULL, capacity, &used, NULL, maximum, error, n)) {
+                return -1;
             }
             s = end + 1;
         }
@@ -224,7 +252,19 @@ int presentation_template_expand(const char *input, const struct tm *when, char 
 }
 int presentation_template_validate(const char *input, char *error, size_t n)
 {
-    return presentation_template_expand(input, NULL, NULL, 0, error, n);
+    if (presentation_template_expand(input, NULL, NULL, 0, error, n)) {
+        return -1;
+    }
+    time_t now = time(NULL);
+    struct tm captured;
+    char expanded[EXPANDED_TEXT];
+    if (!localtime_r(&now, &captured)) {
+        return fail(error, n, "cannot capture local time for presentation template validation");
+    }
+    if (presentation_template_expand(input, &captured, expanded, sizeof expanded, error, n)) {
+        return -1;
+    }
+    return utf8_validate(expanded, error, n);
 }
 static void font_clear(TextFont *font)
 {

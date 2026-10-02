@@ -172,6 +172,15 @@ static void test_text_templates(void)
         assert(presentation_template_validate(invalid[i], error, sizeof error) < 0);
         assert(error[0]);
     }
+    assert(presentation_template_validate("{date:%1000Y}{time:%1000H}", error,
+                                          sizeof error) < 0);
+    assert(presentation_template_validate("{date:%800Y%800m}", error, sizeof error) < 0);
+    char long_template[256];
+    memset(long_template, 'x', 200);
+    snprintf(long_template + 200, sizeof long_template - 200, "{date:%%1400Y}");
+    assert(presentation_template_validate(long_template, error, sizeof error) < 0);
+    assert(!presentation_template_validate("{date:%1400Y}", error, sizeof error));
+    assert(!presentation_template_validate(input, error, sizeof error));
     struct {
         char value[8];
         unsigned char guard[8];
