@@ -710,11 +710,7 @@ static int command_preset(App *a, Config *candidate, int ac, char **av, char *na
 
 int app_countdown_guide(App *a, uint64_t remaining_ns, char *error, size_t n)
 {
-    /* An attached panel owns the visible guide; a disconnected client falls back
-     * to native presentation UI on the next capture tick. */
-    if (remaining_ns && panel_transport_attached(a->panel)) {
-        remaining_ns = 0;
-    }
+    /* The native preview owns the visible guide, including with a panel attached. */
     if (remaining_ns) {
         if (!a->record_raw.data && a->screen.data &&
             compositor_render(a->compositor, &a->config, &a->screen,
@@ -768,9 +764,12 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
         ARITY(3);
         return command_message(a, av[2], out, n);
     }
-    if ((IS(0, "live") || IS(0, "record")) && (IS(1, "title") || IS(1, "subtitle"))) {
+    if ((IS(0, "live") || IS(0, "record")) &&
+        (IS(1, "title") || IS(1, "subtitle") || IS(1, "footer"))) {
         ARITY(3);
-        const char *key = IS(1, "title") ? "output.pause_title" : "output.pause_subtitle";
+        const char *key = IS(1, "title")      ? "output.pause_title"
+                          : IS(1, "subtitle") ? "output.pause_subtitle"
+                                              : "output.pause_footer";
         if (config_set_value(&c, key, av[2], out, n) || apply_candidate(a, &c, out, n)) {
             return -1;
         }

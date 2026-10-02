@@ -57,7 +57,7 @@ static const char help[] =
     "  clicks on|off|toggle; keys on|off|toggle; keys mode shortcuts|all; keys clear\n"
     "  annotations live|record keys|clicks on|off\n"
     "  pause; resume; live pause|resume|toggle|freeze|unfreeze; live blur on|off|toggle\n"
-    "  live message TEXT; live|record title|subtitle TEXT\n"
+    "  live message TEXT; live|record title|subtitle|footer TEXT\n"
     "  record start [PATH]; record stop|pause|resume|toggle|freeze|unfreeze|cut|cancel\n"
     "  record blur on|off|toggle; cut resume reuses the file with the configured countdown\n"
     "  audio list; audio mic|desktop|virtual on|off|toggle\n"
@@ -576,7 +576,7 @@ static int decode_packet(char *packet, ssize_t size, int *argc, char **argv, cha
         bool empty_value =
             (*argc == 2 && (!strcmp(argv[0], "live") || !strcmp(argv[0], "record")) &&
              (!strcmp(argv[1], "message") || !strcmp(argv[1], "title") ||
-              !strcmp(argv[1], "subtitle"))) ||
+              !strcmp(argv[1], "subtitle") || !strcmp(argv[1], "footer"))) ||
             (*argc >= 2 && !(*argc & 1) && !strcmp(argv[0], "settings"));
         if (!end || (end == packet + offset && !empty_value)) {
             return app_error(e, n, "empty or unterminated command argument");

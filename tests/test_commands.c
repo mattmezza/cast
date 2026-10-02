@@ -121,6 +121,86 @@ static bool same_pixels(const Frame *left, const Frame *right)
            left->height == right->height && left->stride == right->stride &&
            !memcmp(left->data, right->data, (size_t)left->stride * left->height);
 }
+static void presentation_controls(App *app, const char *configuration)
+{
+    char error[CAST_ERR];
+    State initial = app->state;
+    COMMAND(app, true, "live", "footer", "café — {date:%Y}");
+    assert(!strcmp(app->config.pause_footer, "café — {date:%Y}"));
+    COMMAND(app, true, "record", "footer", "Shared footer");
+    assert(!strcmp(app->config.pause_footer, "Shared footer"));
+    COMMAND(app, true, "settings", "output.blur_footer", "Blur {time:%H:%M}",
+            "output.pause_footer_size", "18", "output.blur_footer_size", "20",
+            "output.pause_text_gap", "32", "output.blur_text_gap", "0");
+    assert(app->config.pause_footer_size == 18 && app->config.blur_footer_size == 20 &&
+           app->config.pause_text_gap == 32 && app->config.blur_text_gap == 0);
+    Config before = app->config;
+    char long_footer[sizeof app->config.pause_footer + 1];
+    memset(long_footer, 'a', sizeof long_footer - 1);
+    long_footer[sizeof long_footer - 1] = 0;
+    COMMAND(app, false, "live", "footer", long_footer);
+    COMMAND(app, false, "live", "footer", "bad \xff");
+    COMMAND(app, false, "record", "footer", "{unknown}");
+    COMMAND(app, false, "record", "footer", "control\x01");
+    COMMAND(app, false, "live", "footer", "text", "extra");
+    COMMAND(app, false, "settings", "output.pause_footer_size", "7");
+    COMMAND(app, false, "settings", "output.blur_footer_size", "257");
+    COMMAND(app, false, "settings", "output.pause_text_gap", "-1");
+    COMMAND(app, false, "settings", "output.blur_text_gap", "513");
+    COMMAND(app, false, "settings", "output.blur_footer", "{time:%999999Y}");
+    assert(!memcmp(&before, &app->config, sizeof before));
+    /* IPC uses NUL as an argument boundary; an injected extra field fails arity. */
+    char empty[] = "CAST1\0live\0footer\0\0";
+    char injected[] = "CAST1\0record\0footer\0first\0second\0";
+    char invalid[] = "CAST1\0live\0\0text\0";
+    char *argv[CAST_MAX_ARGS];
+    int argc;
+    assert(decode_packet(empty, sizeof empty - 1, &argc, argv, error, sizeof error) == 0);
+    assert(argc == 3 && !argv[2][0]);
+    assert(app_command(app, argc, argv, response, sizeof response) == 0);
+    assert(!app->config.pause_footer[0]);
+    assert(decode_packet(injected, sizeof injected - 1, &argc, argv, error, sizeof error) == 0);
+    assert(app_command(app, argc, argv, response, sizeof response) < 0);
+    assert(!app->config.pause_footer[0]);
+    assert(decode_packet(invalid, sizeof invalid - 1, &argc, argv, error, sizeof error) < 0);
+    COMMAND(app, true, "record", "footer", "");
+    COMMAND(app, true, "settings", "output.blur_footer", "");
+    assert(!memcmp(&initial, &app->state, sizeof initial));
+    /* Both families must affect the rendered result after a real config reload. */
+    const char *style = "[camera]\nwidth_percent=25\n[output]\n"
+                        "pause_title=WWW iii café\npause_subtitle=Same subtitle\n"
+                        "pause_footer=Footer\nblur_title=WWW iii café\n"
+                        "blur_subtitle=Same subtitle\nblur_footer=Footer\n";
+    char config_text[2048];
+    snprintf(config_text, sizeof config_text, "%spause_font=monospace\nblur_font=monospace\n",
+             style);
+    write_config(configuration, config_text);
+    COMMAND(app, true, "config", "reload");
+    Frame neutral = {0}, blurred = {0}, comparison = {0};
+    assert(frame_copy(&neutral, &app->neutral) == 0);
+    assert(frame_copy(&blurred, &app->screen) == 0);
+    assert(compositor_blur(app->compositor, &app->config, &blurred, error, sizeof error) == 0);
+    snprintf(config_text, sizeof config_text, "%spause_font=serif\nblur_font=serif\n", style);
+    write_config(configuration, config_text);
+    COMMAND(app, true, "config", "reload");
+    assert(!strcmp(app->config.pause_font, "serif") && !strcmp(app->config.blur_font, "serif"));
+    assert(!same_pixels(&neutral, &app->neutral));
+    assert(frame_copy(&comparison, &app->screen) == 0);
+    assert(compositor_blur(app->compositor, &app->config, &comparison, error, sizeof error) == 0);
+    assert(!same_pixels(&blurred, &comparison));
+    before = app->config;
+    COMMAND(app, false, "settings", "output.pause_font", "monospace");
+    assert(strstr(response, "config reload"));
+    COMMAND(app, false, "settings", "output.blur_font", "monospace");
+    assert(strstr(response, "config reload"));
+    assert(!memcmp(&before, &app->config, sizeof before));
+    assert(!memcmp(&initial, &app->state, sizeof initial));
+    frame_free(&neutral);
+    frame_free(&blurred);
+    frame_free(&comparison);
+    write_config(configuration, "[camera]\nwidth_percent=25\n");
+    COMMAND(app, true, "config", "reload");
+}
 static void output_modes(App *app)
 {
     char error[CAST_ERR];
@@ -217,6 +297,7 @@ int main(void)
     snprintf(recording_path, sizeof recording_path, "%s/control.mkv", directory);
     write_config(configuration, "[camera]\nwidth_percent=25\n");
     App *app = new_app(configuration, socket_pathname);
+    presentation_controls(app, configuration);
     COMMAND(app, true, "status", "--json");
     assert(strstr(response, "\"state\":\"paused\""));
     State message_state = app->state;
