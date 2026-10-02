@@ -29,7 +29,6 @@ enum {
     TAB_AUDIO,
     TAB_EFFECTS,
     TAB_SETTINGS,
-    TAB_OUTPUT,
     TAB_COUNT
 };
 #define GROUP_COUNT 6
@@ -157,14 +156,19 @@ static const FieldSpec fields[] = {
     FT("keys.navigation", "Navigation keys", keys_navigation, TAB_EFFECTS, 3, REQUIRE_INPUT),
     FT("output.pause_text", "Pause title", pause_text, TAB_SETTINGS, 4, 0),
     FT("output.pause_subtitle", "Pause subtitle", pause_subtitle, TAB_SETTINGS, 4, 0),
+    FT("output.pause_footer", "Pause footer", pause_footer, TAB_SETTINGS, 4, 0),
     FC("output.pause_color", "Pause background", pause_color, TAB_SETTINGS, 4, 0),
     FC("output.pause_foreground", "Pause text color", pause_foreground, TAB_SETTINGS, 4, 0),
     FI("output.pause_title_size", "Pause title size (px)", pause_title_size, 8, 256, TAB_SETTINGS,
        4, 0),
     FI("output.pause_subtitle_size", "Pause subtitle size (px)", pause_subtitle_size, 8, 256,
        TAB_SETTINGS, 4, 0),
+    FI("output.pause_footer_size", "Pause footer size (px)", pause_footer_size, 8, 256,
+       TAB_SETTINGS, 4, 0),
+    FI("output.pause_text_gap", "Pause text gap (px)", pause_text_gap, 0, 512, TAB_SETTINGS, 4, 0),
     FT("output.blur_title", "Blur title", blur_title, TAB_SETTINGS, 5, 0),
     FT("output.blur_subtitle", "Blur subtitle", blur_subtitle, TAB_SETTINGS, 5, 0),
+    FT("output.blur_footer", "Blur footer", blur_footer, TAB_SETTINGS, 5, 0),
     FC("output.blur_color", "Blur tint", blur_color, TAB_SETTINGS, 5, 0),
     FC("output.blur_foreground", "Blur text color", blur_foreground, TAB_SETTINGS, 5, 0),
     FI("output.blur_radius", "Blur radius (px)", blur_radius, 1, 128, TAB_SETTINGS, 5, 0),
@@ -173,6 +177,9 @@ static const FieldSpec fields[] = {
        0),
     FI("output.blur_subtitle_size", "Blur subtitle size (px)", blur_subtitle_size, 8, 256,
        TAB_SETTINGS, 5, 0),
+    FI("output.blur_footer_size", "Blur footer size (px)", blur_footer_size, 8, 256, TAB_SETTINGS,
+       5, 0),
+    FI("output.blur_text_gap", "Blur text gap (px)", blur_text_gap, 0, 512, TAB_SETTINGS, 5, 0),
     FT("record.directory", "Recording directory", record_dir, TAB_SETTINGS, 0, RECORD_LOCK),
     FI("record.countdown", "Recording countdown (s)", record_countdown, 0, 60, TAB_SETTINGS, 0,
        RECORD_LOCK),
@@ -271,22 +278,17 @@ typedef struct {
     FieldEdit edit[FIELD_COUNT];
     Widget widgets[WIDGET_MAX];
     int widget_count, tab;
-    bool groups[TAB_COUNT][GROUP_COUNT], record_preview, quit, mouse_down, click;
+    bool groups[TAB_COUNT][GROUP_COUNT], quit, mouse_down, click;
     uint32_t focus, active_text, dropdown;
     int dropdown_field, dropdown_choice;
     bool select_all;
     size_t caret;
     float mouse_x, mouse_y, scroll;
     float width, height;
-    bool preview_moved, preview_dragging;
-    float preview_x, preview_y, drag_x, drag_y;
     char error[CAST_ERR], reply[CAST_ERR];
     uint64_t command_seen, draw_frame;
     uint64_t preview_pending, preview_pending_generation;
     bool preview_pending_record;
-    uint64_t frame_generation, frame_epoch;
-    Frame frame;
-    SDL_Texture *preview;
     TextCache cache[TEXT_CACHE_MAX];
     char strings[49152];
     size_t string_used;
@@ -364,6 +366,9 @@ static Icon button_icon(const Panel *p, uint32_t id, Action action)
 {
     if (id == 99) {
         return ICON_BACK;
+    }
+    if (id == 22) {
+        return ICON_SCREEN;
     }
     if (id == 30) {
         return p->snapshot.state.live_paused ? ICON_PLAY : ICON_PAUSE;
@@ -459,7 +464,9 @@ static void command_button(Panel *p, uint32_t id, const char *text, bool enabled
                            const char *b, const char *c)
 {
     const State *s = &p->snapshot.state;
-    bool selected = (id == 31 && s->live_frozen) || (id == 36 && s->live_blurred) ||
+    bool selected = (id == 22 && (p->snapshot.config.preview ||
+                                  (p->snapshot.countdown && p->snapshot.capabilities.preview))) ||
+                    (id == 31 && s->live_frozen) || (id == 36 && s->live_blurred) ||
                     (id == 37 && s->record_frozen) || (id == 38 && s->record_blurred) ||
                     (id == 39 && s->record_cut);
     button(p, id, text, enabled, selected, A_COMMAND, 0);
@@ -631,8 +638,7 @@ static void text_wrapped(const char *text, Clay_Color color)
         CLAY_TEXT_CONFIG(
             {.fontId = 0, .fontSize = 13, .textColor = color, .wrapMode = CLAY_TEXT_WRAP_WORDS}));
 }
-static const char *const section_names[] = {"Source",  "Camera",   "Audio",
-                                            "Effects", "Settings", "Outputs"};
+static const char *const section_names[] = {"Source", "Camera", "Audio", "Effects", "Settings"};
 
 static const char *live_status(const PanelSnapshot *s)
 {
@@ -671,13 +677,15 @@ static void status_line(Panel *p)
         }
         if (s->state.recording || s->countdown || s->finalizing) {
             uint64_t secs = s->duration_ns / 1000000000ULL;
-            label(s->countdown ? (s->state.recording ? "Resuming…" : "Starting…")
-                  : s->finalizing
-                      ? "Saving…"
-                      : format(p, "%02llu:%02llu:%02llu", (unsigned long long)(secs / 3600),
-                               (unsigned long long)(secs / 60 % 60),
-                               (unsigned long long)(secs % 60)),
-                  1, danger);
+            label(
+                s->countdown ? format(p, "%s %us", s->state.recording ? "Resume in" : "Start in",
+                                      (unsigned)(s->countdown_remaining_ns / 1000000000ULL +
+                                                 (s->countdown_remaining_ns % 1000000000ULL != 0)))
+                : s->finalizing
+                    ? "Saving…"
+                    : format(p, "%02llu:%02llu:%02llu", (unsigned long long)(secs / 3600),
+                             (unsigned long long)(secs / 60 % 60), (unsigned long long)(secs % 60)),
+                1, danger);
         }
     }
     CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 12}})
@@ -699,13 +707,13 @@ static void output_controls(Panel *p)
     bool live = s->connected && s->config.live_enabled;
     CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 8}})
     {
-        command_button(p, 30, s->state.live_paused ? "Resume live" : "Pause live", live, "live",
+        command_button(p, 30, s->state.live_paused ? "Start live" : "Pause live", live, "live",
                        s->state.live_paused ? "resume" : "pause", NULL);
     }
     CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 8}})
     {
         if (!s->state.recording && !s->countdown) {
-            command_button(p, 32, s->finalizing ? "Saving…" : "Start record",
+            command_button(p, 32, s->finalizing ? "Saving…" : "Start recording",
                            s->connected && !s->finalizing, "record", "start", NULL);
         } else {
             if (s->state.recording || s->countdown) {
@@ -727,108 +735,85 @@ static void output_controls(Panel *p)
     }
 }
 
-static void preview_content(Panel *p, bool compact)
+static void preview_controls(Panel *p)
 {
+    const PanelSnapshot *s = &p->snapshot;
+    bool available = s->connected && s->capabilities.preview;
     CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
-                     .childGap = 6,
+                     .childGap = 8,
                      .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
     {
-        button(p, 20, "Live", true, !p->record_preview, A_PREVIEW, 0);
-        button(p, 21, "Recording", true, p->record_preview, A_PREVIEW, 1);
-        if (!compact) {
-            CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
-                             .childAlignment = {.x = CLAY_ALIGN_X_RIGHT}}})
-            {
-                label("Preview", 0, secondary);
-            }
+        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}}})
+        {
+            label("Floating preview", 0, secondary);
         }
+        command_button(p, 22,
+                       s->countdown && available  ? "Countdown preview"
+                       : !s->capabilities.preview ? "Unavailable"
+                       : s->config.preview        ? "On"
+                                                  : "Off",
+                       available && !s->countdown, "preview", s->config.preview ? "off" : "on",
+                       NULL);
     }
-    CLAY({.id = CLAY_ID("OutputPreview"),
-          .layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_GROW()},
-                     .childAlignment = {.x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER}},
-          .backgroundColor = {5, 6, 7, 255},
-          .custom = {.customData = p}})
+    CLAY({.layout = {.childGap = 8}})
     {
-        if (!p->snapshot.connected) {
-            label(compact ? "Disconnected" : "Start the daemon with cast", 0, secondary);
-        } else if (!p->preview) {
-            label("Waiting for output…", 0, secondary);
-        }
+        button(p, 20, "Live", s->connected, !strcmp(s->config.preview_target, "live"), A_PREVIEW,
+               0);
+        button(p, 21, "Recording", s->connected, !strcmp(s->config.preview_target, "record"),
+               A_PREVIEW, 1);
+    }
+    if (s->connected && !s->capabilities.preview) {
+        text_wrapped("This backend has no floating preview. The target selection is saved.",
+                     secondary);
     }
 }
-
-static void preview_area(Panel *p)
+static void home_output_modes(Panel *p)
 {
-    bool compact = p->tab >= 0;
-    float preview_height = compact ? 146 : fminf(254, fmaxf(170, p->height - 490));
-    CLAY({.id = CLAY_ID("PreviewSpace"),
-          .layout = {.sizing = {.width = CLAY_SIZING_GROW(),
-                                .height = CLAY_SIZING_FIXED(preview_height)}}})
+    const PanelSnapshot *s = &p->snapshot;
+    bool live = s->connected && s->config.live_enabled;
+    bool record = s->connected && s->state.recording && !s->countdown;
+    label("Live output", 2, foreground);
+    CLAY({.layout = {.childGap = 8}})
     {
-        if (!compact) {
-            CLAY({.id = CLAY_ID("PreviewPanel"),
-                  .layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_GROW()},
-                             .layoutDirection = CLAY_TOP_TO_BOTTOM,
-                             .childGap = 8}})
-            {
-                preview_content(p, false);
-            }
-        } else {
-            CLAY({.layout = {
-                      .sizing = {.width = CLAY_SIZING_FIXED(100), .height = CLAY_SIZING_GROW()},
-                      .layoutDirection = CLAY_TOP_TO_BOTTOM,
-                      .childGap = 6,
-                      .padding = {0, 0, 14, 0}}})
-            {
-                label("Preview", 1, foreground);
-                text_wrapped("Drag to move", secondary);
-            }
-        }
+        command_button(p, 31, s->state.live_frozen ? "Unfreeze" : "Freeze", live, "live",
+                       s->state.live_frozen ? "unfreeze" : "freeze", NULL);
+        command_button(p, 36, s->state.live_blurred ? "Blur off" : "Blur on", live, "live", "blur",
+                       s->state.live_blurred ? "off" : "on");
     }
-}
-
-static void floating_preview(Panel *p)
-{
-    if (p->tab < 0) {
-        return;
-    }
-    Clay_ElementData space = Clay_GetElementData(CLAY_ID("PreviewSpace"));
-    float x = p->preview_moved ? p->preview_x : space.boundingBox.x + space.boundingBox.width - 208;
-    float y = p->preview_moved ? p->preview_y : space.boundingBox.y;
-    x = fmaxf(8, fminf(x, p->width - 216));
-    Clay_BoundingBox scroll = Clay_GetElementData(CLAY_ID("SettingsScroll")).boundingBox;
-    float top = space.boundingBox.y;
-    float bottom = fmaxf(top, scroll.y + scroll.height - 146);
-    y = fmaxf(top, fminf(y, bottom));
-    /* A floating preview may cover settings, never navigation, output actions or notices. */
-    if (y > top && y < scroll.y) {
-        y = y < (top + scroll.y) / 2 || bottom < scroll.y ? top : scroll.y;
-    }
-    p->preview_x = x;
-    p->preview_y = y;
-    CLAY({.id = CLAY_ID("PreviewPanel"),
-          .layout = {.sizing = {.width = CLAY_SIZING_FIXED(208), .height = CLAY_SIZING_FIXED(146)},
-                     .padding = {5, 5, 5, 5},
-                     .childGap = 5,
-                     .layoutDirection = CLAY_TOP_TO_BOTTOM},
-          .backgroundColor = surface,
-          .border = {.color = line, .width = outline_width},
-          .floating = {.offset = {x, y}, .attachTo = CLAY_ATTACH_TO_ROOT, .zIndex = 5}})
+    CLAY({.layout = {.padding = {0, 0, 12, 0}}})
     {
-        preview_content(p, true);
+        label("Recording", 2, foreground);
     }
+    CLAY({.layout = {.childGap = 8}})
+    {
+        bool resume = s->state.record_paused || s->state.record_cut;
+        command_button(p, 33, resume ? "Resume record" : "Pause record", record, "record",
+                       resume ? "resume" : "pause", NULL);
+        command_button(p, 39, "Cut time", record && !s->state.record_cut, "record", "cut", NULL);
+    }
+    CLAY({.layout = {.childGap = 8}})
+    {
+        command_button(p, 37, s->state.record_frozen ? "Unfreeze" : "Freeze", record, "record",
+                       s->state.record_frozen ? "unfreeze" : "freeze", NULL);
+        command_button(p, 38, s->state.record_blurred ? "Blur off" : "Blur on", record, "record",
+                       "blur", s->state.record_blurred ? "off" : "on");
+    }
+    text_wrapped(s->state.recording
+                     ? "Pause writes a solid screen and silence. Cut removes media time."
+                     : "Start recording to enable recording controls.",
+                 secondary);
 }
-
 static void home_navigation(Panel *p)
 {
     CLAY({.id = CLAY_ID("SettingsScroll"),
           .layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_GROW()},
                      .layoutDirection = CLAY_TOP_TO_BOTTOM,
-                     .padding = {0, 0, 8, 0}},
+                     .padding = {0, 0, 8, 0},
+                     .childGap = 8},
           .clip = {.vertical = true, .childOffset = Clay_GetScrollOffset()}})
     {
-        static const int order[] = {TAB_OUTPUT, TAB_SOURCE,  TAB_CAMERA,
-                                    TAB_AUDIO,  TAB_EFFECTS, TAB_SETTINGS};
+        home_output_modes(p);
+        static const int order[] = {TAB_SOURCE, TAB_CAMERA, TAB_AUDIO, TAB_EFFECTS, TAB_SETTINGS};
         for (int row = 0; row < TAB_COUNT; row++) {
             int i = order[row];
             uint32_t id = 100 + (uint32_t)i;
@@ -847,8 +832,8 @@ static void home_navigation(Panel *p)
                              .width =
                                  p->focus == id ? outline_width : (Clay_BorderWidth){.bottom = 1}}})
             {
-                static const Icon icons[] = {ICON_SCREEN,  ICON_CAMERA,   ICON_AUDIO,
-                                             ICON_EFFECTS, ICON_SETTINGS, ICON_PLAY};
+                static const Icon icons[] = {ICON_SCREEN, ICON_CAMERA, ICON_AUDIO, ICON_EFFECTS,
+                                             ICON_SETTINGS};
                 icon_slot(icons[i], true, false);
                 CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}}})
                 {
@@ -935,45 +920,7 @@ static void source_actions(Panel *p)
 }
 static void tab_actions(Panel *p)
 {
-    if (p->tab == TAB_OUTPUT) {
-        const PanelSnapshot *s = &p->snapshot;
-        bool live = s->connected && s->config.live_enabled;
-        bool record = s->connected && s->state.recording && !s->countdown;
-        label("Live output", 2, foreground);
-        CLAY({.layout = {.childGap = 8}})
-        {
-            command_button(p, 31, s->state.live_frozen ? "Unfreeze" : "Freeze", live, "live",
-                           s->state.live_frozen ? "unfreeze" : "freeze", NULL);
-            command_button(p, 36, s->state.live_blurred ? "Blur off" : "Blur on", live, "live",
-                           "blur", s->state.live_blurred ? "off" : "on");
-        }
-        text_wrapped("Pause shows a solid screen. Freeze and blur are kept underneath.", secondary);
-        CLAY({.layout = {.padding = {0, 0, 12, 0}}})
-        {
-            label("Recording", 2, foreground);
-        }
-        CLAY({.layout = {.childGap = 8}})
-        {
-            bool resume = s->state.record_paused || s->state.record_cut;
-            command_button(p, 33, resume ? "Resume record" : "Pause record", record, "record",
-                           resume ? "resume" : "pause", NULL);
-            command_button(p, 39, "Cut time", record && !s->state.record_cut, "record", "cut",
-                           NULL);
-        }
-        CLAY({.layout = {.childGap = 8}})
-        {
-            command_button(p, 37, s->state.record_frozen ? "Unfreeze" : "Freeze", record, "record",
-                           s->state.record_frozen ? "unfreeze" : "freeze", NULL);
-            command_button(p, 38, s->state.record_blurred ? "Blur off" : "Blur on", record,
-                           "record", "blur", s->state.record_blurred ? "off" : "on");
-        }
-        text_wrapped("Pause writes a solid screen and silence. Cut removes media time; resuming "
-                     "a cut continues the same file after the countdown.",
-                     secondary);
-        if (!s->state.recording && !s->countdown) {
-            text_wrapped("Start recording to enable these controls.", secondary);
-        }
-    } else if (p->tab == TAB_SOURCE) {
+    if (p->tab == TAB_SOURCE) {
         selection_row(p);
         source_actions(p);
     } else if (p->tab == TAB_CAMERA) {
@@ -1019,8 +966,8 @@ static const char *const group_names[TAB_COUNT][GROUP_COUNT] = {
     {"", "Position and crop", "Appearance", "Device"},
     {"", "Virtual microphone", "", ""},
     {"", "Output annotations", "Cursor and clicks", "Keystroke style"},
-    {"", "Recording format", "Cycle order", "Output and connection", "Pause screen", "Blur screen"},
-    {""}};
+    {"", "Recording format", "Cycle order", "Output and connection", "Pause screen",
+     "Blur screen"}};
 static void settings_area(Panel *p)
 {
     CLAY({.id = CLAY_ID("SettingsScroll"),
@@ -1056,9 +1003,18 @@ static void settings_area(Panel *p)
                    true, false, A_GROUP, group);
             if (p->groups[p->tab][group]) {
                 if (p->tab == TAB_SETTINGS && group >= 4) {
-                    text_wrapped("Leave a title or subtitle blank to hide it. Templates: {date}, "
-                                 "{time}, {datetime}, or {date:%Y-%m-%d}.",
+                    text_wrapped(
+                        "Leave a title, subtitle or footer blank to hide it. Templates: {date}, "
+                        "{time}, {datetime}, or {date:%Y-%m-%d}.",
+                        secondary);
+                    text_wrapped(format(p, "Font: %s",
+                                        group == 4 ? p->snapshot.config.pause_font
+                                                   : p->snapshot.config.blur_font),
                                  secondary);
+                    text_wrapped(
+                        format(p, "Change output.%s_font in your config, then Reload config file.",
+                               group == 4 ? "pause" : "blur"),
+                        secondary);
                 }
                 for (size_t i = 0; i < FIELD_COUNT; i++) {
                     if (fields[i].tab == p->tab && fields[i].group == group) {
@@ -1178,13 +1134,13 @@ static Clay_RenderCommandArray layout(Panel *p)
                      .layoutDirection = CLAY_TOP_TO_BOTTOM},
           .backgroundColor = background})
     {
-        CLAY(
-            {.layout = {.sizing = {.width = CLAY_SIZING_GROW(0, 520), .height = CLAY_SIZING_GROW()},
-                        .layoutDirection = CLAY_TOP_TO_BOTTOM,
-                        .childGap = 10}})
+        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_FIXED(fminf(p->width - 32, 520)),
+                                    .height = CLAY_SIZING_GROW()},
+                         .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                         .childGap = 10}})
         {
             status_line(p);
-            preview_area(p);
+            preview_controls(p);
             output_controls(p);
             if (p->tab < 0) {
                 home_navigation(p);
@@ -1194,7 +1150,6 @@ static Clay_RenderCommandArray layout(Panel *p)
             footer(p);
         }
     }
-    floating_preview(p);
     dropdown_layout(p);
     Clay_RenderCommandArray commands = Clay_EndLayout();
     for (int i = 0; i < p->widget_count; i++) {
@@ -1496,36 +1451,6 @@ static unsigned countdown_seconds(uint64_t remaining_ns)
 {
     return (unsigned)(remaining_ns / 1000000000ULL + (remaining_ns % 1000000000ULL != 0));
 }
-/* This leader is drawn by the client over its preview, never into daemon frames. */
-static void draw_countdown(Panel *p, SDL_FRect box)
-{
-    if (!p->snapshot.connected || !p->snapshot.countdown) {
-        return;
-    }
-    color(p, (Clay_Color){5, 6, 7, 190});
-    SDL_RenderFillRect(p->renderer, &box);
-    float x = box.x + box.w / 2, y = box.y + box.h / 2;
-    float radius = fminf(68, fminf(box.w, box.h) * .41f);
-    color(p, (Clay_Color){151, 158, 168, 170});
-    circle(p, x, y, radius, 1);
-    circle(p, x, y, radius - 4, 1);
-    stroke(p, box.x + 8, y, box.x + box.w - 8, y, 1);
-    stroke(p, x, box.y + 5, x, box.y + box.h - 5, 1);
-    float fraction = (p->snapshot.countdown_remaining_ns % 1000000000ULL) / 1e9f;
-    float angle = (1 - fraction) * 2 * (float)M_PI - (float)M_PI / 2;
-    color(p, secondary);
-    stroke(p, x, y, x + cosf(angle) * radius, y + sinf(angle) * radius, 1.4f);
-    char number[16];
-    snprintf(number, sizeof number, "%u", countdown_seconds(p->snapshot.countdown_remaining_ns));
-    int width = 0, height = 0;
-    int font = box.h < 70 ? 3 : 4;
-    TTF_GetStringSize(p->font[font], number, 0, &width, &height);
-    /* Clear a small central plate, keeping the actual frame visible around the leader. */
-    color(p, (Clay_Color){5, 6, 7, 255});
-    SDL_RenderFillRect(p->renderer, &(SDL_FRect){x - width / 2.f - 5, y - height / 2.f,
-                                                 width + 10.f, (float)height});
-    draw_text(p, number, strlen(number), font, foreground, x - width / 2.f, y - height / 2.f);
-}
 static SDL_Rect intersect(SDL_Rect a, SDL_Rect b)
 {
     SDL_Rect result;
@@ -1569,7 +1494,8 @@ static void draw_field(Panel *p, size_t index, Clay_BoundingBox b, SDL_Rect oute
         }
     }
     const char *placeholder =
-        strstr(fields[index].key, "subtitle") ? "No subtitle"
+        strstr(fields[index].key, "footer")     ? "No footer"
+        : strstr(fields[index].key, "subtitle") ? "No subtitle"
         : strstr(fields[index].key, "title") || !strcmp(fields[index].key, "output.pause_text")
             ? "No title"
             : "Default";
@@ -1653,21 +1579,9 @@ static void render(Panel *p, Clay_RenderCommandArray commands)
             }
             rounded(p, box, c->renderData.custom.cornerRadius.topLeft,
                     c->renderData.custom.backgroundColor);
-            if (c->renderData.custom.customData == p) {
-                if (p->preview && p->snapshot.connected && p->frame.width > 0 &&
-                    p->frame.height > 0) {
-                    float scale = fminf(box.w / p->frame.width, box.h / p->frame.height);
-                    SDL_FRect image = {box.x + (box.w - p->frame.width * scale) / 2,
-                                       box.y + (box.h - p->frame.height * scale) / 2,
-                                       p->frame.width * scale, p->frame.height * scale};
-                    SDL_RenderTexture(p->renderer, p->preview, NULL, &image);
-                }
-                draw_countdown(p, box);
-            } else {
-                size_t field = (size_t)(uintptr_t)c->renderData.custom.customData - 1;
-                if (field < FIELD_COUNT) {
-                    draw_field(p, field, c->boundingBox, clips[depth]);
-                }
+            size_t field = (size_t)(uintptr_t)c->renderData.custom.customData - 1;
+            if (field < FIELD_COUNT) {
+                draw_field(p, field, c->boundingBox, clips[depth]);
             }
             break;
         default:
@@ -1722,7 +1636,7 @@ static bool widget_in_scroll(const Panel *p, const Widget *w)
 {
     return w->id >= 1000 || (w->id >= 200 && w->id < 300) || (w->id >= 40 && w->id < 90) ||
            (w->id >= 100 && w->id < 100 + TAB_COUNT) ||
-           (p->tab == TAB_OUTPUT && (w->id == 31 || w->id == 33 || (w->id >= 36 && w->id <= 39)));
+           (p->tab < 0 && (w->id == 31 || w->id == 33 || (w->id >= 36 && w->id <= 39)));
 }
 static void stop_editing(Panel *p)
 {
@@ -1864,16 +1778,6 @@ static void apply_setting(Panel *p, int index, const char *value, bool draft)
         p->edit[index].submitted_revision = p->edit[index].revision;
     }
 }
-static void select_preview(Panel *p, bool record)
-{
-    if (p->record_preview == record) {
-        return;
-    }
-    p->record_preview = record;
-    SDL_DestroyTexture(p->preview);
-    p->preview = NULL;
-    frame_free(&p->frame);
-}
 static void acknowledge_preview(Panel *p, const PanelSnapshot *s)
 {
     if (!p->preview_pending) {
@@ -1882,8 +1786,10 @@ static void acknowledge_preview(Panel *p, const PanelSnapshot *s)
     if (!s->connected || s->daemon_generation != p->preview_pending_generation) {
         p->preview_pending = 0;
     } else if (s->command_completed >= p->preview_pending) {
-        if (!s->command_failed) {
-            select_preview(p, p->preview_pending_record);
+        const char *target = p->preview_pending_record ? "record" : "live";
+        if (!s->command_failed && strcmp(s->config.preview_target, target)) {
+            const char *args[] = {"preview", "target", target};
+            panel_client_command(p->client, 3, args, p->error, sizeof p->error);
         }
         p->preview_pending = 0;
     }
@@ -1965,7 +1871,11 @@ static void activate(Panel *p, Widget *w)
         break;
     case A_PREVIEW:
         p->preview_pending = 0;
-        select_preview(p, w->index != 0);
+        {
+            const char *args[] = {"preview", "target", w->index ? "record" : "live"};
+            p->error[0] = 0;
+            panel_client_command(p->client, 3, args, p->error, sizeof p->error);
+        }
         break;
     default:
         break;
@@ -2159,25 +2069,6 @@ static void key_event(Panel *p, const SDL_KeyboardEvent *event)
 }
 static void click_event(Panel *p, float x, float y)
 {
-    if (p->tab >= 0 && !p->dropdown) {
-        Clay_BoundingBox b = Clay_GetElementData(CLAY_ID("PreviewPanel")).boundingBox;
-        if (x >= b.x && x < b.x + b.width && y >= b.y && y < b.y + b.height) {
-            for (int i = 20; i <= 21; i++) {
-                Widget *w = find_widget(p, (uint32_t)i);
-                if (w && x >= w->box.x && x < w->box.x + w->box.width && y >= w->box.y &&
-                    y < w->box.y + w->box.height) {
-                    set_focus(p, w);
-                    activate(p, w);
-                    return;
-                }
-            }
-            p->preview_dragging = true;
-            p->preview_moved = true;
-            p->drag_x = x - b.x;
-            p->drag_y = y - b.y;
-            return;
-        }
-    }
     for (int i = p->widget_count - 1; i >= 0; i--) {
         Widget *w = &p->widgets[i];
         if (p->dropdown && w->type != W_OPTION && w->id != p->dropdown) {
@@ -2200,6 +2091,11 @@ static void click_event(Panel *p, float x, float y)
     p->dropdown = 0;
     stop_editing(p);
 }
+static float wheel_delta(const SDL_MouseWheelEvent *wheel)
+{
+    float direction = wheel->direction == SDL_MOUSEWHEEL_FLIPPED ? -1 : 1;
+    return wheel->y * direction * 3;
+}
 static void event(Panel *p, const SDL_Event *e)
 {
     switch (e->type) {
@@ -2210,10 +2106,6 @@ static void event(Panel *p, const SDL_Event *e)
     case SDL_EVENT_MOUSE_MOTION:
         p->mouse_x = e->motion.x / p->input_scale;
         p->mouse_y = e->motion.y / p->input_scale;
-        if (p->preview_dragging) {
-            p->preview_x = p->mouse_x - p->drag_x;
-            p->preview_y = p->mouse_y - p->drag_y;
-        }
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
         if (e->button.button == SDL_BUTTON_LEFT) {
@@ -2224,11 +2116,10 @@ static void event(Panel *p, const SDL_Event *e)
     case SDL_EVENT_MOUSE_BUTTON_UP:
         if (e->button.button == SDL_BUTTON_LEFT) {
             p->mouse_down = false;
-            p->preview_dragging = false;
         }
         break;
     case SDL_EVENT_MOUSE_WHEEL:
-        p->scroll += e->wheel.y;
+        p->scroll += wheel_delta(&e->wheel);
         break;
     case SDL_EVENT_KEY_DOWN:
         key_event(p, &e->key);
@@ -2238,19 +2129,12 @@ static void event(Panel *p, const SDL_Event *e)
         break;
     case SDL_EVENT_WINDOW_FOCUS_LOST:
         p->mouse_down = false;
-        p->preview_dragging = false;
         p->dropdown = 0;
         stop_editing(p);
         break;
     default:
         break;
     }
-}
-static void clear_preview(Panel *p)
-{
-    SDL_DestroyTexture(p->preview);
-    p->preview = NULL;
-    frame_free(&p->frame);
 }
 static void acknowledge_edit(FieldEdit *edit, bool failed)
 {
@@ -2269,15 +2153,7 @@ static void poll_client(Panel *p)
             fresh.config = p->snapshot.config;
             fresh.capabilities = p->snapshot.capabilities;
         }
-        bool changed =
-            fresh.daemon_generation != p->frame_generation || fresh.privacy_epoch != p->frame_epoch;
-        if (!fresh.connected || changed) {
-            clear_preview(p);
-        }
-        p->frame_generation = fresh.daemon_generation;
-        p->frame_epoch = fresh.privacy_epoch;
         p->snapshot = fresh;
-        acknowledge_preview(p, &fresh);
         if (fresh.command_completed != p->command_seen) {
             p->command_seen = fresh.command_completed;
             snprintf(p->reply, sizeof p->reply, "%s", fresh.last_reply);
@@ -2288,36 +2164,14 @@ static void poll_client(Panel *p)
                 }
             }
         }
+        acknowledge_preview(p, &fresh);
         if (!fresh.connected) {
             p->dropdown = 0;
             stop_editing(p);
         }
     }
-    char error[CAST_ERR];
-    int rc = panel_client_frame(p->client, p->record_preview, &p->frame, error, sizeof error);
-    if (rc < 0) {
-        clear_preview(p);
-        return;
-    }
-    if (rc == 0) {
-        return;
-    }
-    float w = 0, h = 0;
-    if (!p->preview || !SDL_GetTextureSize(p->preview, &w, &h) || (int)w != p->frame.width ||
-        (int)h != p->frame.height) {
-        SDL_DestroyTexture(p->preview);
-        p->preview =
-            SDL_CreateTexture(p->renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING,
-                              p->frame.width, p->frame.height);
-        if (p->preview) {
-            SDL_SetTextureScaleMode(p->preview, SDL_SCALEMODE_LINEAR);
-        }
-    }
-    if (!p->preview || !SDL_UpdateTexture(p->preview, NULL, p->frame.data, p->frame.stride)) {
-        snprintf(p->error, sizeof p->error, "Output preview: %s", SDL_GetError());
-        clear_preview(p);
-    }
 }
+
 extern const unsigned char cast_panel_font_data[], cast_panel_font_end[];
 static uint64_t window_xid(SDL_Window *window)
 {
@@ -2347,7 +2201,6 @@ static void cleanup(Panel *p, void *clay_memory)
         return;
     }
     panel_client_close(p->client);
-    clear_preview(p);
     for (int i = 0; i < TEXT_CACHE_MAX; i++) {
         SDL_DestroyTexture(p->cache[i].texture);
         free(p->cache[i].text);
@@ -2379,7 +2232,7 @@ static void json_string(FILE *file, const char *value)
     fputc('"', file);
 }
 
-/* Opt-in native test diagnostics report actual layout and decoded preview state. */
+/* Opt-in native test diagnostics report actual layout and acknowledged state. */
 static void write_ui_state(Panel *p, const char *path)
 {
     if (!path) {
@@ -2389,25 +2242,22 @@ static void write_ui_state(Panel *p, const char *path)
     if (!file) {
         return;
     }
-    Clay_BoundingBox preview = Clay_GetElementData(CLAY_ID("OutputPreview")).boundingBox;
-    Clay_BoundingBox panel = Clay_GetElementData(CLAY_ID("PreviewPanel")).boundingBox;
     Clay_BoundingBox scroll = Clay_GetElementData(CLAY_ID("SettingsScroll")).boundingBox;
+    Clay_ScrollContainerData scroll_data = Clay_GetScrollContainerData(CLAY_ID("SettingsScroll"));
     fprintf(file,
-            "{\"tab\":%d,\"frame\":%llu,\"has_preview\":%s,\"record_preview\":%s,\"command_"
-            "pending\":%s,"
-            "\"command_queued\":%llu,\"command_completed\":%llu,"
+            "{\"tab\":%d,\"frame\":%llu,\"connected\":%s,\"preview_enabled\":%s,\"preview_"
+            "available\":%s,\"preview_target\":\"%s\","
+            "\"command_pending\":%s,\"command_queued\":%llu,\"command_completed\":%llu,"
             "\"density\":%.3f,\"input_scale\":%.3f,\"raster_font_size\":%.3f,"
-            "\"preview\":[%.1f,%.1f,%.1f,%.1f],"
-            "\"preview_panel\":[%.1f,%.1f,%.1f,%.1f],"
-            "\"scroll\":[%.1f,%.1f,%.1f,%.1f],\"widgets\":[",
-            p->tab, (unsigned long long)p->draw_frame, p->preview ? "true" : "false",
-            p->record_preview ? "true" : "false",
+            "\"scroll\":[%.1f,%.1f,%.1f,%.1f],\"scroll_offset\":%.3f,\"widgets\":[",
+            p->tab, (unsigned long long)p->draw_frame, p->snapshot.connected ? "true" : "false",
+            p->snapshot.config.preview ? "true" : "false",
+            p->snapshot.capabilities.preview ? "true" : "false", p->snapshot.config.preview_target,
             p->snapshot.command_queued > p->snapshot.command_completed ? "true" : "false",
             (unsigned long long)p->snapshot.command_queued,
             (unsigned long long)p->snapshot.command_completed, p->density, p->input_scale,
-            TTF_GetFontSize(p->raster_font[1]), preview.x, preview.y, preview.width, preview.height,
-            panel.x, panel.y, panel.width, panel.height, scroll.x, scroll.y, scroll.width,
-            scroll.height);
+            TTF_GetFontSize(p->raster_font[1]), scroll.x, scroll.y, scroll.width, scroll.height,
+            scroll_data.found ? scroll_data.scrollPosition->y : 0);
     for (int i = 0; i < p->widget_count; i++) {
         const Widget *w = &p->widgets[i];
         const char *key = w->id >= 1000 && w->index >= 0 && (size_t)w->index < FIELD_COUNT

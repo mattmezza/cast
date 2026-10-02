@@ -10,6 +10,7 @@ static int route_command(PanelClient *, int, const char *const *, char *, size_t
 static int route_setting(PanelClient *, const char *, const char *, char *, size_t);
 #define panel_client_command route_command
 #define panel_client_setting route_setting
+#pragma GCC poison panel_client_frame
 #include "../src/panel.c"
 #undef panel_client_command
 #undef panel_client_setting
@@ -57,6 +58,12 @@ static void camera_geometry(App *app, int *x, int *y, int *w, int *h)
 }
 int main(void)
 {
+    SDL_MouseWheelEvent wheel = {.y = .25f, .direction = SDL_MOUSEWHEEL_NORMAL};
+    assert(wheel_delta(&wheel) == .75f);
+    wheel.direction = SDL_MOUSEWHEEL_FLIPPED;
+    assert(wheel_delta(&wheel) == -.75f);
+    wheel.y = -1;
+    assert(wheel_delta(&wheel) == 3);
     assert(countdown_seconds(0) == 0);
     assert(countdown_seconds(1) == 1);
     assert(countdown_seconds(1000000000ULL) == 1);
@@ -171,6 +178,15 @@ int main(void)
     edit_field(panel, app, "output.pause_subtitle", "Returns at {time}");
     edit_field(panel, app, "output.blur_title", "Private {datetime}");
     edit_field(panel, app, "output.blur_subtitle", "");
+    edit_field(panel, app, "output.pause_footer", "Recorded {date}");
+    edit_field(panel, app, "output.blur_footer", "");
+    edit_field(panel, app, "output.pause_footer_size", "20");
+    edit_field(panel, app, "output.blur_footer_size", "18");
+    edit_field(panel, app, "output.pause_text_gap", "0");
+    edit_field(panel, app, "output.blur_text_gap", "512");
+    assert(!strcmp(app->config.pause_footer, "Recorded {date}"));
+    assert(!app->config.blur_footer[0] && app->config.pause_footer_size == 20);
+    assert(app->config.pause_text_gap == 0 && app->config.blur_text_gap == 512);
     edit_field(panel, app, "output.blur_radius", "24");
     edit_field(panel, app, "output.blur_opacity", "0.75");
     assert(!strcmp(app->config.pause_text, "Session {date:%Y-%m-%d}"));
@@ -197,30 +213,31 @@ int main(void)
     panel->preview_pending_record = true;
     ack.command_failed = true;
     acknowledge_preview(panel, &ack);
-    assert(!panel->record_preview && !panel->preview_pending);
+    assert(!strcmp(app->config.preview_target, "live") && !panel->preview_pending);
     panel->preview_pending = 3;
     ack.command_failed = false;
     acknowledge_preview(panel, &ack);
-    assert(panel->record_preview && !panel->preview_pending);
+    assert(!strcmp(app->config.preview_target, "record") && !panel->preview_pending);
+    ack.config = app->config;
     panel->preview_pending = 4;
     panel->preview_pending_record = false;
     ack.daemon_generation = 8;
     ack.command_completed = 4;
     acknowledge_preview(panel, &ack);
-    assert(panel->record_preview && !panel->preview_pending);
+    assert(!strcmp(app->config.preview_target, "record") && !panel->preview_pending);
     panel->preview_pending = 4;
     panel->preview_pending_generation = 8;
     acknowledge_preview(panel, &ack);
-    assert(!panel->record_preview && !panel->preview_pending);
+    assert(!strcmp(app->config.preview_target, "live") && !panel->preview_pending);
 
     panel->preview_pending = 5;
     panel->preview_pending_record = false;
     Widget manual_preview = {.enabled = true, .action = A_PREVIEW, .index = 1};
     activate(panel, &manual_preview);
-    assert(panel->record_preview && !panel->preview_pending);
+    assert(!strcmp(app->config.preview_target, "record") && !panel->preview_pending);
     ack.command_completed = 5;
     acknowledge_preview(panel, &ack);
-    assert(panel->record_preview);
+    assert(!strcmp(app->config.preview_target, "record"));
 
     panel->snapshot.connected = true;
     panel->snapshot.config.live_enabled = true;

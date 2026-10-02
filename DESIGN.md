@@ -1,6 +1,6 @@
 ---
 name: cast control panel
-description: Crisp compact native controls with focused section navigation and a persistent preview
+description: Crisp compact native controls with focused section navigation and a separate floating preview
 colors:
   background: "#101113"
   surface: "#181a1d"
@@ -15,7 +15,6 @@ colors:
   selected: "#233f53"
   selected-border: "#3c6886"
   live: "#83ddb6"
-  preview: "#050607"
   text-selection: "#33566f"
 typography:
   title:
@@ -61,12 +60,6 @@ components:
     textColor: "{colors.foreground}"
     typography: "{typography.body}"
     height: "46px"
-  preview:
-    backgroundColor: "{colors.preview}"
-  preview-compact:
-    backgroundColor: "{colors.surface}"
-    width: "208px"
-    height: "146px"
 ---
 
 # Design System: cast control panel
@@ -75,13 +68,13 @@ components:
 
 **Creative North Star: "A compact remote control"**
 
-The panel is an Operate surface used beside a presentation or call. Home provides actual output, current state, the next relevant output actions, and six section links. Opening a section replaces the navigation list with that section's controls. This direction replaces the former dashboard of simultaneous tabs, presets, layouts, and settings.
+The panel is an Operate surface used beside a presentation or call. Home provides current state, output actions and modes, and five section links. Opening a section replaces the navigation list with that section's controls. This direction replaces the former dashboard of simultaneous tabs, presets, layouts, and settings.
 
-The visual character is crisp and quiet: neutral near-black backgrounds, clear white labels, flat controls and one font family. The preview carries the visual interest. Colour signals state, selection and focus.
+The visual character is crisp and quiet: neutral near-black backgrounds, clear white labels, flat controls and one font family. The separate preview window carries the visual interest. Colour signals state, selection and focus.
 
 ## Colors
 
-Neutral canvas and controls replace the blue-grey layered dashboard. Primary text and supporting text remain high contrast. Focus blue marks keyboard focus and selected values; live green and recording coral accompany explicit state words. The preview uses a near-black well and preserves the captured frame's aspect ratio.
+Neutral canvas and controls replace the blue-grey layered dashboard. Primary text and supporting text remain high contrast. Focus blue marks keyboard focus and selected values; live green and recording coral accompany explicit state words. The separate CastPreview window preserves the output frame’s aspect ratio.
 
 ## Typography
 
@@ -89,17 +82,17 @@ Bundled Inter uses fixed logical sizes for titles, section headings, controls an
 
 ## Layout
 
-The default window is 480 × 760 logical pixels; the minimum is 360 × 640. Content stays within a 520-pixel-wide centered column in larger windows. State, preview, relevant output actions and the capture-exclusion notice remain outside the scrolling section content.
+The default window is 480 × 760 logical pixels; the minimum is 360 × 640. Content stays within a 520-pixel-wide centered column in larger windows. State, floating-preview controls, relevant output actions and the capture-exclusion notice remain outside scrolling content.
 
-Home uses a large preview followed by output controls and Outputs, Source, Camera, Audio, Effects and Settings navigation rows. At short window heights, navigation scrolls rather than shrinking type or hiding controls. Outputs owns independent Live and Recording freeze, blur, solid pause, and omitted-time cut controls. Source owns composition layouts and presets.
+Home begins with compact Live and Recording mode groups, followed by Source, Camera, Audio, Effects and Settings links. Freeze and blur are independent in each lane. Recording has solid pause and omitted-time cut controls. At short window heights the mode groups and navigation scroll without shrinking type. Source owns composition layouts and presets.
 
-Section screens have Back and the section title, the persistent output state, a compact preview, output actions and a scrolling form. The compact preview starts in the upper right and can be dragged horizontally there or over settings content. Its movement is constrained so it cannot obscure the heading, Back, output actions or footer notice. Position and Live/Recording target survive section navigation. Home always restores the large preview.
+Section screens have Back and the section title, output state, floating-preview controls, essential output actions and a scrolling form. The panel never embeds, fetches, textures or drags an output image. The separate native CastPreview window has On/Off and Live/Recording target controls on every screen. Target selection reflects acknowledged daemon configuration and survives navigation. Unsupported backends disable the window toggle and explain the limitation. A physical wheel notch moves content 30 logical pixels; fractional touchpad deltas and natural-scroll direction remain intact.
 
-Text and numeric field labels sit above full-width inputs. Boolean and enum controls share a row with their labels. Advanced controls use explicit Show/Hide disclosure buttons. Camera device selection is in its own disclosure; Appearance also controls the fitted camera's blurred, gradient or solid backdrop, its color, blur strength and brightness. Settings has separate Pause screen and Blur screen disclosures for optional titles/subtitles, template text, colors, sizes, blur radius and tint opacity. Fonts remain configurable through the config file. Dirty fields reveal Apply; Enter also submits. Drafts survive navigation.
+Text and numeric field labels sit above full-width inputs. Boolean and enum controls share a row with their labels. Advanced controls use explicit Show/Hide disclosure buttons. Camera device selection is in its own disclosure; Appearance also controls the fitted camera's blurred, gradient or solid backdrop, its color, blur strength and brightness. Settings has separate Pause screen and Blur screen disclosures for optional titles/subtitles/footers, template text, colors, sizes, text gap, blur radius and tint opacity. Fonts remain configurable through the config file; each disclosure displays its selected font and reload guidance. Dirty fields reveal Apply; Enter also submits. Drafts survive navigation.
 
 ## Elevation & Depth
 
-Flat fills and thin dividers provide structure. There are no decorative shadows or blurs. The compact preview uses a single outline and sits above settings; dropdown choices sit above the preview. State changes are immediate and mirror acknowledged daemon state. The native window keeps the truthful CastPanel class and advertises the utility type before its first map; mwm floats and centers it using its existing utility rule.
+Flat fills and thin dividers provide structure. There are no decorative shadows or blurs. Dropdown choices float above the form. State changes are immediate and mirror acknowledged daemon state. The native window keeps the truthful CastPanel class and advertises the utility type before its first map; mwm floats and centers it using its existing utility rule.
 
 ## Shapes
 
@@ -109,7 +102,7 @@ Controls and fields have square corners. The Back action is a drawn left arrow a
 
 ### Buttons
 
-Action labels name the operation. Start record is distinct from the Recording preview target. Live privacy and record Start/Stop/Cancel remain outside the scrolling form. Outputs holds independent freeze/blur controls and recording Pause/Cut/Resume. Pause writes a solid screen and silence; Cut removes media time and Resume continues the same file after the countdown. A resume countdown offers Cancel resume without finalizing the file. Hover and keyboard focus remain visible. Unavailable actions use muted text, while selections pair colour with text.
+Action labels name the operation. Start recording is distinct from the Recording preview target. Live privacy and record Start/Stop/Cancel remain outside the scrolling form. Home holds independent freeze/blur controls and recording Pause/Cut/Resume. Pause writes a solid screen and silence; Cut removes media time and Resume continues the same file after the countdown. A resume countdown offers Cancel resume without finalizing the file. Hover and keyboard focus remain visible. Unavailable actions use muted text, while selections pair colour with text.
 
 ### Inputs / Fields
 
@@ -117,7 +110,7 @@ Each field has a persistent label, a visible focus outline, text selection and c
 
 ### Navigation
 
-Home lists six sections, with Outputs first. Back returns Home, and Escape returns Home when it is not dismissing a dropdown or cancelling text editing. The scrolling section contains only relevant settings and advanced disclosures. Navigation does not alter outputs or preview target. Successful acknowledged record actions select the Recording preview; Resume live selects Live. Failed actions and replaced daemon generations preserve the selected preview. Manual preview selection takes precedence over a pending automatic change.
+Home lists five sections beneath output mode controls. Back returns Home, and Escape returns Home when it is not dismissing a dropdown or cancelling text editing. The scrolling section contains only relevant settings and advanced disclosures. Navigation does not alter outputs or preview target. Successful acknowledged record actions select the Recording preview; Resume live selects Live. Failed actions and replaced daemon generations preserve the selected preview. Manual preview selection takes precedence over a pending automatic change.
 
 ### Cards / Containers
 
@@ -125,12 +118,12 @@ There are no decorative cards. The section is a scrolling form on the window can
 
 ### Output preview and status
 
-Both preview sizes show actual daemon frames, with explicit disconnected and waiting states. Live and recording state are independent. Active recording includes elapsed time. Visible mode labels follow precedence: paused overrides blur, which overrides freeze; record cut overrides all three while its media clock is stopped. Freeze/blur settings remain remembered underneath pause or cut. A pending recording shows an understated film leader within the native preview: two fine circles, guide lines, a rotating hand and the whole seconds remaining. The actual frame stays visible behind the dimmed guide. The guide follows daemon countdown state on every section and never enters the captured or recorded frames. Start/Cancel, Stop record, Cancel resume and Pause all remain outside it. Persistent Live and record actions occupy separate rows; extra output controls stay in the focused Outputs section, keeping Home compact at minimum width. The daemon's capture-exclusion statement remains visible on every screen; unavailable or neutral-masked exclusion is never implied to reconstruct covered content.
+The separate CastPreview window shows the acknowledged Live or Recording output. Live and recording state are independent. Active recording includes elapsed time. Visible mode labels follow precedence: paused overrides blur, which overrides freeze; record cut overrides all three while its media clock is stopped. Freeze/blur settings remain remembered underneath pause or cut. Countdown is a plain seconds-remaining status in the panel on every section. On Xorg the separate preview window temporarily displays a film leader even when preview was off, then hides before recording starts or resumes. The normal window toggle is locked and labeled Countdown preview while the countdown owns it. Unsupported backends retain the plain countdown status. Cancel, Stop record, Cancel resume and Pause all remain reachable outside scrolling content. The daemon's capture-exclusion statement remains visible on every screen; unavailable or neutral-masked exclusion is never implied to reconstruct covered content.
 
 ## Do's and Don'ts
 
 - Keep one focused section visible and make advanced controls reachable through disclosure.
-- Keep preview, output state, privacy actions and exclusion information visible while navigating.
-- Test actual frames and pointer/keyboard interaction at the minimum window width and native display scaling.
+- Keep floating-preview controls, output state, privacy actions and exclusion information visible while navigating.
+- Test separate preview-window actions and pointer/keyboard interaction at the minimum window width and native display scaling.
 - Never stretch the interface into a wide dashboard or shrink text to fit more controls.
 - Never rasterize text at logical resolution and scale the bitmap up for high-density output.
