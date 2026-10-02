@@ -78,6 +78,11 @@ live freeze|unfreeze deliberately holds/releases composed content and silences
 cast virtual audio. Privacy pause overrides freeze and replaces retained content
 with neutral. Neither freeze nor unfreeze can bypass privacy pause.
 .PP
+live message "TEXT" changes the neutral pause label without resuming video or
+altering recording state. Pass an empty argument for no label. The limit is 127
+bytes; the pause frame uses a limited bitmap font. Set output.pause_text in config
+for a persistent default.
+.PP
 record start [PATH] starts one new file, optionally after configured countdown.
 Automatic names are generated in record.directory; existing paths are never
 overwritten. Starting during group pause creates a paused recording; group resume
@@ -107,6 +112,11 @@ its lane. Local LIVE/PAUSED/FROZEN/RECORDING labels stay out of exported frames.
 status [\-\-json] reports capabilities, source, layout, camera visibility, zoom,
 live/record state, path/active duration/countdown/finalization, audio routing, errors and drops.
 doctor performs read\-only dependency/device/directory checks with setup advice.
+panel opens the optional native control panel (build with PANEL=1). Closing it
+leaves the daemon running. settings SECTION.KEY VALUE [SECTION.KEY VALUE ...]
+applies an atomic session batch using the INI schema and reload restrictions.
+Invalid batches leave current settings intact.
+.PP
 config check [PATH], config defaults, config reload validate/print/reload config.
 reset restores effective composition defaults only; quit cleanly shuts down
 and finalizes an existing recording. No command persists session changes to config.

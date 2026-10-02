@@ -34,6 +34,11 @@ optional XTest and FFmpeg tools for inspection) are not normal runtime dependenc
 `make check-loopback LOOPBACK_DEVICE=/dev/video10` additionally tests synthetic
 output and recording through an existing loopback device; select the intended device explicitly.
 
+An optional native control panel uses Clay, SDL3 and SDL3_ttf. On Arch, install
+`sdl3` and `sdl3_ttf`, build with `make X11=1 WAYLAND=1 PANEL=1`, and launch
+`./cast panel` alongside the daemon. Closing the panel leaves capture running.
+See [panel controls and capture visibility](docs/control-panel.md).
+
 Before live output, create an existing loopback device. These commands are for an
 Arch user running the `linux` kernel to execute; cast does not run them:
 
@@ -81,6 +86,9 @@ Camera content is mirrored by default; the screen stays unmirrored. Use
 `./cast camera mirror off` to disable it for the session, or set `mirror = false`
 in the configuration's `[camera]` section.
 
+`./cast live message "Back in five minutes"` changes the neutral pause label for
+this session without resuming video. Set `[output] pause_text` for a persistent default.
+
 With exclusive_caps=1, some consumers detect the camera only after the producer starts.
 Virtual audio is a separate optional device. cast cannot mute a physical mic selected
 directly by the call app; use the app's mute control or select cast's virtual microphone.
@@ -102,6 +110,7 @@ then session commands; commands never write configuration back to disk.
 - [Wayland capability matrix](docs/wayland.md) and [hardware acceptance checklist](docs/hardware-acceptance.md).
 - [Verification results](docs/verification.md) and [requirements traceability](docs/requirements.md).
 - [sxhkd bindings](examples/sxhkdrc) and [Arch PKGBUILD](packaging/PKGBUILD).
+- [AUR packaging and first submission](docs/aur.md).
 
 Installation uses `make install PREFIX=/usr/local`; `DESTDIR` supports staging.
 `make uninstall` removes installed project files. The example is installed under

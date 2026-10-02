@@ -73,6 +73,11 @@ state command supersedes that lane's remembered restoration, even an idempotent 
 cast virtual audio. Privacy pause overrides freeze and replaces retained content
 with neutral. Neither freeze nor unfreeze can bypass privacy pause.
 
+`live message "TEXT"` changes the neutral pause label immediately without resuming
+video or altering recording state. Pass `""` for no label. Messages are at most
+127 bytes and use the pause frame's limited bitmap font. This is a session change;
+use `[output] pause_text` for a persistent default.
+
 `record start [PATH]` starts one new file, optionally after configured countdown.
 Automatic names are generated in record.directory; existing paths are never
 overwritten. Starting during group pause creates a paused recording; group resume
@@ -102,6 +107,13 @@ its lane. Local LIVE/PAUSED/FROZEN/RECORDING labels stay out of exported frames.
 `status [--json]` reports capabilities, source, layout, camera visibility, zoom,
 live/record state, path/active duration/countdown/finalization, audio routing, errors and drops.
 `doctor` performs read-only dependency/device/directory checks with setup advice.
+`panel` opens the optional Clay/SDL3 control panel (`PANEL=1` build). Closing it
+leaves the daemon running. See [panel behavior and exclusion](control-panel.md).
+`settings SECTION.KEY VALUE [SECTION.KEY VALUE ...]` applies an atomic batch of
+INI-schema values to this session. Validation and restart restrictions match reload;
+failed batches leave settings intact. Preset definitions are changed in the file.
+For example: `cast settings camera.radius 16 camera.border_color "#80c9ff"`.
+
 `config check [PATH]`, `config defaults`, `config reload` validate/print/reload config.
 `reset` restores effective composition defaults only; `quit` cleanly shuts down
 and finalizes an existing recording. No command persists session changes to config.

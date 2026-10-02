@@ -5,6 +5,7 @@ PREFIX = /usr/local
 DESTDIR =
 X11 = 1
 WAYLAND = 0
+PANEL = 0
 VERSION = 0.1.0
 SOURCE_COMMIT = working-tree
 RELEASE_NOTES =
@@ -14,7 +15,7 @@ CFLAGS = -O2 -g
 WARN = -Wall -Wextra -Wformat=2 -Wstrict-prototypes -Wmissing-prototypes
 BASE_PACKAGES = libavcodec libavformat libavutil libswscale libswresample libpipewire-0.3
 PACKAGES = $(BASE_PACKAGES)
-SOURCES = src/main.c src/commands.c src/config.c src/state.c src/compositor.c src/platform.c src/media.c src/webcam.c src/audio.c src/record.c vendor/inih/ini.c
+SOURCES = src/main.c src/commands.c src/config.c src/state.c src/compositor.c src/platform.c src/media.c src/webcam.c src/audio.c src/record.c src/panel_transport.c vendor/inih/ini.c
 INI_FLAGS = -DINI_HANDLER_LINENO=1 -DINI_CALL_HANDLER_ON_NEW_SECTION=1 -DINI_ALLOW_MULTILINE=0 -DINI_ALLOW_INLINE_COMMENTS=0 -DINI_STOP_ON_FIRST_ERROR=1 -DINI_MAX_LINE=8192
 CPPFLAGS += -Isrc -Ivendor/inih $(INI_FLAGS) -D_GNU_SOURCE
 LDLIBS += -lm -lpthread
@@ -33,6 +34,16 @@ PKG_CFLAGS = $(shell $(PKG_CONFIG) --cflags $(PACKAGES))
 PKG_LIBS = $(shell $(PKG_CONFIG) --libs $(PACKAGES))
 BUILD = build/x$(X11)-w$(WAYLAND)
 OBJECTS = $(SOURCES:%.c=$(BUILD)/%.o)
+ifeq ($(PANEL),1)
+# Overridable for a locally built SDK; normal builds use system SDL3/SDL3_ttf.
+PANEL_CFLAGS = $(shell $(PKG_CONFIG) --cflags sdl3 sdl3-ttf)
+PANEL_LIBS = $(shell $(PKG_CONFIG) --libs sdl3 sdl3-ttf)
+SOURCES += src/panel.c
+CPPFLAGS += -DWITH_PANEL -Ivendor/clay $(PANEL_CFLAGS)
+LDLIBS += $(PANEL_LIBS)
+BUILD = build/x$(X11)-w$(WAYLAND)-p1
+OBJECTS += $(BUILD)/src/panel_font.o
+endif
 CORE_SOURCES = src/config.c src/state.c vendor/inih/ini.c
 MEDIA_SOURCES = src/media.c src/webcam.c src/audio.c src/record.c src/compositor.c
 
@@ -43,6 +54,9 @@ cast: FORCE $(OBJECTS)
 $(BUILD)/%.o: %.c src/cast.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -MMD -MP -c $< -o $@
+$(BUILD)/src/panel_font.o: src/panel_font.S assets/fonts/Inter.ttf
+	@mkdir -p $(dir $@)
+	$(CC) -c $< -o $@
 -include $(OBJECTS:.o=.d)
 
 $(BUILD)/test_core: tests/test_core.c $(CORE_SOURCES) src/cast.h
@@ -59,7 +73,10 @@ $(BUILD)/test_wayland: tests/test_wayland.c src/wayland.c src/compositor.c src/s
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_wayland.c src/compositor.c src/state.c $(PKG_LIBS) $(LDLIBS)
 $(BUILD)/test_commands: tests/test_commands.c $(SOURCES) src/app_internal.h src/cast.h src/media_internal.h src/platform_backend.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_commands.c $(filter-out src/main.c,$(SOURCES)) $(PKG_LIBS) $(LDLIBS)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_commands.c $(filter-out src/main.c src/panel.c,$(SOURCES)) $(PKG_LIBS) $(LDLIBS)
+$(BUILD)/test_panel_transport: tests/test_panel_transport.c $(SOURCES) src/app_internal.h src/panel_transport.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_panel_transport.c $(filter-out src/main.c src/panel.c,$(SOURCES)) $(PKG_LIBS) $(LDLIBS)
 $(BUILD)/benchmark: tests/benchmark.c src/compositor.c $(CORE_SOURCES) src/cast.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ $(filter %.c,$^) -lm
@@ -81,17 +98,26 @@ check-xorg:
 	@echo 'check-xorg requires X11=1 and optional Xvfb/libXtst test dependencies' >&2
 	@exit 1
 endif
-check-unit: $(BUILD)/test_core $(BUILD)/test_visual $(BUILD)/test_media $(BUILD)/test_commands
+check-unit: $(BUILD)/test_core $(BUILD)/test_visual $(BUILD)/test_media $(BUILD)/test_commands $(BUILD)/test_panel_transport
 	$(BUILD)/test_core
 	$(BUILD)/test_visual
 	$(BUILD)/test_media
 	$(BUILD)/test_commands > $(BUILD)/commands-status.json
+	$(BUILD)/test_panel_transport
 	python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["record"]["state"] == "stopped" and not s["record"]["finalizing"]; assert s["audio"]["mic"]["source"] == "mic \"quoted\" \\ route\n"; assert s["audio"]["desktop"]["source"] == "desktop café"; assert s["audio"]["virtual"]["name"] == "cast\tvirtual"; assert "\xff" in s["record"]["path"]' $(BUILD)/commands-status.json
 check: cast check-unit
 	python3 tests/test_ipc.py
 check-loopback: cast
 	@test -n '$(LOOPBACK_DEVICE)' || { echo 'set LOOPBACK_DEVICE to an existing v4l2loopback output device' >&2; exit 1; }
 	python3 tests/test_loopback.py --device '$(LOOPBACK_DEVICE)'
+ifeq ($(PANEL),1)
+check-panel: cast
+	python3 tests/test_panel_ui.py
+else
+check-panel:
+	@echo 'check-panel requires PANEL=1 and optional Xvfb/xdotool test dependencies' >&2
+	@exit 1
+endif
 ifeq ($(WAYLAND),1)
 check-unit: check-wayland-unit
 check-wayland-unit: $(BUILD)/test_wayland
@@ -113,6 +139,11 @@ install: cast
 	install -Dm644 examples/cast.conf $(DESTDIR)$(PREFIX)/share/doc/cast/cast.conf.example
 	install -Dm644 examples/sxhkdrc $(DESTDIR)$(PREFIX)/share/doc/cast/sxhkdrc.example
 	install -Dm644 README.md $(DESTDIR)$(PREFIX)/share/doc/cast/README.md
+ifeq ($(PANEL),1)
+	install -Dm644 vendor/clay/LICENSE.md $(DESTDIR)$(PREFIX)/share/licenses/cast/clay-LICENSE
+	install -Dm644 assets/fonts/OFL.txt $(DESTDIR)$(PREFIX)/share/licenses/cast/Inter-OFL
+	install -Dm644 licenses/SDL3_ttf-ZLIB.txt $(DESTDIR)$(PREFIX)/share/licenses/cast/SDL3_ttf-ZLIB
+endif
 	@for doc in docs/*.md; do install -Dm644 "$$doc" "$(DESTDIR)$(PREFIX)/share/doc/cast/$${doc##*/}"; done
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/cast $(DESTDIR)$(PREFIX)/share/man/man1/cast.1
@@ -122,15 +153,15 @@ package-check:
 package: package-check cast
 	@mkdir -p dist
 	rm -rf dist/stage
-	$(MAKE) X11=$(X11) WAYLAND=$(WAYLAND) DESTDIR='$(CURDIR)/dist/stage' PREFIX=/usr install
-	@{ echo 'cast $(VERSION)'; echo 'Source commit: $(SOURCE_COMMIT)'; echo 'Architecture:'; uname -m; echo 'Backend features: X11=$(X11) WAYLAND=$(WAYLAND)'; echo 'Runtime dynamic libraries:'; ldd cast; } > dist/stage/usr/share/doc/cast/build-info.txt
+	$(MAKE) X11=$(X11) WAYLAND=$(WAYLAND) PANEL=$(PANEL) DESTDIR='$(CURDIR)/dist/stage' PREFIX=/usr install
+	@{ echo 'cast $(VERSION)'; echo 'Source commit: $(SOURCE_COMMIT)'; echo 'Architecture:'; uname -m; echo 'Backend features: X11=$(X11) WAYLAND=$(WAYLAND) PANEL=$(PANEL)'; echo 'Runtime dynamic libraries:'; ldd cast; } > dist/stage/usr/share/doc/cast/build-info.txt
 	tar -C dist/stage -czf dist/cast-$(VERSION)-linux-$$(uname -m).tar.gz .
-	tar --transform='s,^,cast-$(VERSION)/,' -czf dist/cast-$(VERSION)-source.tar.gz Makefile .clang-format cast-build-prompt.md README.md LICENSE licenses src vendor tests docs examples packaging
+	tar --transform='s,^,cast-$(VERSION)/,' -czf dist/cast-$(VERSION)-source.tar.gz Makefile .clang-format cast-build-prompt.md README.md PRODUCT.md DESIGN.md LICENSE licenses src vendor assets tests docs examples packaging
 	cd dist && sha256sum cast-$(VERSION)-linux-$$(uname -m).tar.gz cast-$(VERSION)-source.tar.gz > SHA256SUMS
 release-check:
-	sh packaging/release.sh check '$(VERSION)' '$(RELEASE_NOTES)' '$(X11)' '$(WAYLAND)' '$(RELEASE_TAG)'
+	sh packaging/release.sh check '$(VERSION)' '$(RELEASE_NOTES)' '$(X11)' '$(WAYLAND)' '$(RELEASE_TAG)' '$(PANEL)'
 release:
-	sh packaging/release.sh release '$(VERSION)' '$(RELEASE_NOTES)' '$(X11)' '$(WAYLAND)' '$(RELEASE_TAG)'
+	sh packaging/release.sh release '$(VERSION)' '$(RELEASE_NOTES)' '$(X11)' '$(WAYLAND)' '$(RELEASE_TAG)' '$(PANEL)'
 clean:
 	rm -rf build cast
-.PHONY: FORCE all check check-unit check-wayland check-wayland-unit check-xorg check-loopback benchmark sanitize install uninstall package-check package release-check release clean
+.PHONY: FORCE all check check-unit check-wayland check-wayland-unit check-xorg check-loopback check-panel benchmark sanitize install uninstall package-check package release-check release clean

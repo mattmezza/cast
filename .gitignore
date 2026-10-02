@@ -1,5 +1,6 @@
 /build/
 /cast
 /dist/
+/.impeccable/review/
 *.o
 *.d

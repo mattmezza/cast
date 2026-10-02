@@ -69,3 +69,7 @@ For local development, `make package X11=1 WAYLAND=1` still packages the working
 tree under `dist/`; it does not create a GitHub release. `VERSION` must match the
 header here as well. Use the release target for published artifacts so the source
 and binary refer to a clean, tagged revision.
+
+Set `PANEL=1` on package/release targets to include the optional Clay/SDL3 panel.
+The selected value is propagated into the isolated release build; that environment
+needs SDL3 and SDL3_ttf development packages. Published v0.1 assets remain unchanged.

@@ -9,9 +9,11 @@ version=${2:-}
 notes=${3:-}
 x11=${4:-1}
 wayland=${5:-0}
+panel=${7:-0}
 case "$action" in check|release) ;; *) fail 'expected check or release' ;; esac
 case "$version" in ''|*[!0-9A-Za-z.-]*) fail 'invalid release version' ;; esac
 case "$x11:$wayland" in 0:0|0:1|1:0|1:1) ;; *) fail 'X11 and WAYLAND must be 0 or 1' ;; esac
+case "$panel" in 0|1) ;; *) fail 'PANEL must be 0 or 1' ;; esac
 tag=${6:-v$version}
 git check-ref-format "refs/tags/$tag" >/dev/null || fail 'invalid RELEASE_TAG'
 for command in git gh make tar sha256sum mktemp; do
@@ -50,7 +52,7 @@ check_release() {
 }
 
 check_release
-printf 'Release checks passed: %s at %s (%s), X11=%s WAYLAND=%s\n' "$tag" "$commit" "$repo" "$x11" "$wayland"
+printf 'Release checks passed: %s at %s (%s), X11=%s WAYLAND=%s PANEL=%s\n' "$tag" "$commit" "$repo" "$x11" "$wayland" "$panel"
 [ "$action" = release ] || exit 0
 
 arch=$(uname -m)
@@ -66,7 +68,7 @@ git archive --format=tar.gz --prefix="cast-$version/" "$commit" > "$work/$source
 tar -xzf "$work/$source_name" -C "$work"
 cp "$notes" "$work/release-notes.md"
 # This fresh tree cannot reuse objects or binaries from the developer checkout.
-make -C "$work/cast-$version" X11="$x11" WAYLAND="$wayland" VERSION="$version" SOURCE_COMMIT="$commit" package
+make -C "$work/cast-$version" X11="$x11" WAYLAND="$wayland" PANEL="$panel" VERSION="$version" SOURCE_COMMIT="$commit" package
 mkdir "$work/assets"
 sh "$work/cast-$version/packaging/dependency-sources.sh" "$work/assets" "$version"
 mv "$work/cast-$version/dist/$binary_name" "$work/assets/$binary_name"

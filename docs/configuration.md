@@ -66,6 +66,11 @@ aspect changes use centered cropping with bounded offsets. Circle uses a square 
 Camera content is mirrored by default; the screen stays unmirrored. Set `mirror = false`
 in `[camera]` to disable it persistently, or use `cast camera mirror off` for the session.
 
+`cast live message "TEXT"` changes `output.pause_text` for the session immediately
+without resuming video. `cast settings SECTION.KEY VALUE [SECTION.KEY VALUE ...]`
+applies a validated atomic session batch through the same schema and restart rules
+as reload. Settings and panel controls do not write the selected config file.
+
 The following table is the supported schema. `examples/cast.conf` includes every key.
 
 | Section | Setting | Default | Accepted values / units |
