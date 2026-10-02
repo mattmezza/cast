@@ -93,7 +93,7 @@ static bool has_label(Compositor *c, Config *cfg, const char *label)
     char error[CAST_ERR];
     Compositor *reference = compositor_create();
     if (label) {
-        compositor_key(reference, label, source.ts_ns);
+        compositor_key(reference, label, source.ts_ns, cfg->keys_timeout_ms);
     }
     assert(compositor_render(c, cfg, &source, NULL, NULL, false, &actual, error, sizeof(error)) ==
            0);
@@ -114,14 +114,14 @@ static void press(Display *d, KeySym symbol, bool down)
     assert(XTestFakeKeyEvent(d, code, down, CurrentTime));
 }
 
-static Window preview_window(Display *d)
+static Window named_window(Display *d, const char *title)
 {
     Window root, parent, *children = NULL, result = None;
     unsigned count = 0;
     assert(XQueryTree(d, DefaultRootWindow(d), &root, &parent, &children, &count));
     for (unsigned i = 0; i < count; i++) {
         char *name = NULL;
-        if (XFetchName(d, children[i], &name) && name && !strcmp(name, "cast output preview")) {
+        if (XFetchName(d, children[i], &name) && name && !strcmp(name, title)) {
             result = children[i];
         }
         if (name) {
@@ -142,7 +142,7 @@ static Window wait_preview(Display *d, Platform *p, Config *cfg, Compositor *c, 
         pump(d, p, cfg, c, true);
         assert(platform_preview(p, frame, state, cfg, error, sizeof(error)) == 0);
         XSync(d, false);
-        Window win = preview_window(d);
+        Window win = named_window(d, "cast output preview");
         XWindowAttributes attr;
         if (win && XGetWindowAttributes(d, win, &attr) && attr.map_state == IsViewable) {
             return win;
@@ -168,6 +168,19 @@ static void assert_preview_mask(const Frame *frame, const XWindowAttributes *att
     }
 }
 
+static void assert_utility(Display *d, Window window)
+{
+    Atom property = XInternAtom(d, "_NET_WM_WINDOW_TYPE", False), type;
+    unsigned char *value = NULL;
+    int format;
+    unsigned long count, left;
+    assert(XGetWindowProperty(d, window, property, 0, 1, False, XA_ATOM, &type, &format, &count,
+                              &left, &value) == Success);
+    assert(type == XA_ATOM && format == 32 && count == 1 && !left);
+    assert(*(Atom *)value == XInternAtom(d, "_NET_WM_WINDOW_TYPE_UTILITY", False));
+    XFree(value);
+}
+
 static void preview_tests(Display *d, Platform *p, Config *cfg, Compositor *c)
 {
     Frame source = {0}, capture = {0};
@@ -178,7 +191,10 @@ static void preview_tests(Display *d, Platform *p, Config *cfg, Compositor *c)
     cfg->preview = true;
     Window preview = wait_preview(d, p, cfg, c, &source, &state);
     XWindowAttributes attr;
-    assert(XGetWindowAttributes(d, preview, &attr) && attr.override_redirect);
+    assert(XGetWindowAttributes(d, preview, &attr) && !attr.override_redirect);
+    assert_utility(d, preview);
+    assert(attr.x == (DisplayWidth(d, DefaultScreen(d)) - attr.width) / 2);
+    assert(attr.y == (DisplayHeight(d, DefaultScreen(d)) - attr.height) / 2);
     XClassHint hint;
     assert(XGetClassHint(d, preview, &hint));
     assert(!strcmp(hint.res_name, "cast-preview") && !strcmp(hint.res_class, "CastPreview"));
@@ -219,6 +235,31 @@ static void preview_tests(Display *d, Platform *p, Config *cfg, Compositor *c)
             }
         }
     }
+    /* An in-flight old epoch cannot repaint after the synchronous privacy barrier. */
+    pump(d, p, cfg, c, false);
+    for (int i = 0; i < 8; i++) {
+        assert(platform_preview(p, &source, &state, cfg, error, sizeof error) == 0);
+    }
+    pump(d, p, cfg, c, true);
+    for (int i = 0; i < 4; i++) {
+        XImage *neutral = XGetImage(d, preview, 20, 40, 1, 1, AllPlanes, ZPixmap);
+        assert(neutral && XGetPixel(neutral, 0, 0) == 0x111111);
+        XDestroyImage(neutral);
+        usleep(10000);
+    }
+    /* Managed decorations are masked along with the preview client. */
+    Window decoration =
+        XCreateSimpleWindow(d, DefaultRootWindow(d), 35, 45, 240, 180, 3, 0x112233, 0x556677);
+    XReparentWindow(d, preview, decoration, 10, 25);
+    XMapWindow(d, decoration);
+    XSync(d, false);
+    XWindowAttributes decorated;
+    assert(XGetWindowAttributes(d, decoration, &decorated));
+    assert(platform_capture(p, &capture, &cursor, error, sizeof error) == 0);
+    assert_preview_mask(&capture, &decorated, 0, 0, cfg->pause_color);
+    XReparentWindow(d, preview, DefaultRootWindow(d), attr.x, attr.y);
+    XDestroyWindow(d, decoration);
+    XSync(d, false);
     /* Region clipping uses current geometry rather than creation coordinates. */
     char *region[] = {"capture", "region", "100", "110", "140", "100"};
     command(p, cfg, 6, region);
@@ -314,6 +355,13 @@ static void panel_tests(Display *d, Platform *p, Config *cfg, Compositor *comp)
     XChangeProperty(d, panel, type_atom, XA_ATOM, 32, PropModeReplace, (unsigned char *)&normal, 1);
     XSync(d, false);
     assert(platform_panel_register(p, panel, (int)pid, error, sizeof(error)) == 0);
+    Atom utility = XInternAtom(d, "_NET_WM_WINDOW_TYPE_UTILITY", false);
+    XChangeProperty(d, panel, type_atom, XA_ATOM, 32, PropModeReplace, (unsigned char *)&utility,
+                    1);
+    XSync(d, false);
+    assert(platform_panel_register(p, panel, (int)pid, error, sizeof(error)) == 0);
+    assert(platform_panel_register(p, panel, (int)pid + 1, error, sizeof(error)) < 0);
+
     XWindowAttributes attr;
     assert(XGetWindowAttributes(d, frame, &attr));
     assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) == 0);
@@ -458,6 +506,103 @@ static void panel_tests(Display *d, Platform *p, Config *cfg, Compositor *comp)
     frame_free(&recording);
 }
 
+static void countdown_tests(Display *d, Platform *p, Config *cfg, Compositor *comp)
+{
+    char error[CAST_ERR];
+    Frame capture = {0};
+    Cursor cursor;
+    assert(platform_countdown(p, 3000000000ULL, error, sizeof error) == 0);
+    XSync(d, false);
+    Window window = named_window(d, "cast recording countdown");
+    XWindowAttributes attr;
+    assert(window && XGetWindowAttributes(d, window, &attr) && attr.map_state == IsViewable);
+    assert(!attr.override_redirect && attr.width == 240 && attr.height == 240);
+    assert(attr.x == (DisplayWidth(d, DefaultScreen(d)) - 240) / 2);
+    assert_utility(d, window);
+    XClassHint hint;
+    assert(XGetClassHint(d, window, &hint));
+    assert(!strcmp(hint.res_class, "CastCountdown"));
+    XFree(hint.res_name);
+    XFree(hint.res_class);
+    XImage *image = XGetImage(d, window, 0, 0, 240, 240, AllPlanes, ZPixmap);
+    assert(image && XGetPixel(image, 108, 92) == 0xf8f9fb);
+    assert(XGetPixel(image, 105, 127) == 0x101113);
+    XDestroyImage(image);
+    usleep(40000);
+    assert(platform_countdown(p, 2000000000ULL, error, sizeof error) == 0);
+    XSync(d, false);
+    image = XGetImage(d, window, 0, 0, 240, 240, AllPlanes, ZPixmap);
+    assert(image && XGetPixel(image, 105, 127) == 0xf8f9fb);
+    XDestroyImage(image);
+    assert(platform_capture(p, &capture, &cursor, error, sizeof error) == 0);
+    assert_preview_mask(&capture, &attr, 0, 0, cfg->pause_color);
+    Atom active = XInternAtom(d, "_NET_ACTIVE_WINDOW", false);
+    XChangeProperty(d, DefaultRootWindow(d), active, XA_WINDOW, 32, PropModeReplace,
+                    (unsigned char *)&window, 1);
+    XSync(d, false);
+    char *select[] = {"capture", "window", "active"};
+    assert(platform_command(p, cfg, 3, select, error, sizeof error) < 0);
+    Window frame =
+        XCreateSimpleWindow(d, DefaultRootWindow(d), 40, 60, 260, 275, 3, 0xaa2233, 0x332244);
+    XReparentWindow(d, window, frame, 10, 25);
+    XMapWindow(d, frame);
+    XSync(d, false);
+    assert(XGetWindowAttributes(d, frame, &attr));
+    assert(platform_capture(p, &capture, &cursor, error, sizeof error) == 0);
+    assert_preview_mask(&capture, &attr, 0, 0, cfg->pause_color);
+    XChangeProperty(d, DefaultRootWindow(d), active, XA_WINDOW, 32, PropModeReplace,
+                    (unsigned char *)&frame, 1);
+    XSync(d, false);
+    assert(platform_command(p, cfg, 3, select, error, sizeof error) < 0);
+    XEvent cancel = {0};
+    cancel.xclient.type = ClientMessage;
+    cancel.xclient.window = window;
+    cancel.xclient.message_type = XInternAtom(d, "WM_PROTOCOLS", false);
+    cancel.xclient.format = 32;
+    cancel.xclient.data.l[0] = (long)XInternAtom(d, "WM_DELETE_WINDOW", false);
+    XSendEvent(d, window, false, NoEventMask, &cancel);
+    XSync(d, false);
+    /* The final deadline poll sees close even without the regular event pump. */
+    assert(platform_countdown(p, 1, error, sizeof error) == 1);
+    assert(platform_countdown(p, 0, error, sizeof error) == 1);
+    XSync(d, false);
+    /* The fake WM deliberately leaves decorations mapped after client teardown. */
+    assert(platform_capture(p, &capture, &cursor, error, sizeof error) == 0);
+    assert_preview_mask(&capture, &attr, 0, 0, cfg->pause_color);
+    assert(platform_capture(p, &capture, &cursor, error, sizeof error) == 0);
+    assert_preview_mask(&capture, &attr, 0, 0, cfg->pause_color);
+    XDestroyWindow(d, frame);
+    XSync(d, false);
+    assert(!named_window(d, "cast recording countdown"));
+    assert(platform_capture(p, &capture, &cursor, error, sizeof error) == 0);
+    for (int y = 0; y < capture.height; y++) {
+        for (int x = 0; x < capture.width; x++) {
+            assert(pixel(&capture, x, y) == 0);
+        }
+    }
+    assert(platform_countdown(p, 1000000000ULL, error, sizeof error) == 0);
+    XSync(d, false);
+    window = named_window(d, "cast recording countdown");
+    memset(&cancel, 0, sizeof cancel);
+    cancel.xkey.type = KeyPress;
+    cancel.xkey.window = window;
+    cancel.xkey.keycode = XKeysymToKeycode(d, XK_Escape);
+    XSendEvent(d, window, false, KeyPressMask, &cancel);
+    pump(d, p, cfg, comp, false);
+    assert(platform_countdown(p, 1, error, sizeof error) == 1);
+    assert(platform_countdown(p, 0, error, sizeof error) == 1);
+    /* A panel attachment hides directly: queued cancellation must still win. */
+    assert(platform_countdown(p, 1000000000ULL, error, sizeof error) == 0);
+    XSync(d, false);
+    window = named_window(d, "cast recording countdown");
+    cancel.xkey.window = window;
+    XSendEvent(d, window, false, KeyPressMask, &cancel);
+    XSync(d, false);
+    assert(platform_countdown(p, 0, error, sizeof error) == 1);
+    assert(platform_countdown(p, 0, error, sizeof error) == 0);
+    frame_free(&capture);
+}
+
 static void keyboard_tests(Display *d, Platform *p, Config *cfg, Compositor *c)
 {
     cfg->keys = true;
@@ -518,13 +663,28 @@ static void keyboard_tests(Display *d, Platform *p, Config *cfg, Compositor *c)
     pump(d, p, cfg, c, false);
     assert(has_label(c, cfg, "Left"));
 
-    /* Repeated presses while held must not extend the annotation timeout. */
+    /* Rapid separate presses must all count, even inside the old 100ms guard. */
+    compositor_clear(c);
+    press(d, XK_j, true);
+    press(d, XK_j, false);
+    pump(d, p, cfg, c, false);
+    assert(has_label(c, cfg, "j"));
+    press(d, XK_j, true);
+    press(d, XK_j, false);
+    pump(d, p, cfg, c, false);
+    assert(has_label(c, cfg, "jx2"));
+    press(d, XK_j, true);
+    press(d, XK_j, false);
+    pump(d, p, cfg, c, false);
+    assert(has_label(c, cfg, "jx3"));
+
+    /* Without another observed raw press, a held key still expires normally.
+     * XKB software repeat does not necessarily emit XI_RawKeyPress events. */
     compositor_clear(c);
     cfg->keys_timeout_ms = 120;
-    assert(XkbSetAutoRepeatRate(d, XkbUseCoreKbd, 40, 20));
     press(d, XK_a, true);
     pump(d, p, cfg, c, false);
-    assert(has_label(c, cfg, "A"));
+    assert(has_label(c, cfg, "a"));
     usleep(200000);
     pump(d, p, cfg, c, false);
     assert(has_label(c, cfg, NULL));
@@ -541,10 +701,12 @@ static void keyboard_tests(Display *d, Platform *p, Config *cfg, Compositor *c)
     assert(XTestFakeKeyEvent(d, code, true, CurrentTime));
     assert(XTestFakeKeyEvent(d, code, false, CurrentTime));
     pump(d, p, cfg, c, false);
-    assert(has_label(c, cfg, "Z"));
+    assert(has_label(c, cfg, "z"));
     cfg->keys = false;
     compositor_clear(c);
 }
+
+static void preview_benchmark(Display *, Platform *, Config *);
 
 static void exercise(Display *d, Platform *p, Config *cfg)
 {
@@ -661,6 +823,8 @@ static void exercise(Display *d, Platform *p, Config *cfg)
     command(p, cfg, 2, monitor);
     preview_tests(d, p, cfg, c);
     panel_tests(d, p, cfg, c);
+    countdown_tests(d, p, cfg, c);
+    preview_benchmark(d, p, cfg);
     frame_free(&capture);
     compositor_destroy(c);
     puts("Xvfb: root/window pixels, resize, remap/minimize/destroy, atomic regions, selection "
@@ -687,6 +851,66 @@ static void capture_benchmark(Platform *p)
     frame_free(&f);
 }
 
+static void preview_benchmark(Display *d, Platform *p, Config *cfg)
+{
+    Frame frame = {0};
+    assert(frame_alloc(&frame, 1920, 1080) == 0);
+    memset(frame.data, 0, (size_t)frame.stride * frame.height);
+    cfg->preview = true;
+    State state = {0};
+    Compositor *comp = compositor_create();
+    Window window = wait_preview(d, p, cfg, comp, &frame, &state);
+    XResizeWindow(d, window, 640, 392);
+    pump(d, p, cfg, comp, false);
+    XWindowAttributes attr;
+    assert(XGetWindowAttributes(d, window, &attr));
+    uint64_t start = cast_now_ns(), calls = 0;
+    int updates = 0, last = -1, samples = 0, total_lag = 0;
+    char error[CAST_ERR];
+    for (int seq = 1; seq <= 90; seq++) {
+        for (int y = 0; y < frame.height; y++) {
+            uint8_t *row = frame.data + (size_t)y * frame.stride;
+            for (int x = 0; x < frame.width; x++) {
+                row[4 * x] = 32;
+                row[4 * x + 1] = (uint8_t)seq;
+                row[4 * x + 2] = 64;
+                row[4 * x + 3] = 255;
+            }
+        }
+        frame.ts_ns = cast_now_ns();
+        uint64_t before = cast_now_ns();
+        assert(platform_preview(p, &frame, &state, cfg, error, sizeof error) == 0);
+        calls += cast_now_ns() - before;
+        XImage *image = XGetImage(d, window, attr.width / 2, 32 + (attr.height - 32) / 2, 1, 1,
+                                  AllPlanes, ZPixmap);
+        assert(image);
+        unsigned long value = XGetPixel(image, 0, 0);
+        XDestroyImage(image);
+        int shown = (int)((value >> 8) & 255);
+        if (shown > 0 && shown <= seq) {
+            if (shown != last) {
+                updates++;
+            }
+            total_lag += seq - shown;
+            samples++;
+            last = shown;
+        }
+        uint64_t deadline = start + (uint64_t)seq * 1000000000 / 60;
+        struct timespec next = {(time_t)(deadline / 1000000000), (long)(deadline % 1000000000)};
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
+    }
+    printf("Preview 1080p->%dx%d: %d updates/90 at 60Hz, %.2fms mean age, %.3fms capture-thread "
+           "call\n",
+           attr.width, attr.height - 32, updates, samples ? total_lag * 1000. / 60 / samples : 0,
+           calls / 90. / 1e6);
+    assert(updates >= 40); /* Reject the former ~15fps gate, allow loaded CI runners. */
+    assert(samples && total_lag < samples * 8); /* Less than eight producer ticks behind. */
+    cfg->preview = false;
+    assert(platform_preview(p, &frame, &state, cfg, error, sizeof error) == 0);
+    frame_free(&frame);
+    compositor_destroy(comp);
+}
+
 int main(int argc, char **argv)
 {
     Config cfg = configuration();
@@ -702,6 +926,11 @@ int main(int argc, char **argv)
         Display *d = XOpenDisplay(NULL);
         assert(d);
         exercise(d, p, &cfg);
+        XCloseDisplay(d);
+    } else if (argc == 2 && !strcmp(argv[1], "--preview-benchmark")) {
+        Display *d = XOpenDisplay(NULL);
+        assert(d);
+        preview_benchmark(d, p, &cfg);
         XCloseDisplay(d);
     } else if (argc == 2 && !strcmp(argv[1], "--benchmark")) {
         capture_benchmark(p);

@@ -43,8 +43,19 @@ typedef struct {
     Pixmap ready_pixmap;
 } Preview;
 typedef struct {
+    int x, y, width, height;
+    bool visible;
+    Window outer;
+} WindowRect;
+typedef struct {
     Display *d;
-    Window root, selected, preview, selection, panel;
+    Window root, selected, preview, selection, panel, countdown;
+    GC countdown_gc;
+    Pixmap countdown_buffer;
+    WindowRect countdown_retired;
+    bool countdown_retired_first;
+    bool countdown_cancelled, countdown_dirty;
+    uint64_t countdown_painted;
     int panel_pid;
     Atom wm_delete, wm_state, active_window;
     int screen, xi_opcode, randr_base, xkb_base;
@@ -60,14 +71,11 @@ typedef struct {
     char monitor[128], kind[16], source_error[CAST_ERR];
     int rx, ry, rw, rh, sx, sy, sw, sh;
     unsigned mods, group, alt_mask, super_mask;
-    int last_keycode;
-    Time last_key_time;
     int selecting, drag_x, drag_y, last_x, last_y;
     bool dragging;
     Config *owner; /* Runtime config object provided by command; daemon owns its lifetime. */
     X11Cursor crosshair;
     int preview_w, preview_h, preview_border;
-    uint64_t last_preview;
     Preview *preview_worker;
     uint64_t preview_epoch, preview_source;
     unsigned preview_state;
@@ -84,6 +92,7 @@ static void initialize_xlib(void)
 }
 static void preview_stop(Xorg *p);
 static void preview_neutral(Xorg *p);
+static void countdown_event(Xorg *p, const XEvent *event);
 static int on_error(Display *d, XErrorEvent *ev)
 {
     (void)d;
@@ -298,14 +307,14 @@ static bool client_window(Xorg *p, Window win)
     }
     return rc == Success && type != None;
 }
-static bool panel_window(Xorg *p, Window candidate)
+static bool related_window(Xorg *p, Window candidate, Window owned)
 {
-    if (!p->panel || candidate == p->root) {
+    if (!owned || candidate == p->root) {
         return false;
     }
     bool found = false;
     begin(p);
-    Window window = p->panel;
+    Window window = owned;
     for (int level = 0; window && window != p->root && level < 32; level++) {
         if (candidate == window) {
             found = true;
@@ -325,9 +334,15 @@ static bool panel_window(Xorg *p, Window candidate)
     return end(p) && found;
 }
 
+static bool local_window(Xorg *p, Window candidate)
+{
+    return related_window(p, candidate, p->panel) || related_window(p, candidate, p->preview) ||
+           related_window(p, candidate, p->countdown);
+}
+
 static Window find_client(Xorg *p, Window win, int depth, int *remaining)
 {
-    if (!win || win == p->preview || win == p->selection || panel_window(p, win) || depth > 12 ||
+    if (!win || win == p->preview || win == p->selection || local_window(p, win) || depth > 12 ||
         --*remaining < 0) {
         return 0;
     }
@@ -351,7 +366,7 @@ static Window find_client(Xorg *p, Window win, int depth, int *remaining)
 static int window_select(Xorg *p, Window win, char *e, size_t n)
 {
     if (!win || win == p->root || win == p->preview || win == p->selection ||
-        panel_window(p, win)) {
+        local_window(p, win)) {
         return fail(e, n,
                     "select a normal application window, not the desktop or cast preview/panel");
     }
@@ -557,6 +572,7 @@ void x11_close(Platform *platform)
     if (p->d) {
         selection_stop(p);
         preview_stop(p);
+        x11_countdown(platform, 0, NULL, 0);
         image_free(p);
         window_release(p);
         if (p->preview) {
@@ -739,10 +755,6 @@ static int source_rect(Xorg *p, Drawable *drawable, Visual **visual, int *depth,
     *depth = DefaultDepth(p->d, p->screen);
     return 0;
 }
-typedef struct {
-    int x, y, width, height;
-    bool visible;
-} WindowRect;
 
 /* The root child enclosing a managed client includes its WM decorations. */
 static bool window_rect(Xorg *p, Window window, bool include_frame, WindowRect *rect)
@@ -790,6 +802,7 @@ static bool window_rect(Xorg *p, Window window, bool include_frame, WindowRect *
     rect->y -= attr.border_width;
     rect->width = attr.width + 2 * attr.border_width;
     rect->height = attr.height + 2 * attr.border_width;
+    rect->outer = outer;
     rect->visible = visible && attr.map_state == IsViewable;
     return true;
 }
@@ -801,6 +814,7 @@ static bool panel_identity(Xorg *p, Window window, int peer_pid)
     Atom pid_atom = XInternAtom(p->d, "_NET_WM_PID", False);
     Atom type_atom = XInternAtom(p->d, "_NET_WM_WINDOW_TYPE", False);
     Atom normal_atom = XInternAtom(p->d, "_NET_WM_WINDOW_TYPE_NORMAL", False);
+    Atom utility_atom = XInternAtom(p->d, "_NET_WM_WINDOW_TYPE_UTILITY", False);
     Atom type;
     int format;
     unsigned long count, remaining;
@@ -831,7 +845,8 @@ static bool panel_identity(Xorg *p, Window window, int peer_pid)
         bool found = false;
         if (type == XA_ATOM && format == 32 && value && !remaining) {
             for (unsigned long i = 0; i < count; i++) {
-                found = found || ((Atom *)value)[i] == normal_atom;
+                found = found || ((Atom *)value)[i] == normal_atom ||
+                        ((Atom *)value)[i] == utility_atom;
             }
         }
         normal = normal && found;
@@ -848,9 +863,9 @@ int x11_panel_register(Platform *platform, uint64_t window, int peer_pid, char *
     if (!window || window > UINT32_MAX || peer_pid <= 0 || window == p->root ||
         window == p->selected || window == p->preview || window == p->selection ||
         !panel_identity(p, (Window)window, peer_pid)) {
-        return fail(
-            e, n,
-            "panel window must be a normal CastPanel window owned by the authenticated peer PID");
+        return fail(e, n,
+                    "panel window must be a normal or utility CastPanel window owned by the "
+                    "authenticated peer PID");
     }
     WindowRect rect;
     if (!window_rect(p, (Window)window, true, &rect)) {
@@ -961,10 +976,23 @@ int x11_capture(Platform *platform, Frame *out, Cursor *cursor, char *e, size_t 
         return fail(e, n, "cannot allocate Xorg capture frame");
     }
     bool outline = p->selecting && p->dragging && p->selection;
-    WindowRect preview = {0}, panel = {0};
+    WindowRect preview = {0}, panel = {0}, countdown = {0}, retired = {0};
     if (drawable == p->root) {
         if (p->preview && !p->preview_disabled) {
-            window_rect(p, p->preview, false, &preview);
+            window_rect(p, p->preview, true, &preview);
+        }
+        if (p->countdown) {
+            window_rect(p, p->countdown, true, &countdown);
+        }
+        if (p->countdown_retired.visible) {
+            if (p->countdown_retired_first) {
+                retired = p->countdown_retired;
+            } else if (window_rect(p, p->countdown_retired.outer, false, &retired) &&
+                       retired.visible) {
+                p->countdown_retired = retired;
+            } else {
+                memset(&p->countdown_retired, 0, sizeof p->countdown_retired);
+            }
         }
         if (p->panel && !window_rect(p, p->panel, true, &panel)) {
             x11_panel_unregister(platform);
@@ -1007,6 +1035,9 @@ int x11_capture(Platform *platform, Frame *out, Cursor *cursor, char *e, size_t 
     if (drawable == p->root) {
         mask_window_rect(p, out, &preview);
         mask_window_rect(p, out, &panel);
+        mask_window_rect(p, out, &countdown);
+        mask_window_rect(p, out, &retired);
+        p->countdown_retired_first = false;
     }
     if (image != p->image) {
         XDestroyImage(image);
@@ -1102,7 +1133,6 @@ static int selection_start(Xorg *p, Config *cfg, int kind, char *e, size_t n)
     p->selecting = kind;
     p->owner = cfg;
     p->dragging = false;
-    p->last_keycode = 0;
     snprintf(e, n, "%s selection started; %s; Escape cancels and retains the previous source",
              kind == 1 ? "region" : "window",
              kind == 1 ? "drag with the left button inside the selected monitor"
@@ -1346,12 +1376,9 @@ static bool list_contains(const char *list, const char *value)
 static void key_event(Xorg *p, const Config *cfg, Compositor *comp, const XIRawEvent *event)
 {
     if (event->evtype == XI_RawKeyRelease) {
-        if (p->last_keycode == event->detail) {
-            p->last_keycode = 0;
-        }
         return;
     }
-    if (!cfg->keys || !p->xkb || p->privacy || p->selecting || (event->flags & XIKeyRepeat)) {
+    if (!cfg->keys || !p->xkb || p->privacy || p->selecting) {
         return;
     }
     KeySym sym = NoSymbol;
@@ -1372,7 +1399,8 @@ static void key_event(Xorg *p, const Config *cfg, Compositor *comp, const XIRawE
     if (sym == XK_space) {
         name = "Space";
     } else if (sym >= XK_a && sym <= XK_z) {
-        atom[0] = (char)('A' + sym - XK_a);
+        atom[0] = (char)((p->mods & (ControlMask | p->alt_mask | p->super_mask)) ? 'A' + sym - XK_a
+                                                                                 : sym);
         atom[1] = 0;
         name = atom;
     } else if (sym >= XK_A && sym <= XK_Z) {
@@ -1407,12 +1435,7 @@ static void key_event(Xorg *p, const Config *cfg, Compositor *comp, const XIRawE
     if (list_contains(cfg->keys_filter, combo) || list_contains(cfg->keys_filter, name)) {
         return;
     }
-    if (p->last_keycode == event->detail && event->time - p->last_key_time < 100) {
-        return;
-    }
-    p->last_keycode = event->detail;
-    p->last_key_time = event->time;
-    compositor_key(comp, combo, cast_now_ns());
+    compositor_key(comp, combo, cast_now_ns(), cfg->keys_timeout_ms);
 }
 void x11_events(Platform *platform, Compositor *comp, const Config *cfg, bool privacy)
 {
@@ -1423,7 +1446,6 @@ void x11_events(Platform *platform, Compositor *comp, const Config *cfg, bool pr
          * cross a pause/resume or source boundary on the next iteration. */
         XSync(p->d, False);
         compositor_clear(comp);
-        p->last_keycode = 0;
         p->seen_generation = p->generation;
         preview_neutral(p);
         p->preview_epoch++;
@@ -1432,6 +1454,10 @@ void x11_events(Platform *platform, Compositor *comp, const Config *cfg, bool pr
     while (XPending(p->d)) {
         XEvent ev;
         XNextEvent(p->d, &ev);
+        if (p->countdown && ev.xany.window == p->countdown) {
+            countdown_event(p, &ev);
+            continue;
+        }
         if (ev.type == GenericEvent && ev.xcookie.extension == p->xi_opcode &&
             XGetEventData(p->d, &ev.xcookie)) {
             XIRawEvent *raw = ev.xcookie.data;
@@ -1464,14 +1490,12 @@ void x11_events(Platform *platform, Compositor *comp, const Config *cfg, bool pr
                     XkbRefreshKeyboardMapping(&k->map);
                 }
                 modifier_masks(p);
-                p->last_keycode = 0;
             }
             continue;
         }
         if (ev.type == MappingNotify) {
             XRefreshKeyboardMapping(&ev.xmapping);
             modifier_masks(p);
-            p->last_keycode = 0;
             continue;
         }
         if (ev.type == p->randr_base + RRScreenChangeNotify) {
@@ -1537,7 +1561,6 @@ void x11_events(Platform *platform, Compositor *comp, const Config *cfg, bool pr
     if (p->seen_generation != p->generation) {
         compositor_clear(comp);
         p->seen_generation = p->generation;
-        p->last_keycode = 0;
     }
 }
 static bool rectangles_overlap(int ax, int ay, int aw, int ah, int bx, int by, int bw, int bh)
@@ -1551,7 +1574,7 @@ static void preview_neutral(Xorg *p)
          * main connection publishes pixmaps, so an old worker cannot undo this. */
         XSetWindowBackground(p->d, p->preview, 0x111111);
         XClearWindow(p->d, p->preview);
-        XFlush(p->d);
+        XSync(p->d, False);
     }
 }
 static void preview_create(Xorg *p, const Config *cfg)
@@ -1567,15 +1590,16 @@ static void preview_create(Xorg *p, const Config *cfg)
     if (h < 100) {
         h = 100;
     }
-    int x = 24, y = 24;
+    int x = (DisplayWidth(p->d, p->screen) - w) / 2;
+    int y = (DisplayHeight(p->d, p->screen) - h) / 2;
     Monitor list[MONITOR_MAX];
     int count = monitors(p, list, MONITOR_MAX);
     /* Prefer a monitor outside the root-captured rectangle. Overlap is neutral-masked. */
     for (int i = 0; i < count; i++) {
         if (!rectangles_overlap(list[i].x, list[i].y, list[i].w, list[i].h, p->sx, p->sy, p->sw,
                                 p->sh)) {
-            x = list[i].x + 24;
-            y = list[i].y + 24;
+            x = list[i].x + (list[i].w - w) / 2;
+            y = list[i].y + (list[i].h - h) / 2;
             break;
         }
     }
@@ -1592,10 +1616,9 @@ static void preview_create(Xorg *p, const Config *cfg)
     if (y > root_h - h) {
         y = root_h - h;
     }
-    XSetWindowAttributes attr = {.override_redirect = True, .background_pixel = 0x111111};
-    p->preview =
-        XCreateWindow(p->d, p->root, x, y, (unsigned)w, (unsigned)h, 0, CopyFromParent, InputOutput,
-                      CopyFromParent, CWOverrideRedirect | CWBackPixel, &attr);
+    XSetWindowAttributes attr = {.background_pixel = 0x111111};
+    p->preview = XCreateWindow(p->d, p->root, x, y, (unsigned)w, (unsigned)h, 0, CopyFromParent,
+                               InputOutput, CopyFromParent, CWBackPixel, &attr);
     p->preview_w = w;
     p->preview_h = h;
     p->preview_border = 0;
@@ -1603,6 +1626,10 @@ static void preview_create(Xorg *p, const Config *cfg)
     XStoreName(p->d, p->preview, "cast output preview");
     XClassHint hint = {.res_name = "cast-preview", .res_class = "CastPreview"};
     XSetClassHint(p->d, p->preview, &hint);
+    Atom type = XInternAtom(p->d, "_NET_WM_WINDOW_TYPE", False);
+    Atom utility = XInternAtom(p->d, "_NET_WM_WINDOW_TYPE_UTILITY", False);
+    XChangeProperty(p->d, p->preview, type, XA_ATOM, 32, PropModeReplace, (unsigned char *)&utility,
+                    1);
     XSetWMProtocols(p->d, p->preview, &p->wm_delete, 1);
     XSelectInput(p->d, p->preview,
                  ExposureMask | StructureNotifyMask | ButtonPressMask | ButtonReleaseMask |
@@ -1613,59 +1640,80 @@ static void preview_create(Xorg *p, const Config *cfg)
 }
 /* The worker prepares complete pixmaps on its own connection. Only the main
  * connection can install an accepted epoch's pixmap in the visible window. */
-static Pixmap preview_paint(Display *d, const Frame *frame, Window window, int w, int h,
+typedef struct {
+    Xorg image;
+    GC gc;
+    unsigned long channel[3][256];
+} PreviewPainter;
+
+static bool preview_image(PreviewPainter *p, int w, int h)
+{
+    Xorg *image = &p->image;
+    Visual *visual = DefaultVisual(image->d, image->screen);
+    int depth = DefaultDepth(image->d, image->screen);
+    image_prepare(image, visual, depth, w, h);
+    if (!image->image) {
+        image->image = XCreateImage(image->d, visual, (unsigned)depth, ZPixmap, 0, NULL,
+                                    (unsigned)w, (unsigned)h, 32, 0);
+        if (!image->image) {
+            return false;
+        }
+        image->image->data = calloc((size_t)image->image->bytes_per_line, (size_t)h);
+        if (!image->image->data) {
+            image_free(image);
+            return false;
+        }
+        image->image_visual = visual;
+        image->image_depth = depth;
+    }
+    return true;
+}
+
+static Pixmap preview_paint(PreviewPainter *p, const Frame *frame, Window window, int w, int h,
                             const char *label, unsigned long color)
 {
-    int screen = DefaultScreen(d);
-    XImage *im = XCreateImage(d, DefaultVisual(d, screen), (unsigned)DefaultDepth(d, screen),
-                              ZPixmap, 0, NULL, (unsigned)w, (unsigned)h, 32, 0);
-    if (!im) {
+    if (!preview_image(p, w, h)) {
         return None;
     }
-    im->data = calloc((size_t)im->bytes_per_line, h);
-    if (!im->data) {
-        XDestroyImage(im);
-        return None;
-    }
+    Display *d = p->image.d;
+    XImage *im = p->image.image;
+    memset(im->data, 0, (size_t)im->bytes_per_line * h);
     double scale = fmin((double)w / frame->width, (double)h / frame->height);
     int iw = (int)(frame->width * scale), ih = (int)(frame->height * scale);
     int ox = (w - iw) / 2, oy = (h - ih) / 2;
+    uint16_t native = 1;
+    bool native32 =
+        im->bits_per_pixel == 32 && im->byte_order == (*(uint8_t *)&native ? LSBFirst : MSBFirst);
+    /* Channel masks are invariant. Avoid XPutPixel and mask scans for every pixel. */
     for (int y = 0; y < ih; y++) {
+        const uint8_t *row = frame->data + (size_t)(y * frame->height / ih) * frame->stride;
+        uint32_t *dst =
+            native32 ? (uint32_t *)(im->data + (size_t)(oy + y) * im->bytes_per_line) + ox : NULL;
         for (int x = 0; x < iw; x++) {
-            int sx = x * frame->width / iw, sy = y * frame->height / ih;
-            const uint8_t *q = frame->data + (size_t)sy * frame->stride + sx * 4;
-            unsigned long value = 0;
-            unsigned rgb[3] = {q[0], q[1], q[2]};
-            unsigned long masks[3] = {im->red_mask, im->green_mask, im->blue_mask};
-            for (int c = 0; c < 3; c++) {
-                unsigned shift = 0;
-                unsigned long m = masks[c];
-                if (!m) {
-                    continue;
-                }
-                while (!(m & 1)) {
-                    m >>= 1;
-                    shift++;
-                }
-                value |= ((rgb[c] * m + 127) / 255) << shift;
+            const uint8_t *q = row + (size_t)(x * frame->width / iw) * 4;
+            unsigned long value = p->channel[0][q[0]] | p->channel[1][q[1]] | p->channel[2][q[2]];
+            if (native32) {
+                dst[x] = (uint32_t)value;
+            } else {
+                XPutPixel(im, ox + x, oy + y, value);
             }
-            XPutPixel(im, ox + x, oy + y, value);
         }
     }
-    XSync(d, False);
     xerror = 0;
-    /* Unmapped Windows clip direct painting. Paint a server Pixmap and install it
-     * as the background, so a later safe map starts with complete current pixels. */
+    /* Each published pixmap is immutable. Reusing an installed background would
+     * allow a worker from an older privacy epoch to alter visible pixels. */
     Pixmap pixmap = XCreatePixmap(d, window, (unsigned)w, (unsigned)(h + 32),
-                                  (unsigned)DefaultDepth(d, screen));
-    GC gc = XCreateGC(d, pixmap, 0, NULL);
-    XPutImage(d, pixmap, gc, im, 0, 0, 0, 32, (unsigned)w, (unsigned)h);
-    XSetForeground(d, gc, 0x111111);
-    XFillRectangle(d, pixmap, gc, 0, 0, (unsigned)w, 32);
-    XSetForeground(d, gc, color);
-    XDrawString(d, pixmap, gc, 10, 21, label, (int)strlen(label));
-    XFreeGC(d, gc);
-    XDestroyImage(im);
+                                  (unsigned)DefaultDepth(d, p->image.screen));
+    if (p->image.shm_attached) {
+        XShmPutImage(d, pixmap, p->gc, im, 0, 0, 0, 32, (unsigned)w, (unsigned)h, False);
+    } else {
+        XPutImage(d, pixmap, p->gc, im, 0, 0, 0, 32, (unsigned)w, (unsigned)h);
+    }
+    XSetForeground(d, p->gc, 0x111111);
+    XFillRectangle(d, pixmap, p->gc, 0, 0, (unsigned)w, 32);
+    XSetForeground(d, p->gc, color);
+    XDrawString(d, pixmap, p->gc, 10, 21, label, (int)strlen(label));
+    /* Completes SHM consumption and painting before publishing across connections. */
     XSync(d, False);
     if (xerror) {
         XFreePixmap(d, pixmap);
@@ -1677,14 +1725,17 @@ static void *preview_run(void *data)
 {
     Preview *p = data;
     Display *d = NULL;
+    PreviewPainter painter = {0};
+    Frame frame = {0};
     pthread_mutex_lock(&p->mutex);
     while (!p->stop) {
         if (!p->pending) {
             pthread_cond_wait(&p->changed, &p->mutex);
             continue;
         }
-        Frame frame = p->frame;
-        memset(&p->frame, 0, sizeof(p->frame));
+        Frame spare = frame;
+        frame = p->frame;
+        p->frame = spare;
         Window window = p->window;
         int w = p->width, h = p->height;
         uint64_t epoch = p->epoch;
@@ -1695,9 +1746,31 @@ static void *preview_run(void *data)
         pthread_mutex_unlock(&p->mutex);
         if (!d) {
             d = XOpenDisplay(NULL);
+            if (d) {
+                painter.image.d = d;
+                painter.image.screen = DefaultScreen(d);
+                painter.image.shm = XShmQueryExtension(d);
+                painter.image.segment.shmid = -1;
+                painter.gc = XCreateGC(d, DefaultRootWindow(d), 0, NULL);
+                Visual *visual = DefaultVisual(d, DefaultScreen(d));
+                unsigned long masks[] = {visual->red_mask, visual->green_mask, visual->blue_mask};
+                for (int channel = 0; channel < 3; channel++) {
+                    unsigned shift = 0;
+                    unsigned long mask = masks[channel];
+                    if (!mask) {
+                        continue;
+                    }
+                    while (!(mask & 1)) {
+                        mask >>= 1;
+                        shift++;
+                    }
+                    for (unsigned value = 0; value < 256; value++) {
+                        painter.channel[channel][value] = ((value * mask + 127) / 255) << shift;
+                    }
+                }
+            }
         }
-        Pixmap pixmap = d ? preview_paint(d, &frame, window, w, h, label, color) : None;
-        frame_free(&frame);
+        Pixmap pixmap = d ? preview_paint(&painter, &frame, window, w, h, label, color) : None;
         pthread_mutex_lock(&p->mutex);
         if (!pixmap) {
             snprintf(p->error, sizeof(p->error), "%s; toggle preview off/on",
@@ -1717,8 +1790,11 @@ static void *preview_run(void *data)
             XFreePixmap(d, p->ready_pixmap);
             p->ready_pixmap = None;
         }
+        image_free(&painter.image);
+        XFreeGC(d, painter.gc);
         XCloseDisplay(d);
     }
+    frame_free(&frame);
     return NULL;
 }
 static int preview_start(Xorg *p, char *e, size_t n)
@@ -1796,7 +1872,6 @@ int x11_preview(Platform *platform, const Frame *frame, const State *state, cons
         p->preview_state = flags;
         p->preview_source = p->generation;
         p->preview_enabled = true;
-        p->last_preview = 0;
         preview_neutral(p);
     }
     if (!p->preview) {
@@ -1822,11 +1897,6 @@ int x11_preview(Platform *platform, const Frame *frame, const State *state, cons
         pthread_mutex_unlock(&worker->mutex);
         return -1;
     }
-    uint64_t now = cast_now_ns();
-    if (p->last_preview && now - p->last_preview < 66666666) {
-        pthread_mutex_unlock(&worker->mutex);
-        return 0;
-    }
     int w = p->preview_w, h = p->preview_h - 32;
     if (w < 1 || h < 1 || w > 4096 || h > 4096) {
         pthread_mutex_unlock(&worker->mutex);
@@ -1836,7 +1906,6 @@ int x11_preview(Platform *platform, const Frame *frame, const State *state, cons
         pthread_mutex_unlock(&worker->mutex);
         return fail(e, n, "cannot allocate preview queue frame");
     }
-    p->last_preview = now;
     worker->window = p->preview;
     worker->width = w;
     worker->height = h;
@@ -1852,6 +1921,147 @@ int x11_preview(Platform *platform, const Frame *frame, const State *state, cons
     pthread_mutex_unlock(&worker->mutex);
     return 0;
 }
+static void countdown_event(Xorg *p, const XEvent *event)
+{
+    if ((event->type == ClientMessage && (Atom)event->xclient.data.l[0] == p->wm_delete) ||
+        (event->type == KeyPress && XLookupKeysym((XKeyEvent *)&event->xkey, 0) == XK_Escape)) {
+        p->countdown_cancelled = true;
+    } else if (event->type == DestroyNotify) {
+        p->countdown = None;
+        p->countdown_cancelled = true;
+    } else if (event->type == Expose) {
+        p->countdown_dirty = true;
+    }
+}
+
+static Bool countdown_event_matches(Display *display, XEvent *event, XPointer pointer)
+{
+    (void)display;
+    const Xorg *p = (const Xorg *)pointer;
+    return p->countdown && event->xany.window == p->countdown;
+}
+
+static void countdown_digit(Xorg *p, unsigned digit, int x, int y)
+{
+    static const unsigned char segments[] = {0x3f, 0x06, 0x5b, 0x4f, 0x66,
+                                             0x6d, 0x7d, 0x07, 0x7f, 0x6f};
+    static const XRectangle bars[] = {{4, 0, 24, 4},  {28, 4, 4, 23}, {28, 31, 4, 23},
+                                      {4, 54, 24, 4}, {0, 31, 4, 23}, {0, 4, 4, 23},
+                                      {4, 27, 24, 4}};
+    for (unsigned i = 0; i < 7; i++) {
+        if (segments[digit % 10] & (1u << i)) {
+            XFillRectangle(p->d, p->countdown_buffer, p->countdown_gc, x + bars[i].x, y + bars[i].y,
+                           bars[i].width, bars[i].height);
+        }
+    }
+}
+
+int x11_countdown(Platform *platform, uint64_t remaining_ns, char *error, size_t n)
+{
+    Xorg *p = (Xorg *)platform;
+    XEvent event;
+    if (!remaining_ns && p->countdown) {
+        /* Include server-delivered cancellation before the hide/record boundary. */
+        XSync(p->d, False);
+    }
+    while (XCheckIfEvent(p->d, &event, countdown_event_matches, (XPointer)p)) {
+        countdown_event(p, &event);
+    }
+    if (!remaining_ns) {
+        bool cancelled = p->countdown_cancelled;
+        bool existed = p->countdown || p->countdown_gc;
+        if (p->countdown) {
+            if (window_rect(p, p->countdown, true, &p->countdown_retired)) {
+                p->countdown_retired_first = true;
+            }
+            XDestroyWindow(p->d, p->countdown);
+        }
+        if (p->countdown_gc) {
+            XFreeGC(p->d, p->countdown_gc);
+        }
+        if (p->countdown_buffer) {
+            XFreePixmap(p->d, p->countdown_buffer);
+        }
+        p->countdown = None;
+        p->countdown_gc = NULL;
+        p->countdown_buffer = None;
+        p->countdown_cancelled = false;
+        p->countdown_painted = 0;
+        /* Mask the final footprint at the recording boundary, then retain any
+         * reparenting WM frame until that WM actually unmaps/destroys it. */
+        if (existed) {
+            XSync(p->d, False);
+        }
+        return cancelled ? 1 : 0;
+    }
+    if (p->countdown_cancelled) {
+        return 1;
+    }
+    if (!p->countdown) {
+        int x = (DisplayWidth(p->d, p->screen) - 240) / 2;
+        int y = (DisplayHeight(p->d, p->screen) - 240) / 2;
+        begin(p);
+        p->countdown = XCreateSimpleWindow(p->d, p->root, x, y, 240, 240, 0, 0, 0x101113);
+        XStoreName(p->d, p->countdown, "cast recording countdown");
+        XClassHint hint = {.res_name = "cast-countdown", .res_class = "CastCountdown"};
+        XSetClassHint(p->d, p->countdown, &hint);
+        Atom type = XInternAtom(p->d, "_NET_WM_WINDOW_TYPE", False);
+        Atom utility = XInternAtom(p->d, "_NET_WM_WINDOW_TYPE_UTILITY", False);
+        XChangeProperty(p->d, p->countdown, type, XA_ATOM, 32, PropModeReplace,
+                        (unsigned char *)&utility, 1);
+        XSizeHints size = {.flags = PMinSize | PMaxSize,
+                           .min_width = 240,
+                           .min_height = 240,
+                           .max_width = 240,
+                           .max_height = 240};
+        XSetWMNormalHints(p->d, p->countdown, &size);
+        XSetWMProtocols(p->d, p->countdown, &p->wm_delete, 1);
+        XSelectInput(p->d, p->countdown, ExposureMask | StructureNotifyMask | KeyPressMask);
+        p->countdown_buffer =
+            XCreatePixmap(p->d, p->countdown, 240, 240, (unsigned)DefaultDepth(p->d, p->screen));
+        p->countdown_gc = XCreateGC(p->d, p->countdown_buffer, 0, NULL);
+        XSetWindowBackgroundPixmap(p->d, p->countdown, p->countdown_buffer);
+        if (!end(p)) {
+            x11_countdown(platform, 0, NULL, 0);
+            return fail(error, n, "cannot create local recording countdown");
+        }
+        p->countdown_dirty = true;
+    }
+    uint64_t now = cast_now_ns();
+    if (!p->countdown_dirty && now - p->countdown_painted < 33333333) {
+        return 0;
+    }
+    p->countdown_dirty = false;
+    p->countdown_painted = now;
+    unsigned seconds = (unsigned)((remaining_ns - 1) / 1000000000 + 1);
+    if (seconds > 99) {
+        seconds = 99;
+    }
+    XSetForeground(p->d, p->countdown_gc, 0x101113);
+    XFillRectangle(p->d, p->countdown_buffer, p->countdown_gc, 0, 0, 240, 240);
+    XSetForeground(p->d, p->countdown_gc, 0xbbc1ca);
+    XDrawString(p->d, p->countdown_buffer, p->countdown_gc, 63, 31, "Recording starts in", 19);
+    XDrawString(p->d, p->countdown_buffer, p->countdown_gc, 81, 216, "Esc to cancel", 13);
+    XSetLineAttributes(p->d, p->countdown_gc, 4, LineSolid, CapRound, JoinRound);
+    XSetForeground(p->d, p->countdown_gc, 0x444951);
+    XDrawArc(p->d, p->countdown_buffer, p->countdown_gc, 54, 54, 132, 132, 0, 360 * 64);
+    XSetForeground(p->d, p->countdown_gc, 0x80c9ff);
+    uint64_t fraction = (remaining_ns - 1) % 1000000000 + 1;
+    XDrawArc(p->d, p->countdown_buffer, p->countdown_gc, 54, 54, 132, 132, 90 * 64,
+             -(int)(fraction * 360 * 64 / 1000000000));
+    XSetForeground(p->d, p->countdown_gc, 0xf8f9fb);
+    if (seconds >= 10) {
+        countdown_digit(p, seconds / 10, 82, 91);
+        countdown_digit(p, seconds % 10, 126, 91);
+    } else {
+        countdown_digit(p, seconds, 104, 91);
+    }
+    XMapWindow(p->d, p->countdown);
+    XCopyArea(p->d, p->countdown_buffer, p->countdown, p->countdown_gc, 0, 0, 240, 240, 0, 0);
+    XFlush(p->d);
+    return 0;
+}
+
 void x11_doctor(const Config *cfg, char *e, size_t n)
 {
     Display *d = XOpenDisplay(NULL);
@@ -1878,7 +2088,7 @@ void x11_doctor(const Config *cfg, char *e, size_t n)
     }
     snprintf(e, n,
              "Xorg: DISPLAY connected; %s; MIT-SHM %s (XGetImage fallback); XI2 %s; XComposite %s. "
-             "Preview is an unmanaged floating window; overlapping root pixels are neutral-masked.",
+             "Preview is a floating utility window; overlapping root pixels are neutral-masked.",
              source, shm ? "available" : "missing",
              xi ? "available" : "missing: keys/clicks unsupported",
              comp ? "available" : "missing: window capture unsupported");
