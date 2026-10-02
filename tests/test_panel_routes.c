@@ -73,6 +73,25 @@ int main(void)
     App *app = calloc(1, sizeof *app);
     Panel *panel = calloc(1, sizeof *panel);
     assert(app && panel);
+    /* Clipboard availability is asynchronous. Empty paste preserves selection,
+     * while a subsequent UTF-8 payload replaces it through the same edit path. */
+    panel->widget_count = 1;
+    panel->widgets[0] = (Widget){.id = 1000, .type = W_FIELD, .enabled = true, .index = 0};
+    panel->active_text = panel->focus = 1000;
+    panel->select_all = true;
+    panel->caret = 7;
+    strcpy(panel->edit[0].value, "Private session");
+    panel->edit[0].dirty = true;
+    panel->edit[0].revision = 7;
+    insert_text(panel, "");
+    assert(!strcmp(panel->edit[0].value, "Private session"));
+    assert(panel->select_all && panel->caret == 7 && panel->edit[0].dirty);
+    assert(panel->edit[0].revision == 7);
+    insert_text(panel, "Private café");
+    assert(!strcmp(panel->edit[0].value, "Private café"));
+    assert(!panel->select_all && panel->caret == strlen("Private café"));
+    assert(panel->edit[0].revision == 8);
+    memset(panel, 0, sizeof *panel);
     config_defaults(&app->config);
     strcpy(app->config.backend, "synthetic");
     strcpy(app->config.camera_device, "synthetic");

@@ -1588,6 +1588,10 @@ static FieldEdit *active_edit(Panel *p, int *index)
 }
 static void insert_text(Panel *p, const char *text)
 {
+    /* An empty or unavailable clipboard must not replace the selected draft. */
+    if (!text || !text[0]) {
+        return;
+    }
     int index;
     FieldEdit *edit = active_edit(p, &index);
     if (!edit) {
@@ -1993,7 +1997,9 @@ static void write_ui_state(Panel *p, const char *path)
                 i ? "," : "", w->id, key, w->enabled ? "true" : "false", w->box.x, w->box.y,
                 w->box.width, w->box.height);
     }
-    fprintf(file, "],\"focus\":%u,\"active_text\":%u,\"edit_text\":", p->focus, p->active_text);
+    fprintf(file,
+            "],\"clipboard_text_available\":%s,\"focus\":%u,\"active_text\":%u,\"edit_text\":",
+            SDL_HasClipboardText() ? "true" : "false", p->focus, p->active_text);
     int edit_index;
     FieldEdit *edit = active_edit(p, &edit_index);
     json_string(file, edit ? edit->value : "");

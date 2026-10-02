@@ -270,6 +270,9 @@ def exercise():
                 return result.returncode == 0 and result.stdout == "Private café".encode("utf-8")
 
             wait_until(clipboard_ready, "UTF-8 clipboard ownership was not established")
+            # X11 clipboard ownership precedes SDL's asynchronous TARGETS discovery.
+            wait_until(lambda: ui()["clipboard_text_available"],
+                       "SDL did not discover the clipboard's advertised text format")
             submitted = ui()["command_queued"] + 1
             xdo("key", "--clearmodifiers", "ctrl+v")
             wait_until(lambda: ui()["active_text"] == field_id and ui()["edit_text"] == "Private café",
