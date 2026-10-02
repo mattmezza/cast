@@ -33,6 +33,13 @@ interface; CLI and key-binding changes appear in its state updates. Draft text
 fields apply explicitly and commands never write the user's configuration. Live,
 recording and group-pause controls preserve their independent semantics.
 
+Home shows the current output and the controls appropriate to its state. Open
+Source, Camera, Audio, Effects or Settings to edit one section at a time; Back or
+Escape returns Home. Advanced options expand within their section. The preview
+stays visible while navigating, becomes compact on settings screens and can be
+dragged by its header. Essential navigation, privacy controls and capture warnings
+remain unobscured. Select Live or Recording to inspect that output's composition.
+
 Tab and Shift+Tab move focus; Enter applies a field, Enter/Space activates buttons,
 and arrow keys choose dropdown entries. Ctrl+Q closes only the panel. The optional
 `make X11=1 WAYLAND=1 PANEL=1 check-panel` exercises these controls against a
