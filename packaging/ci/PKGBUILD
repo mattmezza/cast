@@ -1,0 +1,38 @@
+# Internal release recipe. ci-build-arch.sh fills the exact source version and digest.
+pkgname=cast
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc='Screen and webcam presentation camera with local recording and a control panel'
+arch=('x86_64' 'aarch64')
+url='https://github.com/mattmezza/cast'
+license=('MIT' 'BSD-3-Clause' 'OFL-1.1' 'Zlib' 'GPL-3.0-only')
+depends=('glibc' 'ffmpeg' 'pipewire' 'glib2' 'libx11' 'libxext' 'libxrandr'
+         'libxi' 'libxfixes' 'libxcomposite' 'sdl3' 'sdl3_ttf')
+makedepends=('pkgconf')
+checkdepends=('python' 'dbus' 'xorg-server-xvfb' 'xorg-xauth' 'libxtst' 'xdotool' 'xclip')
+optdepends=('v4l2loopback-dkms: virtual camera kernel device'
+            'linux-headers: DKMS headers for the linux kernel; use headers matching your kernel'
+            'xdg-desktop-portal: Wayland screen capture consent'
+            'xdg-desktop-portal-impl: desktop-specific portal implementation'
+            'sxhkd: example Xorg control bindings')
+# Release assets contain the installable package; keep debug files out of that asset set.
+options=('!debug')
+source=("cast-$pkgver-source.tar.gz")
+sha256sums=('@SHA256@')
+
+build() {
+  cd "cast-$pkgver"
+  make X11=1 WAYLAND=1 PANEL=1 PREFIX=/usr CFLAGS="$CFLAGS"
+}
+
+check() {
+  cd "cast-$pkgver"
+  make X11=1 WAYLAND=1 PANEL=1 CFLAGS="$CFLAGS" check
+  make X11=1 WAYLAND=1 PANEL=1 CFLAGS="$CFLAGS" check-xorg
+  make X11=1 WAYLAND=1 PANEL=1 CFLAGS="$CFLAGS" check-panel
+}
+
+package() {
+  cd "cast-$pkgver"
+  make X11=1 WAYLAND=1 PANEL=1 PREFIX=/usr DESTDIR="$pkgdir" CFLAGS="$CFLAGS" install
+}
