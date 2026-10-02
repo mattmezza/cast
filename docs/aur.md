@@ -1,5 +1,10 @@
 # AUR packaging and first submission
 
+The recipe below is prepared for a future submission. The user reported that AUR
+account registration is disabled, so it has not been submitted. GitHub Releases
+will distribute installable Arch packages instead; see [releases.md](releases.md).
+No AUR account is required to download or install those packages.
+
 Start with **cast-git**, using [the AUR recipe](../packaging/aur/cast-git/PKGBUILD)
 and [its generated metadata](../packaging/aur/cast-git/.SRCINFO). It builds GitHub
 `main` with Xorg, Wayland and the SDL3/Clay control panel enabled. The existing

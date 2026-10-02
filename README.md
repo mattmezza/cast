@@ -35,7 +35,8 @@ optional XTest and FFmpeg tools for inspection) are not normal runtime dependenc
 output and recording through an existing loopback device; select the intended device explicitly.
 
 An optional native control panel uses Clay, SDL3 and SDL3_ttf. On Arch, install
-`sdl3` and `sdl3_ttf`, build with `make X11=1 WAYLAND=1 PANEL=1`, and launch
+them with `sudo pacman -S --needed sdl3 sdl3_ttf`, build with
+`make X11=1 WAYLAND=1 PANEL=1`, and launch
 `./cast panel` alongside the daemon. Closing the panel leaves capture running.
 See [panel controls and capture visibility](docs/control-panel.md).
 

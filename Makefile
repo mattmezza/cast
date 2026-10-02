@@ -36,6 +36,11 @@ BUILD = build/x$(X11)-w$(WAYLAND)
 OBJECTS = $(SOURCES:%.c=$(BUILD)/%.o)
 ifeq ($(PANEL),1)
 # Overridable for a locally built SDK; normal builds use system SDL3/SDL3_ttf.
+ifeq ($(origin PANEL_CFLAGS):$(origin PANEL_LIBS),undefined:undefined)
+ifeq ($(shell $(PKG_CONFIG) --exists sdl3 sdl3-ttf && echo yes),)
+$(error PANEL=1 requires SDL3 and SDL3_ttf. On Arch run: sudo pacman -S --needed sdl3 sdl3_ttf. Then retry make PANEL=1)
+endif
+endif
 PANEL_CFLAGS = $(shell $(PKG_CONFIG) --cflags sdl3 sdl3-ttf)
 PANEL_LIBS = $(shell $(PKG_CONFIG) --libs sdl3 sdl3-ttf)
 SOURCES += src/panel.c
@@ -77,6 +82,14 @@ $(BUILD)/test_commands: tests/test_commands.c $(SOURCES) src/app_internal.h src/
 $(BUILD)/test_panel_transport: tests/test_panel_transport.c $(SOURCES) src/app_internal.h src/panel_transport.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_panel_transport.c $(filter-out src/main.c src/panel.c,$(SOURCES)) $(PKG_LIBS) $(LDLIBS)
+ifeq ($(PANEL),1)
+$(BUILD)/test_panel_routes: tests/test_panel_routes.c $(SOURCES) src/panel_transport.h $(BUILD)/src/panel_font.o
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_panel_routes.c $(filter-out src/main.c src/panel.c,$(SOURCES)) $(BUILD)/src/panel_font.o $(PKG_LIBS) $(LDLIBS)
+check-unit: check-panel-routes
+check-panel-routes: $(BUILD)/test_panel_routes
+	$(BUILD)/test_panel_routes
+endif
 $(BUILD)/benchmark: tests/benchmark.c src/compositor.c $(CORE_SOURCES) src/cast.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ $(filter %.c,$^) -lm
@@ -115,7 +128,7 @@ check-panel: cast
 	python3 tests/test_panel_ui.py
 else
 check-panel:
-	@echo 'check-panel requires PANEL=1 and optional Xvfb/xdotool test dependencies' >&2
+	@echo 'check-panel requires PANEL=1 and optional Xvfb/xdotool/xclip test dependencies' >&2
 	@exit 1
 endif
 ifeq ($(WAYLAND),1)
@@ -164,4 +177,4 @@ release:
 	sh packaging/release.sh release '$(VERSION)' '$(RELEASE_NOTES)' '$(X11)' '$(WAYLAND)' '$(RELEASE_TAG)' '$(PANEL)'
 clean:
 	rm -rf build cast
-.PHONY: FORCE all check check-unit check-wayland check-wayland-unit check-xorg check-loopback check-panel benchmark sanitize install uninstall package-check package release-check release clean
+.PHONY: FORCE all check check-unit check-panel-routes check-wayland check-wayland-unit check-xorg check-loopback check-panel benchmark sanitize install uninstall package-check package release-check release clean

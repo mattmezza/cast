@@ -23,10 +23,20 @@ Its font is embedded, so installation and relocated packages do not depend on an
 asset path. `make PANEL=1 install` and `make PANEL=1 package` include the relevant
 license notices. Distribution packages may opt into the panel explicitly.
 
+The Arch package is named `sdl3_ttf`; its pkg-config module is `sdl3-ttf`.
+If the build reports that module missing, install the package above and check
+`pkg-config --modversion sdl3 sdl3-ttf`. SDL2_ttf cannot satisfy this dependency.
+Private frame sharing requires Linux 5.1 or newer.
+
 The daemon owns all session settings. The panel uses the acknowledged command
 interface; CLI and key-binding changes appear in its state updates. Draft text
 fields apply explicitly and commands never write the user's configuration. Live,
 recording and group-pause controls preserve their independent semantics.
+
+Tab and Shift+Tab move focus; Enter applies a field, Enter/Space activates buttons,
+and arrow keys choose dropdown entries. Ctrl+Q closes only the panel. The optional
+`make X11=1 WAYLAND=1 PANEL=1 check-panel` exercises these controls against a
+synthetic daemon on a private display; it requires Xvfb, xdotool and xclip.
 
 ## Custom paused message
 
