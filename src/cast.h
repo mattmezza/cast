@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#define CAST_VERSION "0.4.0"
+#define CAST_VERSION "0.5.0"
 #define CAST_TEXT 256
 #define CAST_ERR 1024
 #define CAST_MAX_PRESETS 24

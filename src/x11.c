@@ -2045,6 +2045,7 @@ static int countdown_paint(Xorg *p, uint64_t remaining_ns, char *error, size_t n
     text.blur_foreground = 0xf8f9fb;
     snprintf(text.blur_title, sizeof text.blur_title, "%u", seconds);
     text.blur_subtitle[0] = 0;
+    text.blur_footer[0] = 0;
     if (!p->countdown_text) {
         p->countdown_text = presentation_text_create();
     }

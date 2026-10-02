@@ -6,7 +6,7 @@ DESTDIR =
 X11 = 1
 WAYLAND = 0
 PANEL = 0
-VERSION = 0.4.0
+VERSION = 0.5.0
 SOURCE_COMMIT = working-tree
 RELEASE_NOTES =
 RELEASE_TAG = v$(VERSION)
@@ -110,7 +110,7 @@ $(BUILD)/test_xorg: $(XORG_TEST_SOURCES) src/cast.h src/platform_backend.h
 check-xorg: cast $(BUILD)/test_xorg
 	timeout 30s xvfb-run -a -s '-screen 0 800x600x24' $(BUILD)/test_xorg --exercise
 	timeout 30s xvfb-run -a -s '-screen 0 800x600x24 -extension MIT-SHM' $(BUILD)/test_xorg --exercise
-	timeout 30s xvfb-run -a -s '-screen 0 800x600x24' python3 tests/test_countdown_xorg.py
+	CAST_COUNTDOWN_WITH_PANEL=$(PANEL) timeout 45s xvfb-run -a -s '-screen 0 800x600x24' python3 tests/test_countdown_xorg.py
 else
 check-xorg:
 	@echo 'check-xorg requires X11=1 and optional Xvfb/libXtst test dependencies' >&2
