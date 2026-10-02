@@ -31,8 +31,8 @@ typography:
     fontFamily: "Inter"
     fontSize: "13px"
 rounded:
-  control: "6px"
-  field: "4px"
+  control: "0px"
+  field: "0px"
 spacing:
   xs: "4px"
   sm: "8px"
@@ -99,11 +99,11 @@ Text and numeric field labels sit above full-width inputs. Boolean and enum cont
 
 ## Elevation & Depth
 
-Flat fills and thin dividers provide structure. There are no decorative shadows or blurs. The compact preview uses a single outline and sits above settings; dropdown choices sit above the preview. State changes are immediate and mirror acknowledged daemon state.
+Flat fills and thin dividers provide structure. There are no decorative shadows or blurs. The compact preview uses a single outline and sits above settings; dropdown choices sit above the preview. State changes are immediate and mirror acknowledged daemon state. The native window keeps the truthful CastPanel class and advertises the utility type before its first map; mwm floats and centers it using its existing utility rule.
 
 ## Shapes
 
-Controls have small rounded corners. Field and focus outlines are one logical pixel. Navigation is a plain list separated by thin horizontal lines, with a full outline for keyboard focus. Dropdown chevrons are native drawn geometry.
+Controls and fields have square corners. The Back action is a drawn left arrow and label on a plain surface; its hover and focus states match the other controls. All action and navigation icons use one authored 16-pixel line family at a consistent 1.4-pixel logical stroke; no icon depends on Unicode font coverage. Field and focus outlines are one logical pixel. Navigation is a plain list separated by thin horizontal lines, with a full outline for keyboard focus. Dropdown chevrons are native drawn geometry.
 
 ## Components
 
@@ -125,7 +125,7 @@ There are no decorative cards. The section is a scrolling form on the window can
 
 ### Output preview and status
 
-Both preview sizes show actual daemon frames, with explicit disconnected and waiting states. Live and recording state are independent. Active recording includes elapsed time. The daemon's capture-exclusion statement remains visible on every screen; unavailable or neutral-masked exclusion is never implied to reconstruct covered content.
+Both preview sizes show actual daemon frames, with explicit disconnected and waiting states. Live and recording state are independent. Active recording includes elapsed time. A pending recording shows an understated film leader within the native preview: two fine circles, guide lines, a rotating hand and the whole seconds remaining. The actual frame stays visible behind the dimmed guide. The guide follows daemon countdown state on every section and never enters the captured or recorded frames. Cancel and Pause all remain outside it. Live actions occupy their own row; record actions and the combined privacy action remain accessible even at minimum width. The daemon's capture-exclusion statement remains visible on every screen; unavailable or neutral-masked exclusion is never implied to reconstruct covered content.
 
 ## Do's and Don'ts
 

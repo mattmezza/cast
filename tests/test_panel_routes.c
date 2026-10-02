@@ -57,6 +57,11 @@ static void camera_geometry(App *app, int *x, int *y, int *w, int *h)
 }
 int main(void)
 {
+    assert(countdown_seconds(0) == 0);
+    assert(countdown_seconds(1) == 1);
+    assert(countdown_seconds(1000000000ULL) == 1);
+    assert(countdown_seconds(1000000001ULL) == 2);
+    assert(countdown_seconds(60000000000ULL) == 60);
     /* A delayed Apply acknowledgement must not discard typing done afterward. */
     FieldEdit edit = {.dirty = true, .pending = 1, .revision = 2, .submitted_revision = 1};
     acknowledge_edit(&edit, false);
@@ -154,6 +159,26 @@ int main(void)
     assert(app->config.radius == 40);
     assert(!memcmp(&initial_state, &app->state, sizeof initial_state));
 
+    /* Native controls cancel the controller's actual countdown without starting
+     * a recording; the independent live pause command does not cancel it. */
+    app->config.record_countdown = 5;
+    const char *start[] = {"record", "start"};
+    assert(!route_command(panel->client, 2, start, error, sizeof error));
+    assert(app->countdown && !app->state.recording);
+    const char *pause_live[] = {"live", "pause"};
+    assert(!route_command(panel->client, 2, pause_live, error, sizeof error));
+    assert(app->countdown && app->state.live_paused);
+    Widget cancel = {.enabled = true, .action = A_COMMAND, .argc = 2, .arg = {"record", "stop"}};
+    activate(panel, &cancel);
+    assert(!panel->error[0] && !app->countdown && !app->state.recording);
+    assert(!app->countdown_path[0]);
+    assert(!route_command(panel->client, 2, start, error, sizeof error));
+    assert(app->countdown);
+    Widget pause = {.enabled = true, .action = A_COMMAND, .argc = 1, .arg = {"pause"}};
+    activate(panel, &pause);
+    assert(!panel->error[0] && !app->countdown && !app->state.recording);
+    assert(app->state.live_paused && !app->countdown_path[0]);
+
     media_close(app->media);
     platform_close(app->platform);
     compositor_destroy(app->compositor);
@@ -161,6 +186,6 @@ int main(void)
     free(panel);
     free(app);
     puts("panel edits: centered resize, free position, camera commands, remembered zoom, advanced "
-         "settings passed");
+         "settings, countdown cancellation and privacy pause passed");
     return 0;
 }

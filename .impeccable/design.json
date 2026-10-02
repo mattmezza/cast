@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-02T10:32:15.812949+00:00",
+  "generatedAt": "2026-10-02T11:52:54Z",
   "title": "Design System: cast control panel",
   "extensions": {
     "colorMeta": {
@@ -41,9 +41,9 @@
       "name": "Output action",
       "kind": "button",
       "refersTo": "button",
-      "description": "State-appropriate native output action.",
+      "description": "Square action with a consistent drawn line icon; separate live and recording rows keep privacy controls visible at 360px.",
       "html": "<button class=\"button\">Start record</button>",
-      "css": ".button{font:16px Inter,sans-serif;height:40px;padding:8px 12px;background:#272a2e;color:#f8f9fb;border:1px solid transparent;border-radius:6px}.button:hover{background:#34383e}.button:focus-visible{border-color:#80c9ff;outline:0}.button:disabled{color:#979ea8}"
+      "css": ".button{font:16px Inter,sans-serif;height:40px;padding:8px 10px;background:#272a2e;color:#f8f9fb;border:1px solid transparent;border-radius:0}.button:hover{background:#34383e}.button:focus-visible{border-color:#80c9ff;outline:0}.button:disabled{color:#979ea8}"
     },
     {
       "name": "Draft field",
@@ -51,14 +51,14 @@
       "refersTo": "field",
       "description": "A labelled draft reveals Apply when edited.",
       "html": "<label class=\"field\">Pause message<input value=\"Paused\"></label>",
-      "css": ".field{display:grid;gap:8px;font:16px Inter,sans-serif;color:#f8f9fb}.field input{height:40px;background:#101113;color:#f8f9fb;border:1px solid #444951;border-radius:4px;font:inherit;padding:0 10px}.field input:focus{border-color:#80c9ff;outline:0}"
+      "css": ".field{display:grid;gap:8px;font:16px Inter,sans-serif;color:#f8f9fb}.field input{height:40px;background:#101113;color:#f8f9fb;border:1px solid #444951;border-radius:0;font:inherit;padding:0 10px}.field input:focus{border-color:#80c9ff;outline:0}"
     },
     {
       "name": "Home navigation",
       "kind": "nav",
       "refersTo": "navigation",
-      "description": "Focused section navigation replaces persistent tabs.",
-      "html": "<nav class=\"nav\"><button>Source<span>Open</span></button><button>Camera<span>Open</span></button><button>Audio<span>Open</span></button></nav>",
+      "description": "Focused section navigation with a drawn section icon and forward chevron.",
+      "html": "<nav class=\"nav\"><button>Source</button><button>Camera</button><button>Audio</button></nav>",
       "css": ".nav{display:grid}.nav button{display:flex;align-items:center;justify-content:space-between;height:46px;padding:0 12px;background:#101113;border:0;border-bottom:1px solid #444951;color:#f8f9fb;font:16px Inter,sans-serif}.nav span{font-size:13px;color:#bbc1ca}.nav button:focus-visible{outline:1px solid #80c9ff}"
     }
   ],
@@ -76,6 +76,11 @@
         "name": "Persistent output",
         "body": "Preview, state, output actions and exclusion notice stay visible across sections.",
         "section": "layout"
+      },
+      {
+        "name": "Local countdown",
+        "body": "The client draws the cinema leader over its native preview on every section, preserving the daemon frame and unobscured cancel/privacy controls.",
+        "section": "components"
       }
     ],
     "dos": [

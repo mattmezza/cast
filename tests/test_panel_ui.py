@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Exercise the native panel on a private Xvfb with synthetic media only.
 
-Requires an optional PANEL=1 build, Xvfb, xdotool, and xclip. No desktop or hardware device
+Requires an optional PANEL=1 build, Xvfb, xdotool, xprop, and xclip. No desktop or hardware device
 is captured. UI actions are checked through the daemon's ordinary CLI status.
 """
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -39,6 +40,7 @@ def exercise():
         daemon = None
         panel = None
         clipboard = None
+        wm = None
         log = (root / "native.log").open("w+")
 
         def cli(*args):
@@ -71,6 +73,13 @@ def exercise():
                                     env=env, stdout=log, stderr=log)
 
         try:
+            if os.environ.get("CAST_PANEL_TEST_MWM"):
+                wm = subprocess.Popen(["mwm"], env=env, stdout=log, stderr=log)
+                def wm_ready():
+                    result = subprocess.run(["mwmc", "query", "monitors"], env=env,
+                                            text=True, capture_output=True, timeout=3)
+                    return result.returncode == 0 and "mon 0" in result.stdout
+                wait_until(wm_ready, "private mwm did not initialize")
             daemon = start_daemon()
             wait_until(lambda: (root / "daemon.sock").exists(), "synthetic daemon did not start")
             panel = subprocess.Popen([BINARY, *common, "panel"], env=env, stdout=log, stderr=log)
@@ -97,7 +106,29 @@ def exercise():
 
             wait_until(find_window, "native panel window did not open")
             window = windows[0]
+            properties = subprocess.run(["xprop", "-id", window, "WM_CLASS",
+                                         "_NET_WM_WINDOW_TYPE"], env=env, check=True,
+                                        text=True, capture_output=True).stdout
+            assert '"cast-panel", "CastPanel"' in properties, properties
+            assert "_NET_WM_WINDOW_TYPE_UTILITY" in properties, properties
+            if wm:
+                managed = subprocess.run(["mwmc", "query", "windows"], env=env, check=True,
+                                         text=True, capture_output=True).stdout
+                assert re.search(r"class=CastPanel .*float=1", managed), managed
+                geometry = dict(line.split("=", 1) for line in
+                                xdo("getwindowgeometry", "--shell", window).splitlines()
+                                if "=" in line)
+                # mwm centers floating clients at first management. Its bottom bar
+                # shifts the available work area slightly up from the screen midpoint.
+                assert abs(int(geometry["X"]) + int(geometry["WIDTH"])/2 - 1024) < 8
+                assert abs(int(geometry["Y"]) + int(geometry["HEIGHT"])/2 - 1024) < 64
             xdo("windowfocus", "--sync", window)
+            if not wm:
+                # SDL resizes its initially centered hidden window for display
+                # scaling. Without a WM, its old physical position may put part
+                # of a 2x window outside Xvfb and crop screenshots. Use a complete
+                # private viewport; the mwm path above verifies real placement.
+                xdo("windowmove", window, "0", "0")
 
             def click(x, y):
                 xdo("mousemove", "--window", window, x, y, "click", 1)
@@ -130,7 +161,7 @@ def exercise():
                 await_panel_ack()
                 wait_until(lambda: widget(identifier) and widget(identifier)["enabled"],
                            f"Control {identifier} is unavailable")
-                for attempt in range(25):
+                for attempt in range(60):
                     item = widget(identifier)
                     x, y, w, h = item["box"]
                     area = ui()["scroll"]
@@ -159,6 +190,17 @@ def exercise():
                 assert w > 80 and h > 50 and x >= 0 and y >= 0
                 assert x+w <= int(dimensions["WIDTH"])/scale and y+h <= int(dimensions["HEIGHT"])/scale
 
+            def assert_output_accessible():
+                if ui()["tab"] < 0:
+                    return
+                px, py, pw, ph = ui()["preview_panel"]
+                for identifier in (99, 30, 31, 32, 33, 34):
+                    item = widget(identifier)
+                    if item:
+                        bx, by, bw, bh = item["box"]
+                        assert px+pw <= bx or px >= bx+bw or py+ph <= by or py >= by+bh, \
+                            f"Preview obscured protected control {identifier}"
+
             def capture(name):
                 destination = os.environ.get("CAST_PANEL_TEST_SCREENSHOTS")
                 if destination:
@@ -186,6 +228,7 @@ def exercise():
                 navigate(tab)
                 assert_preview()
                 assert widget(30) and widget(32)
+                assert_output_accessible()
             navigate(1)
             capture("camera")
             old = ui()["preview_panel"]
@@ -210,6 +253,7 @@ def exercise():
             wait_until(lambda: ui()["record_preview"], "Record preview was not selected")
             assert_preview()
             navigate(0)
+            capture("source")
             assert ui()["record_preview"], "Preview target reset during navigation"
             click_widget(20)
             click_widget(51)
@@ -234,6 +278,43 @@ def exercise():
             click_widget(32)
             wait_until(lambda: state()["record"]["state"] == "stopped" and not state()["record"]["finalizing"],
                        "Stop record did not finalize")
+
+            # The native film leader follows acknowledged countdown state on every
+            # section. Cancel and the privacy pause action cancel before file creation.
+            cli("settings", "record.countdown", "12")
+            click_widget(32)
+            wait_until(lambda: ui()["countdown"] and ui()["countdown_seconds"] > 0,
+                       "Native recording countdown did not appear")
+            for tab in range(5):
+                navigate(tab)
+                assert ui()["countdown"] and widget(32) and widget(34)
+                assert_preview()
+                assert_output_accessible()
+            capture("countdown-settings")
+            navigate(1)
+            capture("countdown-camera")
+            click_widget(32)
+            wait_until(lambda: not ui()["countdown"] and not state()["record"]["countdown"],
+                       "Cancel did not dismiss the native countdown")
+            assert state()["record"]["state"] == "stopped"
+            click_widget(99)
+            click_widget(32)
+            wait_until(lambda: ui()["countdown"], "Home countdown did not appear")
+            capture("countdown-home")
+            click_widget(34)
+            wait_until(lambda: not ui()["countdown"] and state()["live"]["state"] == "paused",
+                       "Privacy pause did not cancel the countdown")
+            click_widget(34)
+            wait_until(lambda: not state()["group_paused"], "Resume all did not clear group pause")
+            cli("settings", "record.countdown", "1")
+            click_widget(32)
+            wait_until(lambda: ui()["countdown"], "Short countdown did not appear")
+            wait_until(lambda: state()["record"]["state"] == "recording" and not ui()["countdown"],
+                       "Countdown did not transition into recording")
+            click_widget(32)
+            wait_until(lambda: state()["record"]["state"] == "stopped" and not state()["record"]["finalizing"],
+                       "Recording after countdown did not finalize")
+            cli("settings", "record.countdown", "0")
 
             # Drafts survive navigation and only Apply/Enter submits them.
             navigate(4)
@@ -314,6 +395,17 @@ def exercise():
             click_widget(99)
             capture("narrow-home")
             assert_preview()
+            cli("settings", "record.countdown", "8")
+            click_widget(32)
+            wait_until(lambda: ui()["countdown"], "Narrow countdown did not appear")
+            capture("narrow-countdown-home")
+            navigate(4)
+            capture("narrow-countdown-settings")
+            assert ui()["countdown"] and widget(32)["enabled"] and widget(34)["enabled"]
+            assert_output_accessible()
+            click_widget(32)
+            wait_until(lambda: not ui()["countdown"], "Narrow Cancel did not dismiss countdown")
+            cli("settings", "record.countdown", "0")
 
             # A lost daemon does not close the window; it reconnects to a new generation.
             cli("quit")
@@ -356,11 +448,14 @@ def exercise():
             if daemon and daemon.poll() is None:
                 daemon.terminate()
                 daemon.wait(timeout=8)
+            if wm and wm.poll() is None:
+                wm.terminate()
+                wm.wait(timeout=8)
             log.close()
 
 
 if __name__ == "__main__":
-    for dependency in ("xvfb-run", "xdotool", "xclip"):
+    for dependency in ("xvfb-run", "xdotool", "xprop", "xclip"):
         if not shutil.which(dependency):
             raise SystemExit(f"native panel check requires {dependency}")
     if "--inside" not in sys.argv:
@@ -368,4 +463,4 @@ if __name__ == "__main__":
                                  sys.executable, __file__, "--inside"], timeout=120)
         raise SystemExit(result.returncode)
     exercise()
-    print("native panel: navigation, persistent draggable preview, live/record, drafts, UTF-8, keyboard, 360px resize, reconnect passed")
+    print("native panel: utility identity, navigation, draggable preview, countdown/cancel/privacy, live/record, drafts, UTF-8, keyboard, 360px resize, reconnect passed")

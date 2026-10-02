@@ -9,6 +9,7 @@
 #include <SDL3_ttf/SDL_ttf.h>
 #ifdef WITH_X11
 #define Cursor X11Cursor
+#include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #undef Cursor
@@ -195,6 +196,26 @@ typedef enum {
     A_PREVIEW,
     A_DISMISS
 } Action;
+typedef enum {
+    ICON_NONE,
+    ICON_BACK,
+    ICON_FORWARD,
+    ICON_PLAY,
+    ICON_PAUSE,
+    ICON_STOP,
+    ICON_RECORD,
+    ICON_CLOSE,
+    ICON_FREEZE,
+    ICON_SCREEN,
+    ICON_CAMERA,
+    ICON_AUDIO,
+    ICON_EFFECTS,
+    ICON_SETTINGS,
+    ICON_RESET,
+    ICON_PLUS,
+    ICON_MINUS
+} Icon;
+#define ICON_DATA_BASE 4096
 typedef struct {
     uint32_t id;
     WidgetType type;
@@ -215,7 +236,7 @@ typedef struct {
 typedef struct {
     SDL_Window *window;
     SDL_Renderer *renderer;
-    TTF_Font *font[4], *raster_font[4];
+    TTF_Font *font[5], *raster_font[5];
     float density, input_scale;
     PanelClient *client;
     PanelSnapshot snapshot;
@@ -250,7 +271,8 @@ static const Clay_Color muted = {151, 158, 168, 255};
 static const Clay_Color accent = {128, 201, 255, 255};
 static const Clay_Color danger = {255, 150, 147, 255};
 static const Clay_Color line = {68, 73, 81, 255};
-static const int font_sizes[] = {13, 16, 19, 25};
+static const Clay_BorderWidth outline_width = {.left = 1, .right = 1, .top = 1, .bottom = 1};
+static const int font_sizes[] = {13, 16, 19, 25, 48};
 
 static Clay_String literal(const char *s)
 {
@@ -300,6 +322,65 @@ static bool hot(uint32_t id)
 {
     return Clay_PointerOver(element_id(id));
 }
+static void icon_slot(Icon icon, bool enabled, bool selected)
+{
+    uintptr_t data = ICON_DATA_BASE + (uintptr_t)icon + (!enabled ? 256 : 0) + (selected ? 512 : 0);
+    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_FIXED(16), .height = CLAY_SIZING_FIXED(16)}},
+          .custom = {.customData = (void *)data}})
+    {
+    }
+}
+static Icon button_icon(const Panel *p, uint32_t id, Action action)
+{
+    if (id == 99) {
+        return ICON_BACK;
+    }
+    if (id == 30) {
+        return p->snapshot.state.live_paused ? ICON_PLAY : ICON_PAUSE;
+    }
+    if (id == 31) {
+        return ICON_FREEZE;
+    }
+    if (id == 32) {
+        return p->snapshot.countdown         ? ICON_CLOSE
+               : p->snapshot.state.recording ? ICON_STOP
+                                             : ICON_RECORD;
+    }
+    if (id == 33) {
+        return p->snapshot.state.record_paused ? ICON_PLAY : ICON_PAUSE;
+    }
+    if (id == 34) {
+        return p->snapshot.state.group_paused ? ICON_PLAY : ICON_PAUSE;
+    }
+    if (id == 41 || id == 74) {
+        return ICON_FORWARD;
+    }
+    if (id == 42 || id == 78) {
+        return ICON_RESET;
+    }
+    if (id == 76) {
+        return ICON_MINUS;
+    }
+    if (id == 77) {
+        return ICON_PLUS;
+    }
+    if (id >= 70 && id <= 75) {
+        return ICON_SCREEN;
+    }
+    if (id == 80) {
+        return ICON_CAMERA;
+    }
+    if (id == 83) {
+        return ICON_AUDIO;
+    }
+    if (id == 84) {
+        return ICON_CLOSE;
+    }
+    if (id == 85) {
+        return ICON_RESET;
+    }
+    return action == A_COMMAND ? ICON_SETTINGS : ICON_NONE;
+}
 static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool selected,
                    Action action, int index)
 {
@@ -313,19 +394,24 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
     }
     Clay_Color bg = selected             ? (Clay_Color){35, 63, 83, 255}
                     : hot(id) && enabled ? hovered
+                    : id == 99           ? background
                                          : control;
     Clay_Color ink = enabled ? selected ? accent : foreground : muted;
     CLAY({.id = element_id(id),
           .layout = {.sizing = {.height = CLAY_SIZING_FIXED(40)},
-                     .padding = {12, action == A_DROPDOWN ? 26 : 12, 8, 8},
+                     .padding = {10, action == A_DROPDOWN ? 26 : 10, 8, 8},
+                     .childGap = 6,
                      .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}},
           .backgroundColor = bg,
-          .cornerRadius = CLAY_CORNER_RADIUS(6),
           .border = {.color = p->focus == id ? accent
                               : selected     ? (Clay_Color){60, 104, 134, 255}
                                              : bg,
-                     .width = CLAY_BORDER_ALL(1)}})
+                     .width = outline_width}})
     {
+        Icon icon = button_icon(p, id, action);
+        if (icon != ICON_NONE) {
+            icon_slot(icon, enabled, selected);
+        }
         label(text, 1, ink);
     }
 }
@@ -476,9 +562,8 @@ static void field_row(Panel *p, size_t index)
                       .layout = {.sizing = {.width = CLAY_SIZING_GROW(),
                                             .height = CLAY_SIZING_FIXED(40)}},
                       .backgroundColor = p->active_text == id ? surface : background,
-                      .cornerRadius = CLAY_CORNER_RADIUS(4),
-                      .border = {.color = p->focus == id ? accent : line,
-                                 .width = CLAY_BORDER_ALL(1)},
+
+                      .border = {.color = p->focus == id ? accent : line, .width = outline_width},
                       .custom = {.customData = (void *)(uintptr_t)(index + 1)}})
                 {
                 }
@@ -520,7 +605,7 @@ static void status_line(Panel *p)
         }
         if (s->state.recording || s->countdown || s->finalizing) {
             uint64_t secs = s->duration_ns / 1000000000ULL;
-            label(s->countdown ? format(p, "Starts in %.1f s", s->countdown_remaining_ns / 1e9)
+            label(s->countdown ? "Starting…"
                   : s->finalizing
                       ? "Saving…"
                       : format(p, "%02llu:%02llu:%02llu", (unsigned long long)(secs / 3600),
@@ -534,7 +619,8 @@ static void status_line(Panel *p)
                        : s->state.live_paused    ? "Live paused"
                        : s->state.live_frozen    ? "Live frozen"
                                                  : "Live";
-    const char *record = s->state.recording
+    const char *record = s->countdown ? "Recording countdown"
+                         : s->state.recording
                              ? (s->state.record_paused ? "Recording paused" : "Recording")
                              : "Not recording";
     CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 12}})
@@ -545,7 +631,7 @@ static void status_line(Panel *p)
                   ? (Clay_Color){131, 221, 182, 255}
                   : secondary);
         if (s->connected) {
-            label(record, 0, s->state.recording ? danger : secondary);
+            label(record, 0, s->state.recording || s->countdown ? danger : secondary);
         }
     }
 }
@@ -562,14 +648,13 @@ static void output_controls(Panel *p)
             command_button(p, 31, s->state.live_frozen ? "Unfreeze" : "Freeze", true, "live",
                            s->state.live_frozen ? "unfreeze" : "freeze", NULL);
         }
+    }
+    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 8}})
+    {
         if (!s->state.recording && !s->countdown) {
             command_button(p, 32, s->finalizing ? "Saving…" : "Start record",
                            s->connected && !s->finalizing, "record", "start", NULL);
-        }
-    }
-    if (s->state.recording || s->countdown || s->state.group_paused) {
-        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 8}})
-        {
+        } else {
             if (s->state.recording || s->countdown) {
                 command_button(p, 32, s->countdown ? "Cancel" : "Stop record", s->connected,
                                "record", "stop", NULL);
@@ -578,6 +663,11 @@ static void output_controls(Panel *p)
                 command_button(p, 33, s->state.record_paused ? "Resume" : "Pause", s->connected,
                                "record", s->state.record_paused ? "resume" : "pause", NULL);
             }
+        }
+    }
+    if (s->state.recording || s->countdown || s->state.group_paused) {
+        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 8}})
+        {
             command_button(p, 34, s->state.group_paused ? "Resume all" : "Pause all", s->connected,
                            s->state.group_paused ? "resume" : "pause", NULL, NULL);
         }
@@ -669,7 +759,7 @@ static void floating_preview(Panel *p)
                      .childGap = 5,
                      .layoutDirection = CLAY_TOP_TO_BOTTOM},
           .backgroundColor = surface,
-          .border = {.color = line, .width = CLAY_BORDER_ALL(1)},
+          .border = {.color = line, .width = outline_width},
           .floating = {.offset = {x, y}, .attachTo = CLAY_ATTACH_TO_ROOT, .zIndex = 5}})
     {
         preview_content(p, true);
@@ -694,17 +784,21 @@ static void home_navigation(Panel *p)
                   .layout = {.sizing = {.width = CLAY_SIZING_GROW(),
                                         .height = CLAY_SIZING_FIXED(46)},
                              .padding = {10, 12, 0, 0},
+                             .childGap = 10,
                              .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}},
                   .backgroundColor = hot(id) ? control : background,
                   .border = {.color = p->focus == id ? accent : line,
-                             .width = p->focus == id ? (Clay_BorderWidth)CLAY_BORDER_ALL(1)
-                                                     : (Clay_BorderWidth){.bottom = 1}}})
+                             .width =
+                                 p->focus == id ? outline_width : (Clay_BorderWidth){.bottom = 1}}})
             {
+                static const Icon icons[] = {ICON_SCREEN, ICON_CAMERA, ICON_AUDIO, ICON_EFFECTS,
+                                             ICON_SETTINGS};
+                icon_slot(icons[i], true, false);
                 CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}}})
                 {
                     label(section_names[i], 1, foreground);
                 }
-                label("Open", 0, secondary);
+                icon_slot(ICON_FORWARD, true, false);
             }
         }
     }
@@ -886,9 +980,10 @@ static void settings_area(Panel *p)
             }
         }
         if (p->reply[0] && strchr(p->reply, '\n')) {
-            CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .padding = {12, 12, 12, 12}},
-                  .backgroundColor = background,
-                  .cornerRadius = CLAY_CORNER_RADIUS(6)})
+            CLAY({
+                .layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .padding = {12, 12, 12, 12}},
+                .backgroundColor = background,
+            })
             {
                 text_wrapped(p->reply, secondary);
             }
@@ -950,8 +1045,8 @@ static void dropdown_layout(Panel *p)
                      .padding = {4, 4, 4, 4},
                      .layoutDirection = CLAY_TOP_TO_BOTTOM},
           .backgroundColor = surface,
-          .cornerRadius = CLAY_CORNER_RADIUS(6),
-          .border = {.color = line, .width = CLAY_BORDER_ALL(1)},
+
+          .border = {.color = line, .width = outline_width},
           .floating = {.offset = {x, y}, .attachTo = CLAY_ATTACH_TO_ROOT, .zIndex = 10},
           .clip = {.vertical = true}})
     {
@@ -1013,7 +1108,7 @@ static Clay_Dimensions measure(Clay_StringSlice text, Clay_TextElementConfig *co
 {
     Panel *p = data;
     int width = 0, height = 0;
-    int font = config->fontId < 4 ? config->fontId : 1;
+    int font = config->fontId < 5 ? config->fontId : 1;
     if (text.length > 0) {
         TTF_GetStringSize(p->font[font], text.chars, (size_t)text.length, &width, &height);
     }
@@ -1033,6 +1128,138 @@ static void color(Panel *p, Clay_Color c)
 static SDL_FRect rect(Clay_BoundingBox b)
 {
     return (SDL_FRect){b.x, b.y, b.width, b.height};
+}
+/* One small line family, independent of font coverage and renderer DPI. */
+static void stroke(Panel *p, float x1, float y1, float x2, float y2, float thickness)
+{
+    float length = hypotf(x2 - x1, y2 - y1);
+    if (!length) {
+        return;
+    }
+    float dx = -(y2 - y1) / length * thickness / 2;
+    float dy = (x2 - x1) / length * thickness / 2;
+    Uint8 r, g, b, a;
+    SDL_GetRenderDrawColor(p->renderer, &r, &g, &b, &a);
+    SDL_FColor ink = {r / 255.f, g / 255.f, b / 255.f, a / 255.f};
+    SDL_Vertex vertices[] = {{.position = {x1 + dx, y1 + dy}, .color = ink},
+                             {.position = {x2 + dx, y2 + dy}, .color = ink},
+                             {.position = {x2 - dx, y2 - dy}, .color = ink},
+                             {.position = {x1 - dx, y1 - dy}, .color = ink}};
+    const int indices[] = {0, 1, 2, 0, 2, 3};
+    SDL_RenderGeometry(p->renderer, NULL, vertices, 4, indices, 6);
+}
+static void circle(Panel *p, float x, float y, float radius, float thickness)
+{
+    for (int i = 0; i < 64; i++) {
+        float a = (float)i * 2 * (float)M_PI / 64;
+        float b = (float)(i + 1) * 2 * (float)M_PI / 64;
+        stroke(p, x + cosf(a) * radius, y + sinf(a) * radius, x + cosf(b) * radius,
+               y + sinf(b) * radius, thickness);
+    }
+}
+static void draw_icon(Panel *p, SDL_FRect box, uintptr_t data)
+{
+    data -= ICON_DATA_BASE;
+    color(p, data & 256 ? muted : data & 512 ? accent : secondary);
+    Icon icon = (Icon)(data & 255);
+#define L(x1, y1, x2, y2) stroke(p, box.x + (x1), box.y + (y1), box.x + (x2), box.y + (y2), 1.4f)
+    switch (icon) {
+    case ICON_BACK:
+        L(12, 8, 3, 8);
+        L(3, 8, 7, 4);
+        L(3, 8, 7, 12);
+        break;
+    case ICON_FORWARD:
+        L(4, 4, 9, 8);
+        L(9, 8, 4, 12);
+        break;
+    case ICON_PLAY:
+        L(4, 3, 12, 8);
+        L(12, 8, 4, 13);
+        L(4, 13, 4, 3);
+        break;
+    case ICON_PAUSE:
+        L(5, 3, 5, 13);
+        L(11, 3, 11, 13);
+        break;
+    case ICON_STOP:
+        L(3, 3, 13, 3);
+        L(13, 3, 13, 13);
+        L(13, 13, 3, 13);
+        L(3, 13, 3, 3);
+        break;
+    case ICON_RECORD:
+        circle(p, box.x + 8, box.y + 8, 5, 1.4f);
+        break;
+    case ICON_CLOSE:
+        L(4, 4, 12, 12);
+        L(12, 4, 4, 12);
+        break;
+    case ICON_FREEZE:
+        L(8, 2, 8, 14);
+        L(3, 5, 13, 11);
+        L(3, 11, 13, 5);
+        break;
+    case ICON_SCREEN:
+        L(2, 3, 14, 3);
+        L(14, 3, 14, 11);
+        L(14, 11, 2, 11);
+        L(2, 11, 2, 3);
+        L(8, 11, 8, 14);
+        L(5, 14, 11, 14);
+        break;
+    case ICON_CAMERA:
+        L(2, 4, 11, 4);
+        L(11, 4, 11, 12);
+        L(11, 12, 2, 12);
+        L(2, 12, 2, 4);
+        L(11, 6, 15, 4);
+        L(15, 4, 15, 12);
+        L(15, 12, 11, 10);
+        break;
+    case ICON_AUDIO:
+        L(6, 2, 10, 2);
+        L(10, 2, 10, 9);
+        L(10, 9, 6, 9);
+        L(6, 9, 6, 2);
+        L(3, 7, 3, 11);
+        L(3, 11, 13, 11);
+        L(13, 11, 13, 7);
+        L(8, 11, 8, 14);
+        L(5, 14, 11, 14);
+        break;
+    case ICON_EFFECTS:
+        L(3, 12, 12, 3);
+        L(3, 12, 5, 14);
+        L(5, 14, 14, 5);
+        L(14, 5, 12, 3);
+        L(3, 2, 3, 6);
+        L(1, 4, 5, 4);
+        break;
+    case ICON_SETTINGS:
+        L(2, 4, 14, 4);
+        L(2, 8, 14, 8);
+        L(2, 12, 14, 12);
+        L(5, 2, 5, 6);
+        L(11, 6, 11, 10);
+        L(7, 10, 7, 14);
+        break;
+    case ICON_RESET:
+        circle(p, box.x + 8, box.y + 8, 5, 1.4f);
+        L(2, 2, 2, 6);
+        L(2, 6, 6, 6);
+        break;
+    case ICON_PLUS:
+        L(3, 8, 13, 8);
+        L(8, 3, 8, 13);
+        break;
+    case ICON_MINUS:
+        L(3, 8, 13, 8);
+        break;
+    case ICON_NONE:
+        break;
+    }
+#undef L
 }
 static void rounded(Panel *p, SDL_FRect box, float radius, Clay_Color c)
 {
@@ -1153,6 +1380,40 @@ static void draw_text(Panel *p, const char *text, size_t length, int font, Clay_
                      c->width / p->density, c->height / p->density};
     SDL_RenderTexture(p->renderer, c->texture, NULL, &box);
 }
+static unsigned countdown_seconds(uint64_t remaining_ns)
+{
+    return (unsigned)(remaining_ns / 1000000000ULL + (remaining_ns % 1000000000ULL != 0));
+}
+/* This leader is drawn by the client over its preview, never into daemon frames. */
+static void draw_countdown(Panel *p, SDL_FRect box)
+{
+    if (!p->snapshot.connected || !p->snapshot.countdown) {
+        return;
+    }
+    color(p, (Clay_Color){5, 6, 7, 190});
+    SDL_RenderFillRect(p->renderer, &box);
+    float x = box.x + box.w / 2, y = box.y + box.h / 2;
+    float radius = fminf(68, fminf(box.w, box.h) * .41f);
+    color(p, (Clay_Color){151, 158, 168, 170});
+    circle(p, x, y, radius, 1);
+    circle(p, x, y, radius - 4, 1);
+    stroke(p, box.x + 8, y, box.x + box.w - 8, y, 1);
+    stroke(p, x, box.y + 5, x, box.y + box.h - 5, 1);
+    float fraction = (p->snapshot.countdown_remaining_ns % 1000000000ULL) / 1e9f;
+    float angle = (1 - fraction) * 2 * (float)M_PI - (float)M_PI / 2;
+    color(p, secondary);
+    stroke(p, x, y, x + cosf(angle) * radius, y + sinf(angle) * radius, 1.4f);
+    char number[16];
+    snprintf(number, sizeof number, "%u", countdown_seconds(p->snapshot.countdown_remaining_ns));
+    int width = 0, height = 0;
+    int font = box.h < 70 ? 3 : 4;
+    TTF_GetStringSize(p->font[font], number, 0, &width, &height);
+    /* Clear a small central plate, keeping the actual frame visible around the leader. */
+    color(p, (Clay_Color){5, 6, 7, 255});
+    SDL_RenderFillRect(p->renderer, &(SDL_FRect){x - width / 2.f - 5, y - height / 2.f,
+                                                 width + 10.f, (float)height});
+    draw_text(p, number, strlen(number), font, foreground, x - width / 2.f, y - height / 2.f);
+}
 static SDL_Rect intersect(SDL_Rect a, SDL_Rect b)
 {
     SDL_Rect result;
@@ -1242,7 +1503,7 @@ static void render(Panel *p, Clay_RenderCommandArray commands)
         case CLAY_RENDER_COMMAND_TYPE_TEXT:
             draw_text(p, c->renderData.text.stringContents.chars,
                       (size_t)c->renderData.text.stringContents.length,
-                      c->renderData.text.fontId < 4 ? c->renderData.text.fontId : 1,
+                      c->renderData.text.fontId < 5 ? c->renderData.text.fontId : 1,
                       c->renderData.text.textColor, box.x, box.y);
             break;
         case CLAY_RENDER_COMMAND_TYPE_SCISSOR_START:
@@ -1268,6 +1529,11 @@ static void render(Panel *p, Clay_RenderCommandArray commands)
             SDL_SetRenderClipRect(p->renderer, &clips[depth]);
             break;
         case CLAY_RENDER_COMMAND_TYPE_CUSTOM:
+            if ((uintptr_t)c->renderData.custom.customData >= ICON_DATA_BASE &&
+                (uintptr_t)c->renderData.custom.customData < ICON_DATA_BASE + 1024) {
+                draw_icon(p, box, (uintptr_t)c->renderData.custom.customData);
+                break;
+            }
             rounded(p, box, c->renderData.custom.cornerRadius.topLeft,
                     c->renderData.custom.backgroundColor);
             if (c->renderData.custom.customData == p) {
@@ -1279,6 +1545,7 @@ static void render(Panel *p, Clay_RenderCommandArray commands)
                                        p->frame.width * scale, p->frame.height * scale};
                     SDL_RenderTexture(p->renderer, p->preview, NULL, &image);
                 }
+                draw_countdown(p, box);
             } else {
                 size_t field = (size_t)(uintptr_t)c->renderData.custom.customData - 1;
                 if (field < FIELD_COUNT) {
@@ -1910,6 +2177,10 @@ static uint64_t window_xid(SDL_Window *window)
     if (display && xid) {
         XClassHint hint = {.res_name = "cast-panel", .res_class = "CastPanel"};
         XSetClassHint(display, xid, &hint);
+        Atom property = XInternAtom(display, "_NET_WM_WINDOW_TYPE", False);
+        Atom utility = XInternAtom(display, "_NET_WM_WINDOW_TYPE_UTILITY", False);
+        XChangeProperty(display, xid, property, XA_ATOM, 32, PropModeReplace,
+                        (unsigned char *)&utility, 1);
         XSync(display, False);
         return (uint64_t)xid;
     }
@@ -1930,7 +2201,7 @@ static void cleanup(Panel *p, void *clay_memory)
         SDL_DestroyTexture(p->cache[i].texture);
         free(p->cache[i].text);
     }
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         TTF_CloseFont(p->font[i]);
         TTF_CloseFont(p->raster_font[i]);
     }
@@ -1998,7 +2269,10 @@ static void write_ui_state(Panel *p, const char *path)
                 w->box.width, w->box.height);
     }
     fprintf(file,
-            "],\"clipboard_text_available\":%s,\"focus\":%u,\"active_text\":%u,\"edit_text\":",
+            "],\"countdown\":%s,\"countdown_seconds\":%u,"
+            "\"clipboard_text_available\":%s,\"focus\":%u,\"active_text\":%u,\"edit_text\":",
+            p->snapshot.connected && p->snapshot.countdown ? "true" : "false",
+            countdown_seconds(p->snapshot.countdown_remaining_ns),
             SDL_HasClipboardText() ? "true" : "false", p->focus, p->active_text);
     int edit_index;
     FieldEdit *edit = active_edit(p, &edit_index);
@@ -2024,7 +2298,7 @@ int panel_run(const Config *config, char *error, size_t n)
     p->density = 1;
     p->input_scale = 1;
     SDL_SetHint(SDL_HINT_APP_ID, "org.cast.Panel");
-    SDL_SetHint(SDL_HINT_X11_WINDOW_TYPE, "_NET_WM_WINDOW_TYPE_NORMAL");
+    SDL_SetHint(SDL_HINT_X11_WINDOW_TYPE, "_NET_WM_WINDOW_TYPE_UTILITY");
     if (!SDL_Init(SDL_INIT_VIDEO) || !TTF_Init()) {
         snprintf(error, n, "cannot initialize control panel: %s", SDL_GetError());
         cleanup(p, NULL);
@@ -2055,7 +2329,7 @@ int panel_run(const Config *config, char *error, size_t n)
     SDL_SetRenderVSync(p->renderer, 1);
     SDL_SetRenderDrawBlendMode(p->renderer, SDL_BLENDMODE_BLEND);
     size_t font_length = (size_t)(cast_panel_font_end - cast_panel_font_data);
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         SDL_IOStream *stream = SDL_IOFromConstMem(cast_panel_font_data, font_length);
         p->font[i] = stream ? TTF_OpenFontIO(stream, true, (float)font_sizes[i]) : NULL;
         stream = SDL_IOFromConstMem(cast_panel_font_data, font_length);
@@ -2084,12 +2358,15 @@ int panel_run(const Config *config, char *error, size_t n)
     Clay_RenderCommandArray commands = layout(p);
     render(p, commands);
     SDL_RenderPresent(p->renderer);
+    /* mwm evaluates rules and centers utility windows on their first MapRequest.
+     * Set both properties on the final renderer window while it is still hidden. */
+    uint64_t xid = window_xid(p->window);
     if (!SDL_ShowWindow(p->window)) {
         snprintf(error, n, "cannot show control panel window: %s", SDL_GetError());
         cleanup(p, clay_memory);
         return -1;
     }
-    p->client = panel_client_open(config, window_xid(p->window), error, n);
+    p->client = panel_client_open(config, xid, error, n);
     if (!p->client) {
         cleanup(p, clay_memory);
         return -1;
@@ -2127,7 +2404,7 @@ int panel_run(const Config *config, char *error, size_t n)
         float density = pixel_w / p->width;
         if (fabsf(density - p->density) > .001f) {
             p->density = density;
-            for (int i = 0; i < 4; i++) {
+            for (int i = 0; i < 5; i++) {
                 TTF_SetFontSize(p->raster_font[i], font_sizes[i] * density);
             }
             for (int i = 0; i < TEXT_CACHE_MAX; i++) {
