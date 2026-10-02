@@ -20,7 +20,7 @@ def wait_until(predicate, message, timeout=8):
 
 
 def guides():
-    result = subprocess.run(['xdotool', 'search', '--onlyvisible', '--class', '^CastCountdown$'],
+    result = subprocess.run(['xdotool', 'search', '--onlyvisible', '--class', '^CastPreview$'],
                             capture_output=True, text=True)
     return result.stdout.split() if result.returncode == 0 else []
 
@@ -56,7 +56,7 @@ def main():
                 window = guides()[0]
                 properties = subprocess.check_output(
                     ['xprop', '-id', window, 'WM_CLASS', '_NET_WM_WINDOW_TYPE'], text=True)
-                assert 'CastCountdown' in properties and '_NET_WM_WINDOW_TYPE_UTILITY' in properties
+                assert 'CastPreview' in properties and '_NET_WM_WINDOW_TYPE_UTILITY' in properties
                 subprocess.run(['xdotool', 'windowfocus', '--sync', window, 'key', 'Escape'], check=True)
                 wait_until(lambda: not state()['record']['countdown'], 'Escape did not cancel')
                 assert not state()['record']['state'] == 'recording'
@@ -81,6 +81,23 @@ def main():
                 wait_until(lambda: state()['record']['state'] == 'recording', 'countdown did not start recording')
                 assert not guides(), 'guide remained visible at recording start'
                 time.sleep(.2)
+                command('record', 'cut')
+                before = state()['record']['duration']
+                command('record', 'resume')
+                wait_until(lambda: bool(guides()), 'cut resume did not reopen the film preview')
+                window = guides()[0]
+                subprocess.run(['xdotool', 'windowfocus', '--sync', window, 'key', 'Escape'], check=True)
+                wait_until(lambda: not state()['record']['countdown'], 'Escape did not cancel resume')
+                assert state()['record']['state'] == 'cut' and not guides()
+                assert abs(state()['record']['duration'] - before) < .02
+                assert state()['record']['path'] == str(path)
+                # Even an already-enabled preview must close at the admission boundary.
+                command('preview', 'on')
+                command('record', 'resume')
+                wait_until(lambda: bool(guides()), 'second resume did not show countdown preview')
+                wait_until(lambda: state()['record']['state'] == 'recording', 'cut resume never admitted media')
+                assert not guides(), 'countdown preview remained on screen when recording resumed'
+                time.sleep(.2)
                 command('record', 'stop')
                 wait_until(lambda: not state()['record']['finalizing'], 'recording did not finalize')
                 frames = subprocess.check_output(
@@ -104,7 +121,7 @@ def main():
                             'countdown guide leaked into the first recording frame'
                 command('quit')
                 assert daemon.wait(timeout=5) == 0
-                print('Xorg CLI countdown guide, cancellation, privacy pause and recording start passed')
+                print('Xorg temporary film preview, start/cut-resume countdown, cancellation and recording exclusion passed')
             except BaseException:
                 log.seek(0)
                 print(log.read())

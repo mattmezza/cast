@@ -1,5 +1,6 @@
 /* Xlib-only platform implementation. All desktop coordinates stop at this boundary. */
 #include "platform_backend.h"
+#include "presentation_text.h"
 #define Cursor X11Cursor
 #include <X11/XKBlib.h>
 #include <X11/Xatom.h>
@@ -22,6 +23,7 @@
 #include <string.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
+#include <time.h>
 
 #define MONITOR_MAX 64
 typedef struct {
@@ -56,6 +58,10 @@ typedef struct {
     bool countdown_retired_first;
     bool countdown_cancelled, countdown_dirty;
     uint64_t countdown_painted;
+    Config countdown_config;
+    Frame countdown_frame, countdown_canvas;
+    PresentationText *countdown_text;
+    XImage *countdown_image;
     int panel_pid;
     Atom wm_delete, wm_state, active_window;
     int screen, xi_opcode, randr_base, xkb_base;
@@ -586,6 +592,9 @@ void x11_close(Platform *platform)
         }
         XCloseDisplay(p->d);
     }
+    frame_free(&p->countdown_frame);
+    frame_free(&p->countdown_canvas);
+    presentation_text_destroy(p->countdown_text);
     free(p);
 }
 Capabilities x11_capabilities(Platform *platform)
@@ -1840,6 +1849,9 @@ int x11_preview(Platform *platform, const Frame *frame, const State *state, cons
                 char *e, size_t n)
 {
     Xorg *p = (Xorg *)platform;
+    if (p->countdown) {
+        return 0; /* The film guide owns this preview until its hide barrier completes. */
+    }
     if (!cfg->preview) {
         if (p->preview) {
             XUnmapWindow(p->d, p->preview);
@@ -1866,7 +1878,9 @@ int x11_preview(Platform *platform, const Frame *frame, const State *state, cons
     bool record = !strcmp(cfg->preview_target, "record");
     unsigned flags = (unsigned)state->live_paused | ((unsigned)state->live_frozen << 1) |
                      ((unsigned)state->recording << 2) | ((unsigned)state->record_paused << 3) |
-                     ((unsigned)record << 4);
+                     ((unsigned)record << 4) | ((unsigned)state->live_blurred << 5) |
+                     ((unsigned)state->record_frozen << 6) |
+                     ((unsigned)state->record_blurred << 7) | ((unsigned)state->record_cut << 8);
     if (!p->preview_enabled || flags != p->preview_state || p->preview_source != p->generation) {
         p->preview_epoch++;
         p->preview_state = flags;
@@ -1910,11 +1924,21 @@ int x11_preview(Platform *platform, const Frame *frame, const State *state, cons
     worker->width = w;
     worker->height = h;
     worker->epoch = p->preview_epoch;
-    worker->color = state->live_paused ? 0xffc65c : state->live_frozen ? 0x7ec8ff : 0x64e69f;
-    const char *live = state->live_paused ? "PAUSED" : state->live_frozen ? "FROZEN" : "LIVE";
-    snprintf(worker->label, sizeof(worker->label), "%s | %s | preview: %s", live,
-             state->recording ? (state->record_paused ? "RECORDING-PAUSED" : "RECORDING")
-                              : "RECORD OFF",
+    worker->color = state->live_paused                          ? 0xffc65c
+                    : state->live_blurred || state->live_frozen ? 0x7ec8ff
+                                                                : 0x64e69f;
+    const char *live = state->live_paused    ? "PAUSED"
+                       : state->live_blurred ? (state->live_frozen ? "BLURRED+FROZEN" : "BLURRED")
+                       : state->live_frozen  ? "FROZEN"
+                                             : "LIVE";
+    const char *record_state =
+        !state->recording       ? "RECORD OFF"
+        : state->record_cut     ? "RECORD CUT"
+        : state->record_paused  ? "RECORD PAUSED"
+        : state->record_blurred ? (state->record_frozen ? "RECORD BLUR+FREEZE" : "RECORD BLURRED")
+        : state->record_frozen  ? "RECORD FROZEN"
+                                : "RECORDING";
+    snprintf(worker->label, sizeof(worker->label), "%s | %s | preview: %s", live, record_state,
              cfg->preview_target);
     worker->pending = true;
     pthread_cond_signal(&worker->changed);
@@ -1928,6 +1952,7 @@ static void countdown_event(Xorg *p, const XEvent *event)
         p->countdown_cancelled = true;
     } else if (event->type == DestroyNotify) {
         p->countdown = None;
+        p->preview = None;
         p->countdown_cancelled = true;
     } else if (event->type == Expose) {
         p->countdown_dirty = true;
@@ -1941,19 +1966,158 @@ static Bool countdown_event_matches(Display *display, XEvent *event, XPointer po
     return p->countdown && event->xany.window == p->countdown;
 }
 
-static void countdown_digit(Xorg *p, unsigned digit, int x, int y)
+int x11_countdown_frame(Platform *platform, const Frame *frame, const Config *config, char *error,
+                        size_t n)
 {
-    static const unsigned char segments[] = {0x3f, 0x06, 0x5b, 0x4f, 0x66,
-                                             0x6d, 0x7d, 0x07, 0x7f, 0x6f};
-    static const XRectangle bars[] = {{4, 0, 24, 4},  {28, 4, 4, 23}, {28, 31, 4, 23},
-                                      {4, 54, 24, 4}, {0, 31, 4, 23}, {0, 4, 4, 23},
-                                      {4, 27, 24, 4}};
-    for (unsigned i = 0; i < 7; i++) {
-        if (segments[digit % 10] & (1u << i)) {
-            XFillRectangle(p->d, p->countdown_buffer, p->countdown_gc, x + bars[i].x, y + bars[i].y,
-                           bars[i].width, bars[i].height);
+    Xorg *p = (Xorg *)platform;
+    p->countdown_config = *config;
+    if (frame && frame->data && frame_copy(&p->countdown_frame, frame)) {
+        return fail(error, n, "cannot stage recording countdown preview");
+    }
+    return 0;
+}
+
+/* The WM owns its frame window. Wait for it to retire before admitting recording
+ * samples rather than assuming a server round-trip also ran another client's WM. */
+static bool countdown_hidden(Xorg *p)
+{
+    if (!p->countdown_retired.visible) {
+        return true;
+    }
+    uint64_t deadline = cast_now_ns() + 500000000;
+    do {
+        WindowRect remaining = {0};
+        if (!window_rect(p, p->countdown_retired.outer, false, &remaining) || !remaining.visible) {
+            return true;
+        }
+        struct timespec delay = {.tv_nsec = 10000000};
+        nanosleep(&delay, NULL);
+    } while (cast_now_ns() < deadline);
+    return false;
+}
+
+static int countdown_paint(Xorg *p, uint64_t remaining_ns, char *error, size_t n)
+{
+    int w = p->preview_w, h = p->preview_h;
+    Frame *canvas = &p->countdown_canvas;
+    if (frame_alloc(canvas, w, h)) {
+        return fail(error, n, "cannot allocate countdown canvas");
+    }
+    const Frame *source = &p->countdown_frame;
+    double scale =
+        source->data ? fmin((double)w / source->width, (double)(h - 32) / source->height) : 0;
+    int iw = source->data ? (int)(source->width * scale) : 0;
+    int ih = source->data ? (int)(source->height * scale) : 0;
+    int ox = (w - iw) / 2, oy = 32 + (h - 32 - ih) / 2;
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            uint8_t *pixel = canvas->data + (size_t)y * canvas->stride + x * 4;
+            pixel[0] = 16;
+            pixel[1] = 17;
+            pixel[2] = 19;
+            pixel[3] = 255;
+            if (iw && ih && x >= ox && x < ox + iw && y >= oy && y < oy + ih) {
+                const uint8_t *input = source->data +
+                                       (size_t)((y - oy) * source->height / ih) * source->stride +
+                                       (size_t)((x - ox) * source->width / iw) * 4;
+                for (int channel = 0; channel < 3; channel++) {
+                    pixel[channel] = (uint8_t)(input[channel] * 0.30);
+                }
+            }
         }
     }
+    unsigned seconds = (unsigned)((remaining_ns - 1) / 1000000000 + 1);
+    Config text = p->countdown_config;
+    if (!text.blur_font[0]) {
+        snprintf(text.blur_font, sizeof text.blur_font, "Noto Sans");
+    }
+    if (!text.pause_font[0]) {
+        snprintf(text.pause_font, sizeof text.pause_font, "Noto Sans");
+    }
+    text.width = w;
+    text.height = h;
+    text.pause_title_size = text.blur_title_size = h < 240 ? 48 : 80;
+    text.pause_subtitle_size = text.blur_subtitle_size = 16;
+    text.blur_foreground = 0xf8f9fb;
+    snprintf(text.blur_title, sizeof text.blur_title, "%u", seconds);
+    text.blur_subtitle[0] = 0;
+    if (!p->countdown_text) {
+        p->countdown_text = presentation_text_create();
+    }
+    if (!p->countdown_text ||
+        presentation_text_draw(p->countdown_text, &text, true, canvas, error, n)) {
+        return -1;
+    }
+    if (!p->countdown_image) {
+        p->countdown_image = XCreateImage(p->d, DefaultVisual(p->d, p->screen),
+                                          (unsigned)DefaultDepth(p->d, p->screen), ZPixmap, 0, NULL,
+                                          (unsigned)w, (unsigned)h, 32, 0);
+        if (!p->countdown_image) {
+            return fail(error, n, "cannot create countdown preview image");
+        }
+        p->countdown_image->data = calloc((size_t)p->countdown_image->bytes_per_line, (size_t)h);
+        if (!p->countdown_image->data) {
+            XDestroyImage(p->countdown_image);
+            p->countdown_image = NULL;
+            return fail(error, n, "cannot allocate countdown preview image");
+        }
+    }
+    XImage *image = p->countdown_image;
+    unsigned long channels[3][256];
+    ColorChannel masks[] = {color_channel(image->red_mask), color_channel(image->green_mask),
+                            color_channel(image->blue_mask)};
+    for (unsigned i = 0; i < 256; i++) {
+        for (unsigned c = 0; c < 3; c++) {
+            channels[c][i] = ((i * masks[c].mask + 127) / 255) << masks[c].shift;
+        }
+    }
+    uint16_t endian = 1;
+    bool native = image->bits_per_pixel == 32 &&
+                  image->byte_order == (*(uint8_t *)&endian ? LSBFirst : MSBFirst);
+    for (int y = 0; y < h; y++) {
+        const uint8_t *row = canvas->data + (size_t)y * canvas->stride;
+        uint32_t *destination =
+            native ? (uint32_t *)(image->data + (size_t)y * image->bytes_per_line) : NULL;
+        for (int x = 0; x < w; x++) {
+            const uint8_t *pixel = row + x * 4;
+            unsigned long value =
+                channels[0][pixel[0]] | channels[1][pixel[1]] | channels[2][pixel[2]];
+            if (native) {
+                destination[x] = (uint32_t)value;
+            } else {
+                XPutPixel(image, x, y, value);
+            }
+        }
+    }
+    XPutImage(p->d, p->countdown_buffer, p->countdown_gc, image, 0, 0, 0, 0, (unsigned)w,
+              (unsigned)h);
+    int cx = w / 2, cy = h / 2, radius = (h - 64) / 3;
+    if (radius < 34) {
+        radius = 34;
+    }
+    XSetForeground(p->d, p->countdown_gc, 0xbbc1ca);
+    XSetLineAttributes(p->d, p->countdown_gc, 1, LineSolid, CapButt, JoinMiter);
+    XDrawLine(p->d, p->countdown_buffer, p->countdown_gc, 0, cy, w, cy);
+    XDrawLine(p->d, p->countdown_buffer, p->countdown_gc, cx, 32, cx, h);
+    XDrawArc(p->d, p->countdown_buffer, p->countdown_gc, cx - radius, cy - radius,
+             (unsigned)(2 * radius), (unsigned)(2 * radius), 0, 360 * 64);
+    XDrawArc(p->d, p->countdown_buffer, p->countdown_gc, cx - radius + 5, cy - radius + 5,
+             (unsigned)(2 * radius - 10), (unsigned)(2 * radius - 10), 0, 360 * 64);
+    double angle =
+        -M_PI / 2 + 2 * M_PI * (double)(1000000000 - remaining_ns % 1000000000) / 1000000000;
+    XDrawLine(p->d, p->countdown_buffer, p->countdown_gc, cx, cy, cx + (int)(cos(angle) * radius),
+              cy + (int)(sin(angle) * radius));
+    XSetForeground(p->d, p->countdown_gc, 0x101113);
+    XFillRectangle(p->d, p->countdown_buffer, p->countdown_gc, 0, 0, (unsigned)w, 32);
+    XSetForeground(p->d, p->countdown_gc, 0xf8f9fb);
+    const char *label = "Recording countdown  |  Esc to cancel";
+    XDrawString(p->d, p->countdown_buffer, p->countdown_gc, 10, 21, label, (int)strlen(label));
+    XSetWindowBackgroundPixmap(p->d, p->countdown, p->countdown_buffer);
+    XMapWindow(p->d, p->countdown);
+    XCopyArea(p->d, p->countdown_buffer, p->countdown, p->countdown_gc, 0, 0, (unsigned)w,
+              (unsigned)h, 0, 0);
+    XFlush(p->d);
+    return 0;
 }
 
 int x11_countdown(Platform *platform, uint64_t remaining_ns, char *error, size_t n)
@@ -1961,7 +2125,6 @@ int x11_countdown(Platform *platform, uint64_t remaining_ns, char *error, size_t
     Xorg *p = (Xorg *)platform;
     XEvent event;
     if (!remaining_ns && p->countdown) {
-        /* Include server-delivered cancellation before the hide/record boundary. */
         XSync(p->d, False);
     }
     while (XCheckIfEvent(p->d, &event, countdown_event_matches, (XPointer)p)) {
@@ -1976,21 +2139,37 @@ int x11_countdown(Platform *platform, uint64_t remaining_ns, char *error, size_t
             }
             XDestroyWindow(p->d, p->countdown);
         }
+        if (existed) {
+            p->preview = None;
+            p->preview_enabled = false;
+            p->preview_disabled = false;
+            p->preview_epoch++;
+            p->preview_dragging = false;
+        }
         if (p->countdown_gc) {
             XFreeGC(p->d, p->countdown_gc);
         }
         if (p->countdown_buffer) {
             XFreePixmap(p->d, p->countdown_buffer);
         }
+        if (p->countdown_image) {
+            XDestroyImage(p->countdown_image);
+        }
         p->countdown = None;
         p->countdown_gc = NULL;
         p->countdown_buffer = None;
+        p->countdown_image = NULL;
         p->countdown_cancelled = false;
         p->countdown_painted = 0;
-        /* Mask the final footprint at the recording boundary, then retain any
-         * reparenting WM frame until that WM actually unmaps/destroys it. */
+        frame_free(&p->countdown_frame);
+        frame_free(&p->countdown_canvas);
         if (existed) {
             XSync(p->d, False);
+        }
+        if (!countdown_hidden(p)) {
+            return fail(error, n,
+                        "recording remains stopped/cut: window manager has not hidden the "
+                        "countdown preview frame");
         }
         return cancelled ? 1 : 0;
     }
@@ -1998,32 +2177,37 @@ int x11_countdown(Platform *platform, uint64_t remaining_ns, char *error, size_t
         return 1;
     }
     if (!p->countdown) {
-        int x = (DisplayWidth(p->d, p->screen) - 240) / 2;
-        int y = (DisplayHeight(p->d, p->screen) - 240) / 2;
-        begin(p);
-        p->countdown = XCreateSimpleWindow(p->d, p->root, x, y, 240, 240, 0, 0, 0x101113);
-        XStoreName(p->d, p->countdown, "cast recording countdown");
-        XClassHint hint = {.res_name = "cast-countdown", .res_class = "CastCountdown"};
-        XSetClassHint(p->d, p->countdown, &hint);
-        Atom type = XInternAtom(p->d, "_NET_WM_WINDOW_TYPE", False);
-        Atom utility = XInternAtom(p->d, "_NET_WM_WINDOW_TYPE_UTILITY", False);
-        XChangeProperty(p->d, p->countdown, type, XA_ATOM, 32, PropModeReplace,
-                        (unsigned char *)&utility, 1);
+        preview_stop(p);
+        if (p->preview) {
+            XDestroyWindow(p->d, p->preview);
+            p->preview = None;
+        }
+        Config config = p->countdown_config;
+        if (!config.width || !config.height) {
+            config.width = 640;
+            config.height = 360;
+        }
+        preview_create(p, &config);
+        p->countdown = p->preview;
+        p->preview_epoch++;
+        p->preview_enabled = false;
+        p->preview_disabled = false;
+        XStoreName(p->d, p->countdown, "cast output preview");
         XSizeHints size = {.flags = PMinSize | PMaxSize,
-                           .min_width = 240,
-                           .min_height = 240,
-                           .max_width = 240,
-                           .max_height = 240};
+                           .min_width = p->preview_w,
+                           .min_height = p->preview_h,
+                           .max_width = p->preview_w,
+                           .max_height = p->preview_h};
         XSetWMNormalHints(p->d, p->countdown, &size);
-        XSetWMProtocols(p->d, p->countdown, &p->wm_delete, 1);
         XSelectInput(p->d, p->countdown, ExposureMask | StructureNotifyMask | KeyPressMask);
+        begin(p);
         p->countdown_buffer =
-            XCreatePixmap(p->d, p->countdown, 240, 240, (unsigned)DefaultDepth(p->d, p->screen));
+            XCreatePixmap(p->d, p->countdown, (unsigned)p->preview_w, (unsigned)p->preview_h,
+                          (unsigned)DefaultDepth(p->d, p->screen));
         p->countdown_gc = XCreateGC(p->d, p->countdown_buffer, 0, NULL);
-        XSetWindowBackgroundPixmap(p->d, p->countdown, p->countdown_buffer);
         if (!end(p)) {
             x11_countdown(platform, 0, NULL, 0);
-            return fail(error, n, "cannot create local recording countdown");
+            return fail(error, n, "cannot create recording countdown preview");
         }
         p->countdown_dirty = true;
     }
@@ -2033,33 +2217,7 @@ int x11_countdown(Platform *platform, uint64_t remaining_ns, char *error, size_t
     }
     p->countdown_dirty = false;
     p->countdown_painted = now;
-    unsigned seconds = (unsigned)((remaining_ns - 1) / 1000000000 + 1);
-    if (seconds > 99) {
-        seconds = 99;
-    }
-    XSetForeground(p->d, p->countdown_gc, 0x101113);
-    XFillRectangle(p->d, p->countdown_buffer, p->countdown_gc, 0, 0, 240, 240);
-    XSetForeground(p->d, p->countdown_gc, 0xbbc1ca);
-    XDrawString(p->d, p->countdown_buffer, p->countdown_gc, 63, 31, "Recording starts in", 19);
-    XDrawString(p->d, p->countdown_buffer, p->countdown_gc, 81, 216, "Esc to cancel", 13);
-    XSetLineAttributes(p->d, p->countdown_gc, 4, LineSolid, CapRound, JoinRound);
-    XSetForeground(p->d, p->countdown_gc, 0x444951);
-    XDrawArc(p->d, p->countdown_buffer, p->countdown_gc, 54, 54, 132, 132, 0, 360 * 64);
-    XSetForeground(p->d, p->countdown_gc, 0x80c9ff);
-    uint64_t fraction = (remaining_ns - 1) % 1000000000 + 1;
-    XDrawArc(p->d, p->countdown_buffer, p->countdown_gc, 54, 54, 132, 132, 90 * 64,
-             -(int)(fraction * 360 * 64 / 1000000000));
-    XSetForeground(p->d, p->countdown_gc, 0xf8f9fb);
-    if (seconds >= 10) {
-        countdown_digit(p, seconds / 10, 82, 91);
-        countdown_digit(p, seconds % 10, 126, 91);
-    } else {
-        countdown_digit(p, seconds, 104, 91);
-    }
-    XMapWindow(p->d, p->countdown);
-    XCopyArea(p->d, p->countdown_buffer, p->countdown, p->countdown_gc, 0, 0, 240, 240, 0, 0);
-    XFlush(p->d);
-    return 0;
+    return countdown_paint(p, remaining_ns, error, n);
 }
 
 void x11_doctor(const Config *cfg, char *e, size_t n)

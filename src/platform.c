@@ -230,6 +230,21 @@ int platform_countdown(Platform *p, uint64_t remaining_ns, char *e, size_t n)
     (void)n;
     return 0;
 }
+int platform_countdown_frame(Platform *p, const Frame *frame, const Config *config, char *e,
+                             size_t n)
+{
+#ifdef WITH_X11
+    if (p && p->backend == XORG) {
+        return x11_countdown_frame(p->impl, frame, config, e, n);
+    }
+#endif
+    (void)p;
+    (void)frame;
+    (void)config;
+    (void)e;
+    (void)n;
+    return 0;
+}
 int platform_preview(Platform *p, const Frame *f, const State *s, const Config *cfg, char *e,
                      size_t n)
 {

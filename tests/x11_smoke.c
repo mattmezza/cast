@@ -513,27 +513,26 @@ static void countdown_tests(Display *d, Platform *p, Config *cfg, Compositor *co
     Cursor cursor;
     assert(platform_countdown(p, 3000000000ULL, error, sizeof error) == 0);
     XSync(d, false);
-    Window window = named_window(d, "cast recording countdown");
+    Window window = named_window(d, "cast output preview");
     XWindowAttributes attr;
     assert(window && XGetWindowAttributes(d, window, &attr) && attr.map_state == IsViewable);
-    assert(!attr.override_redirect && attr.width == 240 && attr.height == 240);
-    assert(attr.x == (DisplayWidth(d, DefaultScreen(d)) - 240) / 2);
+    assert(!attr.override_redirect && attr.width == 640 && attr.height > 300);
+    assert(attr.x == (DisplayWidth(d, DefaultScreen(d)) - attr.width) / 2);
     assert_utility(d, window);
     XClassHint hint;
     assert(XGetClassHint(d, window, &hint));
-    assert(!strcmp(hint.res_class, "CastCountdown"));
+    assert(!strcmp(hint.res_class, "CastPreview"));
     XFree(hint.res_name);
     XFree(hint.res_class);
-    XImage *image = XGetImage(d, window, 0, 0, 240, 240, AllPlanes, ZPixmap);
-    assert(image && XGetPixel(image, 108, 92) == 0xf8f9fb);
-    assert(XGetPixel(image, 105, 127) == 0x101113);
+    XImage *image =
+        XGetImage(d, window, 0, 0, (unsigned)attr.width, (unsigned)attr.height, AllPlanes, ZPixmap);
+    assert(image);
+    int radius = (attr.height - 64) / 3;
+    assert(XGetPixel(image, attr.width / 2 - radius, attr.height / 2) == 0xbbc1ca);
     XDestroyImage(image);
     usleep(40000);
     assert(platform_countdown(p, 2000000000ULL, error, sizeof error) == 0);
     XSync(d, false);
-    image = XGetImage(d, window, 0, 0, 240, 240, AllPlanes, ZPixmap);
-    assert(image && XGetPixel(image, 105, 127) == 0xf8f9fb);
-    XDestroyImage(image);
     assert(platform_capture(p, &capture, &cursor, error, sizeof error) == 0);
     assert_preview_mask(&capture, &attr, 0, 0, cfg->pause_color);
     Atom active = XInternAtom(d, "_NET_ACTIVE_WINDOW", false);
@@ -564,7 +563,8 @@ static void countdown_tests(Display *d, Platform *p, Config *cfg, Compositor *co
     XSync(d, false);
     /* The final deadline poll sees close even without the regular event pump. */
     assert(platform_countdown(p, 1, error, sizeof error) == 1);
-    assert(platform_countdown(p, 0, error, sizeof error) == 1);
+    assert(platform_countdown(p, 0, error, sizeof error) < 0);
+    assert(strstr(error, "window manager"));
     XSync(d, false);
     /* The fake WM deliberately leaves decorations mapped after client teardown. */
     assert(platform_capture(p, &capture, &cursor, error, sizeof error) == 0);
@@ -573,7 +573,8 @@ static void countdown_tests(Display *d, Platform *p, Config *cfg, Compositor *co
     assert_preview_mask(&capture, &attr, 0, 0, cfg->pause_color);
     XDestroyWindow(d, frame);
     XSync(d, false);
-    assert(!named_window(d, "cast recording countdown"));
+    assert(platform_countdown(p, 0, error, sizeof error) == 0);
+    assert(!named_window(d, "cast output preview"));
     assert(platform_capture(p, &capture, &cursor, error, sizeof error) == 0);
     for (int y = 0; y < capture.height; y++) {
         for (int x = 0; x < capture.width; x++) {
@@ -582,7 +583,7 @@ static void countdown_tests(Display *d, Platform *p, Config *cfg, Compositor *co
     }
     assert(platform_countdown(p, 1000000000ULL, error, sizeof error) == 0);
     XSync(d, false);
-    window = named_window(d, "cast recording countdown");
+    window = named_window(d, "cast output preview");
     memset(&cancel, 0, sizeof cancel);
     cancel.xkey.type = KeyPress;
     cancel.xkey.window = window;
@@ -594,7 +595,7 @@ static void countdown_tests(Display *d, Platform *p, Config *cfg, Compositor *co
     /* A panel attachment hides directly: queued cancellation must still win. */
     assert(platform_countdown(p, 1000000000ULL, error, sizeof error) == 0);
     XSync(d, false);
-    window = named_window(d, "cast recording countdown");
+    window = named_window(d, "cast output preview");
     cancel.xkey.window = window;
     XSendEvent(d, window, false, KeyPressMask, &cancel);
     XSync(d, false);

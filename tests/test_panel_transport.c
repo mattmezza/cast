@@ -252,6 +252,16 @@ int main(void)
     CMD(&config, true, "live", "message", "Frozen label unchanged");
     delay();
     assert(!memcmp(frozen, shared->pixels[0], sizeof frozen));
+    CMD(&config, true, "live", "blur", "on");
+    assert(shared->snapshot.state.live_frozen && shared->snapshot.state.live_blurred);
+    assert(memcmp(frozen, shared->pixels[0], sizeof frozen));
+    uint8_t blurred[32];
+    memcpy(blurred, shared->pixels[0], sizeof blurred);
+    delay();
+    assert(!memcmp(blurred, shared->pixels[0], sizeof blurred));
+    CMD(&config, true, "live", "blur", "off");
+    assert(shared->snapshot.state.live_frozen && !shared->snapshot.state.live_blurred);
+    assert(!memcmp(frozen, shared->pixels[0], sizeof frozen));
     CMD(&config, true, "live", "pause");
     /* Acknowledgement comes after both stale pixels and metadata have been replaced. */
     assert(shared->snapshot.state.live_paused && shared->snapshot.privacy_epoch > epoch);
@@ -269,6 +279,19 @@ int main(void)
     CMD(&config, true, "record", "pause");
     CMD(&config, true, "resume");
     assert(!shared->snapshot.state.live_paused && shared->snapshot.state.record_paused);
+    CMD(&config, true, "record", "freeze");
+    CMD(&config, true, "record", "blur", "on");
+    assert(shared->snapshot.state.record_paused && shared->snapshot.state.record_frozen &&
+           shared->snapshot.state.record_blurred);
+    assert(shared->pixels[1][0] == 0x20);
+    CMD(&config, true, "record", "cut");
+    assert(shared->snapshot.state.record_cut && shared->pixels[1][0] == 0x20);
+    CMD(&config, true, "settings", "record.countdown", "1");
+    CMD(&config, true, "record", "resume");
+    assert(shared->snapshot.countdown && shared->snapshot.state.record_cut);
+    CMD(&config, true, "record", "cut");
+    assert(!shared->snapshot.countdown && shared->snapshot.state.record_cut);
+    assert(!strcmp(shared->snapshot.state.record_path, recording));
     CMD(&config, true, "record", "stop");
     CMD(&config, true, "settings", "camera.radius", "37", "camera.border_width", "5");
     assert(shared->snapshot.config.radius == 37 && shared->snapshot.config.border_width == 5);
