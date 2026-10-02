@@ -93,7 +93,10 @@ Keys default off; enabling them defaults to shortcuts mode. That mode displays
 Ctrl/Alt/Super combinations and configured navigation keys. All mode also displays
 printable key symbols and can expose sensitive typing. Translation follows XKB map,
 group and modifier notifications. Consecutive identical labels collapse into one
-entry: `j`, `jx2`, `jx3`, including held-key repeats. Plain alphabetic symbols retain
+entry: `j`, `jx2`, `jx3`. Every observed raw press counts, including flagged repeats
+where available. Server-generated software autorepeat may not reach the global
+raw-event stream; cast does not invent events based on keyboard repeat rates.
+Plain alphabetic symbols retain
 their translated case in all mode; shortcut labels use uppercase alphabetic names.
 Combination order is `Ctrl+Alt+Super+Shift+Key` and space is `Space`. `[keys] filter`
 accepts complete labels such as `Super+Shift+Space`, or individual key labels.

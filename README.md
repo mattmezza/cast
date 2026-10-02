@@ -101,6 +101,11 @@ cp -n examples/cast.conf ~/.config/cast/cast.conf
 ./cast
 ```
 
+The panel and preview are Xorg utility windows (`CastPanel` and `CastPreview`);
+window managers that float utilities, including mwm, center them automatically.
+The panel uses square controls with drawn icons and keeps its preview visible.
+A recording countdown shows a local numbered guide before recording begins.
+
 The virtual camera starts with a neutral **Paused** frame at normal cadence. In another
 terminal, explicitly enable live video and then select `cast` in the conference:
 
@@ -132,7 +137,9 @@ With exclusive_caps=1, some consumers detect the camera only after the producer 
 Virtual audio is a separate optional device. cast cannot mute a physical mic selected
 directly by the call app; use the app's mute control or select cast's virtual microphone.
 Desktop audio is off by default and requires explicit source selection. All-key overlays
-are off by default and can expose sensitive typing. Freeze deliberately holds content;
+are off by default and can expose sensitive typing. Recent keystrokes stay visible
+for three seconds by default, with consecutive repeats grouped as `j`, `jx2`,
+`jx3`; use `cast settings keys.timeout_ms 4000` for a four-second history. Freeze deliberately holds content;
 use pause for privacy. A recording pause removes interruption time from the same file.
 
 For recording without a virtual camera, use `./cast --no-live`; for screen-only use
