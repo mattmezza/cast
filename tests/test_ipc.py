@@ -119,12 +119,19 @@ with tempfile.TemporaryDirectory(prefix='cast-test-') as directory:
         assert paused['record']['state'] == 'paused'
         duration = paused['record']['duration']
         time.sleep(0.15)
-        assert abs(state()['record']['duration'] - duration) < 0.03
+        assert state()['record']['duration'] > duration + 0.1  # Solid pause writes file time.
         cmd('record', 'pause')  # Independent pause supersedes remembered restoration.
         cmd('resume')
         assert state()['live']['state'] == 'live'
         assert state()['record']['state'] == 'paused'
         cmd('record', 'resume')
+        cmd('record', 'cut')
+        assert state()['record']['state'] == 'cut'
+        duration = state()['record']['duration']
+        time.sleep(0.2)
+        assert abs(state()['record']['duration'] - duration) < 0.03
+        cmd('record', 'resume')
+        assert state()['record']['state'] == 'recording'
         time.sleep(0.25)
         cmd('live', 'freeze')
         cmd('live', 'pause')

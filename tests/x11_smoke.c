@@ -511,13 +511,18 @@ static void countdown_tests(Display *d, Platform *p, Config *cfg, Compositor *co
     char error[CAST_ERR];
     Frame capture = {0};
     Cursor cursor;
+    Window existing_preview = named_window(d, "cast output preview");
     assert(platform_countdown(p, 3000000000ULL, error, sizeof error) == 0);
     XSync(d, false);
     Window window = named_window(d, "cast output preview");
     XWindowAttributes attr;
     assert(window && XGetWindowAttributes(d, window, &attr) && attr.map_state == IsViewable);
     assert(!attr.override_redirect && attr.width == 640 && attr.height > 300);
-    assert(attr.x == (DisplayWidth(d, DefaultScreen(d)) - attr.width) / 2);
+    if (existing_preview) {
+        assert(window == existing_preview); /* No second, retiring WM frame. */
+    } else {
+        assert(attr.x == (DisplayWidth(d, DefaultScreen(d)) - attr.width) / 2);
+    }
     assert_utility(d, window);
     XClassHint hint;
     assert(XGetClassHint(d, window, &hint));

@@ -1971,6 +1971,10 @@ int x11_countdown_frame(Platform *platform, const Frame *frame, const Config *co
 {
     Xorg *p = (Xorg *)platform;
     p->countdown_config = *config;
+    if (!frame || !frame->data) {
+        frame_free(&p->countdown_frame);
+        return 0;
+    }
     if (frame && frame->data && frame_copy(&p->countdown_frame, frame)) {
         return fail(error, n, "cannot stage recording countdown preview");
     }
@@ -2171,6 +2175,10 @@ int x11_countdown(Platform *platform, uint64_t remaining_ns, char *error, size_t
                         "recording remains stopped/cut: window manager has not hidden the "
                         "countdown preview frame");
         }
+        /* The client and its WM frame are gone: the next recorded capture needs
+         * no synthetic mask left over from the local guide. */
+        memset(&p->countdown_retired, 0, sizeof p->countdown_retired);
+        p->countdown_retired_first = false;
         return cancelled ? 1 : 0;
     }
     if (p->countdown_cancelled) {
@@ -2178,16 +2186,28 @@ int x11_countdown(Platform *platform, uint64_t remaining_ns, char *error, size_t
     }
     if (!p->countdown) {
         preview_stop(p);
-        if (p->preview) {
-            XDestroyWindow(p->d, p->preview);
-            p->preview = None;
-        }
         Config config = p->countdown_config;
         if (!config.width || !config.height) {
             config.width = 640;
             config.height = 360;
         }
-        preview_create(p, &config);
+        /* Reuse an existing preview's WM frame. Replacing it would leave a
+         * second retiring decoration outside the final recording hide barrier. */
+        if (!p->preview) {
+            preview_create(p, &config);
+        } else {
+            int w = 640, h = config.height * 640 / config.width + 32;
+            if (h > 600) {
+                h = 600;
+                w = config.width * (h - 32) / config.height;
+            }
+            p->preview_w = (int)fmin(fmax(w, 160), DisplayWidth(p->d, p->screen));
+            p->preview_h = (int)fmin(fmax(h, 100), DisplayHeight(p->d, p->screen));
+            int x = (DisplayWidth(p->d, p->screen) - p->preview_w) / 2;
+            int y = (DisplayHeight(p->d, p->screen) - p->preview_h) / 2;
+            XMoveResizeWindow(p->d, p->preview, x, y, (unsigned)p->preview_w,
+                              (unsigned)p->preview_h);
+        }
         p->countdown = p->preview;
         p->preview_epoch++;
         p->preview_enabled = false;

@@ -57,6 +57,14 @@ def main():
                 properties = subprocess.check_output(
                     ['xprop', '-id', window, 'WM_CLASS', '_NET_WM_WINDOW_TYPE'], text=True)
                 assert 'CastPreview' in properties and '_NET_WM_WINDOW_TYPE_UTILITY' in properties
+                screenshot = os.environ.get('CAST_COUNTDOWN_CAPTURE')
+                if screenshot:
+                    geometry = dict(line.split('=', 1) for line in subprocess.check_output(
+                        ['xdotool', 'getwindowgeometry', '--shell', window], text=True).splitlines())
+                    subprocess.run(['ffmpeg', '-v', 'error', '-f', 'x11grab', '-video_size',
+                                    f"{geometry['WIDTH']}x{geometry['HEIGHT']}", '-i',
+                                    f"{os.environ['DISPLAY']}+{geometry['X']},{geometry['Y']}",
+                                    '-frames:v', '1', '-threads', '1', '-y', screenshot], check=True)
                 subprocess.run(['xdotool', 'windowfocus', '--sync', window, 'key', 'Escape'], check=True)
                 wait_until(lambda: not state()['record']['countdown'], 'Escape did not cancel')
                 assert not state()['record']['state'] == 'recording'
