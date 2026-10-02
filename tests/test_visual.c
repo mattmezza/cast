@@ -279,6 +279,185 @@ static void test_styled_text(void)
     compositor_destroy(c);
 }
 
+typedef struct {
+    int first, last;
+} InkBand;
+static unsigned ink_bands(const Frame *frame, uint32_t background, InkBand *bands, unsigned limit)
+{
+    unsigned count = 0;
+    bool previous = false;
+    for (int y = 0; y < frame->height; y++) {
+        bool ink = false;
+        for (int x = 0; x < frame->width; x++) {
+            ink |= at(frame, x, y) != background;
+        }
+        if (ink && !previous) {
+            assert(count < limit);
+            bands[count++] = (InkBand){.first = y, .last = y};
+        } else if (ink) {
+            bands[count - 1].last = y;
+        }
+        previous = ink;
+    }
+    return count;
+}
+static void test_footer_and_gap(void)
+{
+    Config cfg = config(480, 360);
+    strcpy(cfg.pause_font, "Noto Sans");
+    strcpy(cfg.blur_font, "Noto Sans");
+    cfg.pause_foreground = cfg.blur_foreground = 0xffffff;
+    cfg.pause_color = cfg.blur_color = 0x102030;
+    cfg.pause_title_size = cfg.pause_subtitle_size = 32;
+    cfg.pause_footer_size = 18;
+    strcpy(cfg.pause_text, "MMMM");
+    strcpy(cfg.pause_subtitle, "MMMM");
+    Compositor *c = compositor_create();
+    assert(c);
+    Frame out = {0}, expected = {0};
+    char error[CAST_ERR];
+    InkBand bands[4];
+    cfg.pause_text_gap = 0;
+    assert(!compositor_neutral(c, &cfg, &out, error, sizeof error));
+    assert(ink_bands(&out, cfg.pause_color, bands, 4) == 1);
+    cfg.pause_text_gap = 27;
+    assert(!compositor_neutral(c, &cfg, &out, error, sizeof error));
+    assert(ink_bands(&out, cfg.pause_color, bands, 4) == 2);
+    assert(bands[1].first - bands[0].last - 1 == 27);
+    assert(abs(bands[0].first + bands[1].last + 1 - cfg.height) <= 1);
+    assert(!frame_copy(&expected, &out));
+
+    strcpy(cfg.pause_footer, "Réunion – café");
+    assert(!compositor_neutral(c, &cfg, &out, error, sizeof error));
+    assert(ink_bands(&out, cfg.pause_color, bands, 4) == 3);
+    int margin = 30; /* min(48, min(width,height)/12), shared by all text edges. */
+    assert(bands[2].last == cfg.height - margin - 1);
+    assert(bands[2].first > bands[1].last + margin);
+    assert(!memcmp(out.data, expected.data, (size_t)out.stride * (bands[1].last + 1)));
+    assert(!frame_copy(&expected, &out));
+    strcpy(cfg.pause_footer, "{date:Réunion – café}");
+    assert(!compositor_neutral(c, &cfg, &out, error, sizeof error));
+    assert(!memcmp(out.data, expected.data, (size_t)out.stride * out.height));
+
+    strcpy(cfg.blur_title, cfg.pause_text);
+    strcpy(cfg.blur_subtitle, cfg.pause_subtitle);
+    strcpy(cfg.blur_footer, cfg.pause_footer);
+    cfg.blur_title_size = cfg.pause_title_size;
+    cfg.blur_subtitle_size = cfg.pause_subtitle_size;
+    cfg.blur_footer_size = cfg.pause_footer_size;
+    cfg.blur_text_gap = cfg.pause_text_gap;
+    cfg.blur_radius = 8;
+    cfg.blur_opacity = 1;
+    assert(!compositor_blur(c, &cfg, &out, error, sizeof error));
+    assert(!memcmp(out.data, expected.data, (size_t)out.stride * out.height));
+    cfg.blur_text_gap = 9;
+    assert(!compositor_blur(c, &cfg, &out, error, sizeof error));
+    assert(ink_bands(&out, cfg.blur_color, bands, 4) == 3);
+    assert(bands[1].first - bands[0].last - 1 == 9);
+    assert(!compositor_neutral(c, &cfg, &out, error, sizeof error));
+    assert(!memcmp(out.data, expected.data, (size_t)out.stride * out.height));
+
+    /* Every field uses one captured time, even when a second changes during draw. */
+    cfg.pause_title_size = cfg.pause_subtitle_size = cfg.pause_footer_size = 24;
+    strcpy(cfg.pause_text, "{time:%H:%M:%S}");
+    strcpy(cfg.pause_subtitle, cfg.pause_text);
+    strcpy(cfg.pause_footer, cfg.pause_text);
+    assert(!compositor_neutral(c, &cfg, &out, error, sizeof error));
+    assert(ink_bands(&out, cfg.pause_color, bands, 4) == 3);
+    for (unsigned i = 1; i < 3; i++) {
+        assert(bands[i].last - bands[i].first == bands[0].last - bands[0].first);
+        assert(!memcmp(out.data + (size_t)bands[i].first * out.stride,
+                       out.data + (size_t)bands[0].first * out.stride,
+                       (size_t)(bands[0].last - bands[0].first + 1) * out.stride));
+    }
+
+    cfg.pause_text[0] = cfg.pause_subtitle[0] = 0;
+    strcpy(cfg.pause_footer, "Footer");
+    assert(!compositor_neutral(c, &cfg, &out, error, sizeof error));
+    assert(ink_bands(&out, cfg.pause_color, bands, 4) == 1);
+    assert(bands[0].last == cfg.height - margin - 1);
+    cfg.blur_title[0] = cfg.blur_subtitle[0] = 0;
+    strcpy(cfg.blur_footer, cfg.pause_footer);
+    cfg.blur_footer_size = cfg.pause_footer_size;
+    cfg.blur_radius = 8;
+    cfg.blur_opacity = 1;
+    assert(!frame_copy(&expected, &out));
+    assert(!compositor_blur(c, &cfg, &out, error, sizeof error));
+    assert(!memcmp(out.data, expected.data, (size_t)out.stride * out.height));
+    cfg.pause_footer[0] = 0;
+    assert(!compositor_neutral(c, &cfg, &out, error, sizeof error));
+    assert_solid(&out, cfg.pause_color);
+
+    /* A constrained canvas scales an independently configured gap with all fonts. */
+    cfg.width = 80;
+    cfg.height = 40;
+    strcpy(cfg.pause_text, "MMMM");
+    strcpy(cfg.pause_subtitle, "MMMM");
+    strcpy(cfg.pause_footer, "MMMM");
+    cfg.pause_title_size = cfg.pause_subtitle_size = cfg.pause_footer_size = 256;
+    cfg.pause_text_gap = 512;
+    assert(!compositor_neutral(c, &cfg, &out, error, sizeof error));
+    assert(ink_bands(&out, cfg.pause_color, bands, 4) == 3);
+    assert(bands[0].first > 0 && bands[2].last < out.height - 1);
+    assert(bands[1].first > bands[0].last && bands[2].first > bands[1].last);
+    assert(bands[1].first - bands[0].last - 1 < cfg.pause_text_gap);
+    /* Even text too tall at the minimum font size stays inside disjoint regions. */
+    for (unsigned i = 0; i < 60; i++) {
+        cfg.pause_text[i * 2] = cfg.pause_subtitle[i * 2] = cfg.pause_footer[i * 2] = 'M';
+        cfg.pause_text[i * 2 + 1] = cfg.pause_subtitle[i * 2 + 1] =
+            cfg.pause_footer[i * 2 + 1] = '\n';
+    }
+    cfg.pause_text[120] = cfg.pause_subtitle[120] = cfg.pause_footer[120] = 0;
+    assert(!compositor_neutral(c, &cfg, &out, error, sizeof error));
+    for (int x = 0; x < out.width; x++) {
+        assert(at(&out, x, 0) == cfg.pause_color);
+        assert(at(&out, x, out.height - 1) == cfg.pause_color);
+    }
+    frame_free(&out);
+    frame_free(&expected);
+    compositor_destroy(c);
+}
+
+static void test_font_replacement(void)
+{
+    Config cfg = config(480, 360);
+    strcpy(cfg.pause_font, "Noto Sans");
+    strcpy(cfg.blur_font, "Noto Sans");
+    strcpy(cfg.pause_text, "Family Wiii 0123");
+    strcpy(cfg.blur_title, cfg.pause_text);
+    cfg.pause_foreground = cfg.blur_foreground = 0xffffff;
+    cfg.pause_color = cfg.blur_color = 0x102030;
+    cfg.pause_title_size = cfg.blur_title_size = 48;
+    cfg.blur_radius = 8;
+    cfg.blur_opacity = 1;
+    Compositor *c = compositor_create();
+    assert(c);
+    Frame out = {0}, sans = {0};
+    char error[CAST_ERR];
+    assert(!compositor_prepare(c, &cfg, error, sizeof error));
+    assert(!compositor_neutral(c, &cfg, &out, error, sizeof error));
+    assert(!frame_copy(&sans, &out));
+    strcpy(cfg.pause_font, "serif");
+    assert(!compositor_prepare(c, &cfg, error, sizeof error));
+    assert(!compositor_neutral(c, &cfg, &out, error, sizeof error));
+    assert(memcmp(out.data, sans.data, (size_t)out.stride * out.height));
+    strcpy(cfg.pause_font, "Noto Sans");
+    assert(!compositor_prepare(c, &cfg, error, sizeof error));
+    assert(!compositor_neutral(c, &cfg, &out, error, sizeof error));
+    assert(!memcmp(out.data, sans.data, (size_t)out.stride * out.height));
+    strcpy(cfg.blur_font, "monospace");
+    assert(!compositor_prepare(c, &cfg, error, sizeof error));
+    assert(!compositor_blur(c, &cfg, &out, error, sizeof error));
+    assert(memcmp(out.data, sans.data, (size_t)out.stride * out.height));
+    strcpy(cfg.blur_font, "Noto Sans");
+    assert(!compositor_prepare(c, &cfg, error, sizeof error));
+    assert(!compositor_blur(c, &cfg, &out, error, sizeof error));
+    assert(!memcmp(out.data, sans.data, (size_t)out.stride * out.height));
+    frame_free(&out);
+    frame_free(&sans);
+    compositor_destroy(c);
+}
+
 static void test_blurred_frames(void)
 {
     Config cfg = config(100, 60);
@@ -801,12 +980,15 @@ int main(void)
     test_neutral();
     test_text_templates();
     test_styled_text();
+    test_footer_and_gap();
+    test_font_replacement();
     test_blurred_frames();
     test_camera_backgrounds();
     test_key_history();
     test_key_canvas_bounds();
     puts(
         "visual: owned frames, geometry, masks, fitting, crop/mirror, zoom transforms and lane "
-        "privacy, bounded key history, styled UTF-8/templates, blur and camera backgrounds passed");
+        "privacy, bounded key history, styled UTF-8/templates, footers/gaps/font reload, blur and "
+        "camera backgrounds passed");
     return 0;
 }

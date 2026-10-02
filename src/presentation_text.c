@@ -349,8 +349,10 @@ int presentation_text_prepare(PresentationText *text, const Config *cfg, char *e
     }
     if (presentation_template_validate(cfg->pause_text, error, n) ||
         presentation_template_validate(cfg->pause_subtitle, error, n) ||
+        presentation_template_validate(cfg->pause_footer, error, n) ||
         presentation_template_validate(cfg->blur_title, error, n) ||
-        presentation_template_validate(cfg->blur_subtitle, error, n)) {
+        presentation_template_validate(cfg->blur_subtitle, error, n) ||
+        presentation_template_validate(cfg->blur_footer, error, n)) {
         return -1;
     }
     const char *pause = cfg->pause_font[0] ? cfg->pause_font : "Noto Sans";
@@ -508,7 +510,8 @@ static void blend(Frame *frame, int x, int y, uint32_t color, unsigned alpha)
     pixel[3] = 255;
 }
 static void block_draw(PresentationText *text, TextFont *font, const TextBlock *block, int size,
-                       Frame *frame, int top, uint32_t color)
+                       Frame *frame, int top, int margin, int clip_top, int clip_bottom,
+                       uint32_t color)
 {
     for (unsigned i = 0; i < block->count; i++) {
         const TextLine *line = &block->lines[i];
@@ -544,8 +547,12 @@ static void block_draw(PresentationText *text, TextFont *font, const TextBlock *
                     unsigned alpha = bitmap->pixel_mode == FT_PIXEL_MODE_MONO
                                          ? ((data[bx / 8] & (0x80 >> (bx % 8))) ? 255 : 0)
                                          : data[bx];
-                    blend(frame, x + slot->bitmap_left + (int)bx,
-                          baseline - slot->bitmap_top + (int)y, color, alpha);
+                    int px = x + slot->bitmap_left + (int)bx;
+                    int py = baseline - slot->bitmap_top + (int)y;
+                    if (px >= margin && px < frame->width - margin && py >= clip_top &&
+                        py < clip_bottom) {
+                        blend(frame, px, py, color, alpha);
+                    }
                 }
             }
             x += (int)(slot->advance.x >> 6);
@@ -566,53 +573,83 @@ int presentation_text_draw(PresentationText *text, const Config *cfg, bool blur,
     if (!localtime_r(&captured, &local)) {
         return fail(error, n, "cannot obtain local date/time for presentation text");
     }
-    char title[EXPANDED_TEXT], subtitle[EXPANDED_TEXT];
+    char title[EXPANDED_TEXT], subtitle[EXPANDED_TEXT], footer[EXPANDED_TEXT];
     if (presentation_template_expand(blur ? cfg->blur_title : cfg->pause_text, &local, title,
                                      sizeof title, error, n) ||
         presentation_template_expand(blur ? cfg->blur_subtitle : cfg->pause_subtitle, &local,
-                                     subtitle, sizeof subtitle, error, n)) {
+                                     subtitle, sizeof subtitle, error, n) ||
+        presentation_template_expand(blur ? cfg->blur_footer : cfg->pause_footer, &local, footer,
+                                     sizeof footer, error, n)) {
         return -1;
     }
-    if (!*title && !*subtitle) {
+    if (!*title && !*subtitle && !*footer) {
         return 0;
     }
     TextFont *font = blur ? &text->blur : &text->pause;
     int title_size = blur ? cfg->blur_title_size : cfg->pause_title_size;
     int subtitle_size = blur ? cfg->blur_subtitle_size : cfg->pause_subtitle_size;
+    int footer_size = blur ? cfg->blur_footer_size : cfg->pause_footer_size;
+    int configured_gap = blur ? cfg->blur_text_gap : cfg->pause_text_gap;
     title_size = title_size > 0 ? title_size : 48;
     subtitle_size = subtitle_size > 0 ? subtitle_size : 24;
+    footer_size = footer_size > 0 ? footer_size : 18;
     int margin = (int)fmin(48, fmin(frame->width, frame->height) / 12);
     int available_w = frame->width - 2 * margin, available_h = frame->height - 2 * margin;
-    TextBlock title_block, subtitle_block;
-    int gap, height;
+    TextBlock title_block, subtitle_block, footer_block;
+    int gap = configured_gap, height, separation = margin;
     for (;;) {
         if (block_measure(text, font, title, title_size, &title_block, error, n) ||
-            block_measure(text, font, subtitle, subtitle_size, &subtitle_block, error, n)) {
+            block_measure(text, font, subtitle, subtitle_size, &subtitle_block, error, n) ||
+            block_measure(text, font, footer, footer_size, &footer_block, error, n)) {
             return -1;
         }
-        gap = *title && *subtitle ? (int)fmax(4, subtitle_size / 2) : 0;
-        height = title_block.height + subtitle_block.height + gap;
+        height = title_block.height + subtitle_block.height + (*title && *subtitle ? gap : 0);
         int width =
             title_block.width > subtitle_block.width ? title_block.width : subtitle_block.width;
-        if ((width <= available_w && height <= available_h) ||
-            (title_size == 1 && subtitle_size == 1)) {
+        width = width > footer_block.width ? width : footer_block.width;
+        /* Leave the central block at the canvas center. A footer needs twice its
+         * height below that center, plus separation from the central block. */
+        int required_h = height;
+        if (*footer) {
+            required_h =
+                height ? height + 2 * (footer_block.height + separation) : footer_block.height;
+        }
+        if ((width <= available_w && required_h <= available_h) ||
+            (title_size == 1 && subtitle_size == 1 && footer_size == 1 && gap == 0)) {
             break;
         }
         double ratio =
-            fmin((double)available_w / fmax(1, width), (double)available_h / fmax(1, height));
+            fmin((double)available_w / fmax(1, width), (double)available_h / fmax(1, required_h));
         int new_title = (int)floor(title_size * ratio),
-            new_subtitle = (int)floor(subtitle_size * ratio);
+            new_subtitle = (int)floor(subtitle_size * ratio),
+            new_footer = (int)floor(footer_size * ratio);
         title_size = (int)fmax(1, fmin(title_size - 1, new_title));
         subtitle_size = (int)fmax(1, fmin(subtitle_size - 1, new_subtitle));
+        footer_size = (int)fmax(1, fmin(footer_size - 1, new_footer));
+        gap = (int)floor(gap * ratio);
+        separation = (int)floor(separation * ratio);
     }
+    gap = *title && *subtitle ? gap : 0;
     int top = (frame->height - height) / 2;
+    int footer_top = frame->height - margin - footer_block.height;
+    int main_bottom = frame->height - margin;
+    if (*footer && height) {
+        /* Pathological multiline text can remain taller than a tiny canvas even
+         * at one pixel. Separate clipping regions keep the blocks from overlap. */
+        footer_top = (int)fmax(footer_top, margin + available_h / 2);
+        main_bottom = footer_top - separation;
+        top = (int)fmax(margin, fmin(top, main_bottom - height));
+    }
     uint32_t foreground = blur ? cfg->blur_foreground : cfg->pause_foreground;
     /* Zeroed synthetic configurations used by embedders retain a visible default. */
     if (!cfg->pause_font[0] && !cfg->blur_font[0] && !foreground) {
         foreground = 0xffffff;
     }
-    block_draw(text, font, &title_block, title_size, frame, top, foreground);
-    block_draw(text, font, &subtitle_block, subtitle_size, frame, top + title_block.height + gap,
+    block_draw(text, font, &title_block, title_size, frame, top, margin, margin, main_bottom,
                foreground);
+    block_draw(text, font, &subtitle_block, subtitle_size, frame, top + title_block.height + gap,
+               margin, margin, main_bottom, foreground);
+    block_draw(text, font, &footer_block, footer_size, frame, footer_top, margin,
+               (int)fmax(margin, footer_top), frame->height - margin, foreground);
     return 0;
 }

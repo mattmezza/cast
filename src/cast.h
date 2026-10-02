@@ -62,12 +62,12 @@ typedef struct {
     char preview_target[16];
     uint32_t pause_color;
     char pause_text[128];
-    char pause_subtitle[256], pause_font[256];
+    char pause_subtitle[256], pause_footer[256], pause_font[256];
     uint32_t pause_foreground;
-    int pause_title_size, pause_subtitle_size;
-    char blur_title[128], blur_subtitle[256], blur_font[256];
+    int pause_title_size, pause_subtitle_size, pause_footer_size, pause_text_gap;
+    char blur_title[128], blur_subtitle[256], blur_footer[256], blur_font[256];
     uint32_t blur_color, blur_foreground;
-    int blur_radius, blur_title_size, blur_subtitle_size;
+    int blur_radius, blur_title_size, blur_subtitle_size, blur_footer_size, blur_text_gap;
     double blur_opacity;
     int ipc_timeout_ms;
     Preset presets[CAST_MAX_PRESETS];

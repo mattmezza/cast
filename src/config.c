@@ -47,12 +47,16 @@ static const Setting settings[] = {
     C("output", "pause_background", pause_color, "#20252b"),
     S("output", "pause_title", pause_text, "Paused"),
     S("output", "pause_subtitle", pause_subtitle, ""),
+    S("output", "pause_footer", pause_footer, ""),
     S("output", "pause_font", pause_font, "Noto Sans"),
     C("output", "pause_foreground", pause_foreground, "#ffffff"),
     I("output", "pause_title_size", pause_title_size, 8, 256, "48"),
     I("output", "pause_subtitle_size", pause_subtitle_size, 8, 256, "24"),
+    I("output", "pause_footer_size", pause_footer_size, 8, 256, "18"),
+    I("output", "pause_text_gap", pause_text_gap, 0, 512, "12"),
     S("output", "blur_title", blur_title, "Blurred"),
     S("output", "blur_subtitle", blur_subtitle, ""),
+    S("output", "blur_footer", blur_footer, ""),
     S("output", "blur_font", blur_font, "Noto Sans"),
     C("output", "blur_color", blur_color, "#101113"),
     C("output", "blur_foreground", blur_foreground, "#ffffff"),
@@ -60,6 +64,8 @@ static const Setting settings[] = {
     D("output", "blur_opacity", blur_opacity, 0, 1, "0.60"),
     I("output", "blur_title_size", blur_title_size, 8, 256, "48"),
     I("output", "blur_subtitle_size", blur_subtitle_size, 8, 256, "24"),
+    I("output", "blur_footer_size", blur_footer_size, 8, 256, "18"),
+    I("output", "blur_text_gap", blur_text_gap, 0, 512, "12"),
     S("camera", "device", camera_device, "/dev/video0"),
     B("camera", "enabled", camera_enabled, "true"),
     B("camera", "visible", camera_visible, "true"),
@@ -189,8 +195,10 @@ static bool template_setting(const Setting *setting)
 {
     return setting->offset == offsetof(Config, pause_text) ||
            setting->offset == offsetof(Config, pause_subtitle) ||
+           setting->offset == offsetof(Config, pause_footer) ||
            setting->offset == offsetof(Config, blur_title) ||
-           setting->offset == offsetof(Config, blur_subtitle);
+           setting->offset == offsetof(Config, blur_subtitle) ||
+           setting->offset == offsetof(Config, blur_footer);
 }
 static int assign(void *base, const Setting *s, const char *v, char *err, size_t n)
 {

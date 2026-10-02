@@ -33,6 +33,22 @@ static void test_presentation_config(void)
     char error[CAST_ERR];
     assert(c.pause_foreground == 0xffffff && c.blur_radius == 32 && c.blur_opacity == .60);
     assert(!strcmp(c.pause_font, "Noto Sans") && !strcmp(c.blur_font, "Noto Sans"));
+    assert(!c.pause_footer[0] && !c.blur_footer[0]);
+    assert(c.pause_footer_size == 18 && c.blur_footer_size == 18);
+    assert(c.pause_text_gap == 12 && c.blur_text_gap == 12);
+    load_test("[output]\npause_footer=Réunion {date} {{private}}\nblur_footer={time}\n"
+              "pause_footer_size=20\nblur_footer_size=22\npause_text_gap=0\nblur_text_gap=512\n",
+              true, &c);
+    assert(!strcmp(c.pause_footer, "Réunion {date} {{private}}") &&
+           !strcmp(c.blur_footer, "{time}"));
+    assert(c.pause_footer_size == 20 && c.blur_footer_size == 22 && c.pause_text_gap == 0 &&
+           c.blur_text_gap == 512);
+    load_test("[output]\npause_footer={unknown}\n", false, &c);
+    load_test("[output]\nblur_footer={time:%1000H}{date:%1000Y}\n", false, &c);
+    load_test("[output]\npause_footer_size=7\n", false, &c);
+    load_test("[output]\nblur_footer_size=257\n", false, &c);
+    load_test("[output]\npause_text_gap=-1\n", false, &c);
+    load_test("[output]\nblur_text_gap=513\n", false, &c);
     load_test("[output]\npause_text=Back at {time:%H:%M}\npause_color=#123456\n", true, &c);
     assert(!strcmp(c.pause_text, "Back at {time:%H:%M}") && c.pause_color == 0x123456);
     load_test("[output]\npause_title=Réunion {{private}}\npause_subtitle={date}\n"
@@ -58,7 +74,9 @@ static void test_presentation_config(void)
     load_test("[output]\nblur_radius=129\n", false, &c);
     load_test("[output]\nblur_opacity=nan\n", false, &c);
     load_test("[output]\npause_font=\n", false, &c);
-    load_test("[output]\npause_title=\npause_subtitle=\nblur_title=\nblur_subtitle=\n", true, &c);
+    load_test("[output]\npause_title=\npause_subtitle=\npause_footer=\n"
+              "blur_title=\nblur_subtitle=\nblur_footer=\n",
+              true, &c);
     const char *anchors[] = {"top",        "bottom",        "left",        "right",
                              "top-center", "bottom-center", "center-left", "center-right"};
     for (size_t i = 0; i < sizeof anchors / sizeof *anchors; i++) {
