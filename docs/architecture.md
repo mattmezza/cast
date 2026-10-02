@@ -34,3 +34,15 @@ change either output state. Runtime configuration is never persisted automatical
 
 Hardware validation is distinguished from synthetic acceptance. Optional Wayland
 features report capabilities; global input and interactive selection can be unsupported.
+
+The optional panel is a client of the same executable. Clay lays out native SDL3
+controls; SDL3_ttf renders the embedded font. An asynchronous bounded client queue
+and read-only sealed shared memory carry acknowledged state and small actual-output
+frames. The daemon never waits for panel rendering. Xorg validates the peer's panel
+window identity and neutral-masks its frame in monitor/region captures.
+
+Setup and completion instructions are local commands, independent of configuration
+and daemon availability. Completion scripts and the Arch installer are embedded so
+relocated binaries retain those tools. The updater launches the fixed embedded
+installer with validated argv through fork/exec; user arguments are never interpolated
+into shell code. It verifies the selected GitHub package checksum before pacman.

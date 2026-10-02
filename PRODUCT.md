@@ -27,8 +27,12 @@ must remain stable while live, paused or frozen, and closing it leaves cast runn
 
 ## Capabilities and constraints
 
-The approved panel shows actual output, permanent pause/live/record controls,
-presets and layouts, and Source, Camera, Audio, Effects and Settings sections.
+The panel uses a compact Home screen and reachable Source, Camera, Audio, Effects
+and Settings screens. Reveal settings progressively instead of displaying the
+whole control surface at once. Actual output preview remains visible on every
+screen, becomes compact while editing, and can be moved out of the way. Output
+state and privacy actions remain easy to reach. Render crisp text at native display
+density, with clear contrast and little wasted screen space.
 Camera mirroring defaults on and affects only the webcam. A custom paused message
 must be editable through both CLI and panel. Runtime changes affect the session;
 the program never automatically writes user configuration.
@@ -42,8 +46,10 @@ not be promised without compositor support.
 ## Evidence
 
 The build brief is `cast-build-prompt.md`; current implementation and verification
-are documented under `docs/`. The user approved the ASCII panel sketch and a
-restrained dark interface with readable type and colour reserved for states.
+are documented under `docs/`. The user initially approved an ASCII panel sketch,
+then rejected the implemented all-at-once layout after using it. Their current
+direction is mobile-style focused navigation with an always-visible movable
+preview and crisp typography.
 
 ## Product principles
 
