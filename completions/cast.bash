@@ -18,7 +18,7 @@ _cast_complete()
     done
     local cur=${words[current]} raw=${COMP_WORDS[COMP_CWORD]} offer='' mode=''
     local trim=$((${#cur} - ${#raw})) command_index=1 command='' argument=0
-    local commands='layout split camera screen capture zoom cursor clicks keys annotations pause resume live record audio preset preview status doctor config settings panel reset quit completions setup update'
+    local commands='layout split camera screen capture zoom cursor clicks keys annotations pause resume live record audio preset preview status doctor config settings panel reset quit completions setup update help'
     local flags='--config --socket --backend --output-device --camera-device --width --height --fps --no-live --no-camera --mic-source --desktop-source --record-dir --container --video-codec --audio-codec --countdown --help --version'
     while ((command_index < current)); do
         token=${words[command_index]}
@@ -98,7 +98,7 @@ _cast_complete()
                 if ((argument % 2)); then
                     offer=$(command cast config defaults 2>/dev/null | awk '
                         /^\[/ { section=$0; sub(/^\[/,"",section); sub(/\]$/,"",section) }
-                        /^[a-z_]+[[:space:]]*=/ { key=$1; print section "." key }')
+                        section !~ /^preset[.]/ && /^[a-z_]+[[:space:]]*=/ { key=$1; print section "." key }')
                 else
                     case ${words[current-1]} in
                         output.backend) offer='xorg wayland synthetic' ;;

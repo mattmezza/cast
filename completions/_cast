@@ -5,7 +5,7 @@ _cast() {
     local -i command_index=2 argument=0
     local -a top_commands=(layout split camera screen capture zoom cursor clicks keys
         annotations pause resume live record audio preset preview status doctor config
-        settings panel reset quit completions setup update)
+        settings panel reset quit completions setup update help)
     local -a flags=(--config --socket --backend --output-device --camera-device --width
         --height --fps --no-live --no-camera --mic-source --desktop-source --record-dir
         --container --video-codec --audio-codec --countdown --help --version)
@@ -89,7 +89,7 @@ _cast() {
             if ((argument % 2)); then
                 offer=$(command cast config defaults 2>/dev/null | awk '
                     /^\[/ { section=$0; sub(/^\[/,"",section); sub(/\]$/,"",section) }
-                    /^[a-z_]+[[:space:]]*=/ { key=$1; print section "." key }')
+                    section !~ /^preset[.]/ && /^[a-z_]+[[:space:]]*=/ { key=$1; print section "." key }')
             else
                 case ${words[CURRENT-1]} in
                     output.backend) offer='xorg wayland synthetic' ;;

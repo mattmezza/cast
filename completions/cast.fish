@@ -46,11 +46,18 @@ end
 function __cast_setting_keys
     command cast config defaults 2>/dev/null | awk '
         /^\[/ { section=$0; sub(/^\[/,"",section); sub(/\]$/,"",section) }
-        /^[a-z_]+[[:space:]]*=/ { key=$1; print section "." key }'
+        section !~ /^preset[.]/ && /^[a-z_]+[[:space:]]*=/ { key=$1; print section "." key }'
+end
+function __cast_setting_value
+    set -l positional (__cast_arguments)
+    test (count $positional) -ge 2; or return 1
+    test "$positional[1]" = settings; or return 1
+    test (math (count $positional) % 2) -eq 0; or return 1
+    contains -- "$positional[-1]" $argv
 end
 
 complete -c cast -f
-complete -c cast -n __cast_at -a 'layout split camera screen capture zoom cursor clicks keys annotations pause resume live record audio preset preview status doctor config settings panel reset quit completions setup update'
+complete -c cast -n __cast_at -a 'layout split camera screen capture zoom cursor clicks keys annotations pause resume live record audio preset preview status doctor config settings panel reset quit completions setup update help'
 complete -c cast -l help -d 'Show command reference'
 complete -c cast -n __cast_at -l version -d 'Print cast version'
 complete -c cast -n __cast_at -l config -r -F -d 'Config file'
@@ -111,3 +118,15 @@ complete -c cast -n '__cast_at completions' -a 'bash zsh fish'
 complete -c cast -n '__cast_at completions' -l script -r -a 'bash zsh fish' -d 'Print bundled completion script'
 complete -c cast -n '__cast_command update' -l download-only -r -a '(__fish_complete_directories)' -d 'Download release files without installing'
 complete -c cast -n __cast_settings_key -a '(__cast_setting_keys)'
+complete -c cast -n '__cast_setting_value output.backend' -a 'xorg wayland synthetic'
+complete -c cast -n '__cast_setting_value composition.layout' -a 'overlay split screen camera'
+complete -c cast -n '__cast_setting_value composition.split_side' -a 'left right'
+complete -c cast -n '__cast_setting_value composition.fit' -a 'contain cover'
+complete -c cast -n '__cast_setting_value capture.kind' -a 'monitor region window'
+complete -c cast -n '__cast_setting_value camera.shape' -a 'rectangle rounded circle'
+complete -c cast -n '__cast_setting_value camera.anchor' -a 'top-left top-right bottom-left bottom-right free'
+complete -c cast -n '__cast_setting_value camera.aspect' -a 'native 16:9 4:3 1:1'
+complete -c cast -n '__cast_setting_value keys.mode' -a 'shortcuts all'
+complete -c cast -n '__cast_setting_value keys.position' -a 'top-left top-right bottom-left bottom-right'
+complete -c cast -n '__cast_setting_value preview.target' -a 'live record'
+complete -c cast -n '__cast_setting_value output.enabled camera.enabled camera.visible camera.mirror zoom.follow cursor.enabled cursor.highlight clicks.enabled clicks.middle keys.enabled annotations.live_keys annotations.live_clicks annotations.record_keys annotations.record_clicks audio.mic audio.desktop audio.virtual preview.enabled' -a 'true false'
