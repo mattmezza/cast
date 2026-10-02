@@ -1,43 +1,44 @@
 ---
 name: cast control panel
-description: Restrained dark native controls for cast output and settings
+description: Crisp compact native controls with focused section navigation and a persistent preview
 colors:
-  background: "#111820"
-  surface: "#19232d"
-  control: "#253440"
-  hovered: "#2f4352"
-  foreground: "#edf3f7"
-  secondary: "#adbfcb"
-  muted: "#8195a3"
+  background: "#101113"
+  surface: "#181a1d"
+  control: "#272a2e"
+  hovered: "#34383e"
+  foreground: "#f8f9fb"
+  secondary: "#bbc1ca"
+  muted: "#979ea8"
   accent: "#80c9ff"
   danger: "#ff9693"
-  line: "#354756"
+  line: "#444951"
   selected: "#233f53"
   selected-border: "#3c6886"
-  field-active: "#1f2b2e"
   live: "#83ddb6"
-  preview: "#090d12"
+  preview: "#050607"
   text-selection: "#33566f"
 typography:
   title:
     fontFamily: "Inter"
     fontSize: "25px"
+  heading:
+    fontFamily: "Inter"
+    fontSize: "19px"
   body:
     fontFamily: "Inter"
-    fontSize: "15px"
+    fontSize: "16px"
   label:
     fontFamily: "Inter"
     fontSize: "13px"
 rounded:
   control: "6px"
-  field: "5px"
+  field: "4px"
 spacing:
   xs: "4px"
   sm: "8px"
   row: "10px"
   md: "12px"
-  lg: "16px"
-  outer: "24px"
+  outer: "16px"
 components:
   button:
     backgroundColor: "{colors.control}"
@@ -45,134 +46,91 @@ components:
     typography: "{typography.body}"
     rounded: "{rounded.control}"
     padding: "8px 12px"
-    height: "36px"
-  button-hover:
-    backgroundColor: "{colors.hovered}"
+    height: "40px"
   button-selected:
     backgroundColor: "{colors.selected}"
     textColor: "{colors.accent}"
-  button-disabled:
-    backgroundColor: "{colors.control}"
-    textColor: "{colors.muted}"
   field:
     backgroundColor: "{colors.background}"
     textColor: "{colors.foreground}"
     typography: "{typography.body}"
     rounded: "{rounded.field}"
-    padding: "7px 10px"
-    height: "34px"
-  field-active:
-    backgroundColor: "{colors.field-active}"
-  settings:
-    backgroundColor: "{colors.surface}"
-    rounded: "{rounded.control}"
-    padding: "12px 16px"
+    height: "40px"
+  navigation:
+    backgroundColor: "{colors.background}"
+    textColor: "{colors.foreground}"
+    typography: "{typography.body}"
+    height: "46px"
   preview:
     backgroundColor: "{colors.preview}"
-    rounded: "{rounded.control}"
-    height: "164px"
   preview-compact:
-    height: "88px"
+    backgroundColor: "{colors.surface}"
+    width: "208px"
+    height: "146px"
 ---
 
 # Design System: cast control panel
 
 ## Overview
 
-**Creative North Star: "Restrained dark native control panel"**
+**Creative North Star: "A compact remote control"**
 
-The approved direction is a restrained dark native control panel. This is an operating surface: state recognition and accurate controls take priority. Flat surfaces and compact controls keep output state, actions and settings easy to scan.
+The panel is an Operate surface used beside a presentation or call. Home provides actual output, current state, the next relevant output actions, and five section links. Opening a section replaces the navigation list with that section's controls. This direction replaces the former dashboard of simultaneous tabs, presets, layouts, and settings.
 
-Inter supplies one consistent text voice. Colour identifies selection, keyboard focus and output state; status words carry the meaning alongside it.
-
-**Key Characteristics:**
-
-- Flat dark surfaces with small rounded corners.
-- Compact controls and readable labels.
-- Colour reserved for state, focus and selection.
+The visual character is crisp and quiet: neutral near-black backgrounds, clear white labels, flat controls and one font family. The preview carries the visual interest. Colour signals state, selection and focus.
 
 ## Colors
 
-The palette uses cool dark surfaces, pale text and restrained state colours. The frontmatter records the implemented values from `src/panel.c`.
-
-### Primary
-
-- **Focus blue** (`accent`): keyboard focus, selected controls and the applying-command message.
-- **Selection blue** (`selected`, `selected-border`, `text-selection`): selected button fill and border, and text selection.
-
-### Secondary
-
-- **Live green** (`live`): live output only when enabled, connected, unpaused and unfrozen.
-- **Recording coral** (`danger`): recording or countdown status and actionable error messages.
-
-### Neutral
-
-- **Canvas** (`background`) and **settings surface** (`surface`): distinguish the window from its scrolling settings region.
-- **Control** (`control`) and **hovered control** (`hovered`): button rest and enabled pointer-hover states.
-- **Primary text** (`foreground`), **secondary text** (`secondary`) and **muted text** (`muted`): labels, supporting messages and unavailable controls.
-- **Divider** (`line`): settings-row dividers, field outlines and dropdown outlines.
-- **Active field** (`field-active`): text field being edited.
-- **Preview well** (`preview`): background around aspect-ratio-preserving captured output.
-
-Paused, frozen, stopped and disconnected status use secondary text; no separate warning colour is currently implemented.
+Neutral canvas and controls replace the blue-grey layered dashboard. Primary text and supporting text remain high contrast. Focus blue marks keyboard focus and selected values; live green and recording coral accompany explicit state words. The preview uses a near-black well and preserves the captured frame's aspect ratio.
 
 ## Typography
 
-The native renderer uses bundled Inter through SDL3_ttf. Font metrics determine line height; the implementation does not set separate weight, tracking or tabular-number features.
-
-- **Title:** application name, using the title token.
-- **Body:** controls, field values and output status, using the body token.
-- **Label:** supporting text, footer messages and restart hints, using the label token.
+Bundled Inter uses fixed logical sizes for titles, section headings, controls and supporting labels. Layout measures logical-size fonts. Separate raster fonts render at the actual display density; cached textures are rebuilt when density changes. Text lands on physical pixel boundaries and uses nearest texture sampling, avoiding enlargement of low-resolution glyphs. X11 content scaling and high-density window pixel scaling are both accounted for, including pointer coordinates.
 
 ## Layout
 
-The default window is (760 × 900 logical pixels), with a minimum of (540 × 620). The outer layout has horizontal padding (24px), top padding (16px) and bottom padding (12px). It runs vertically: status, output preview and actions, preset selection, composition layout, section tabs, scrolling settings and footer.
+The default window is 480 × 760 logical pixels; the minimum is 360 × 640. Content stays within a 520-pixel-wide centered column in larger windows. State, preview, relevant output actions and the capture-exclusion notice remain outside the scrolling section content.
 
-Below (680px) width, the preview and actions stack, the preview becomes (88px) tall, and the primary actions form two rows. At wider widths the preview is (164px) tall and sits beside a (224px) action column. Main vertical gaps shrink from (12px) to (8px) in the compact layout. Settings field labels shrink from (218px) to (174px); field rows remain (46px) tall.
+Home uses a large preview followed by output controls and Source, Camera, Audio, Effects and Settings navigation rows. At short window heights, navigation scrolls rather than shrinking type or hiding controls. Source owns composition layouts and presets.
 
-Only the settings region scrolls. Footer messages wrap and the footer fits its content. The compact layout keeps live, recording and group-pause actions reachable at the minimum window size. Dropdowns anchor to their controls, reposition to fit the window and clip vertically when necessary.
+Section screens have Back and the section title, the persistent output state, a compact preview, output actions and a scrolling form. The compact preview starts in the upper right and can be dragged horizontally there or over settings content. Its movement is constrained so it cannot obscure the heading, Back, output actions or footer notice. Position and Live/Recording target survive section navigation. Home always restores the large preview.
+
+Text and numeric field labels sit above full-width inputs. Boolean and enum controls share a row with their labels. Advanced controls use explicit Show/Hide disclosure buttons. Camera device selection is in its own disclosure. Dirty fields reveal Apply; Enter also submits. Drafts survive navigation.
 
 ## Elevation & Depth
 
-The panel uses flat tonal layering and thin borders, with no shadows. Settings surfaces, controls and the preview well differ by fill; the dropdown overlays content with a surface fill and divider outline. State changes apply directly, without animated visual transitions.
+Flat fills and thin dividers provide structure. There are no decorative shadows or blurs. The compact preview uses a single outline and sits above settings; dropdown choices sit above the preview. State changes are immediate and mirror acknowledged daemon state.
 
 ## Shapes
 
-Buttons, settings containers, preview and dropdowns share the control radius. Text fields use the slightly smaller field radius. One-pixel outlines mark focus and selection; one-pixel bottom dividers separate field rows. Dropdown chevrons are drawn geometry rather than font glyphs.
+Controls have small rounded corners. Field and focus outlines are one logical pixel. Navigation is a plain list separated by thin horizontal lines, with a full outline for keyboard focus. Dropdown chevrons are native drawn geometry.
 
 ## Components
 
 ### Buttons
 
-Compact text controls share one base treatment. Selected buttons use selection fill, focus-blue text and the selected border; enabled hover changes the base fill. Keyboard focus changes the outline to focus blue. Disabled buttons retain the base fill and use muted text. Buttons use the frontmatter height and padding.
+Action labels name the operation. Start record is distinct from the Recording preview target. Freeze appears when live output can freeze; recording pause and stop appear during recording. Hover and keyboard focus remain visible. Unavailable actions use muted text, while selections pair colour with text.
 
 ### Inputs / Fields
 
-Editable fields use canvas fill, divider outline and the field radius. Editing changes the fill to active-field colour; keyboard focus changes the outline to focus blue. Values retain a draft and the adjacent Apply button indicates when it can be submitted. Read-only settings show a Restart hint where applicable.
+Each field has a persistent label, a visible focus outline, text selection and caret. Apply appears for edited drafts. Read-only settings state that a restart is required. Recording-locked fields explain why they cannot be edited.
 
 ### Navigation
 
-Source, Camera, Audio, Effects and Settings use the same selected-button treatment. Preview Live/Record selection and composition layout controls reuse it. Group disclosure controls use ordinary buttons with Show/Hide wording.
+Home lists five sections. Back returns Home, and Escape returns Home when it is not dismissing a dropdown or cancelling text editing. The scrolling section contains only relevant settings and advanced disclosures. Navigation does not alter outputs or preview target.
 
 ### Cards / Containers
 
-The settings region uses the settings component tokens and vertical clipping. Multiline command results appear in a canvas-filled inset container. Containers remain flat; they do not imply clickable cards.
+There are no decorative cards. The section is a scrolling form on the window canvas. Native command results appear inline. Footer messages wrap to the available width.
 
 ### Output preview and status
 
-The preview preserves the frame aspect ratio inside its well. Disconnection replaces output with a daemon-start prompt; waiting for a frame has its own text placeholder. The status row reports live and recording state independently, with elapsed recording time when connected.
+Both preview sizes show actual daemon frames, with explicit disconnected and waiting states. Live and recording state are independent. Active recording includes elapsed time. The daemon's capture-exclusion statement remains visible on every screen; unavailable or neutral-masked exclusion is never implied to reconstruct covered content.
 
 ## Do's and Don'ts
 
-### Do:
-
-- Do pair state colour with explicit status words.
-- Do keep output state and primary actions outside the scrolling settings area.
-- Do use the existing button and field treatments for new controls.
-- Do wrap footer messages and inspect the minimum window size.
-
-### Don't:
-
-- Don't introduce decorative gradients or shadows.
-- Don't treat a preview placeholder as captured output.
-- Don't describe paused or frozen live output as active live output.
+- Keep one focused section visible and make advanced controls reachable through disclosure.
+- Keep preview, output state, privacy actions and exclusion information visible while navigating.
+- Test actual frames and pointer/keyboard interaction at the minimum window width and native display scaling.
+- Never stretch the interface into a wide dashboard or shrink text to fit more controls.
+- Never rasterize text at logical resolution and scale the bitmap up for high-density output.

@@ -85,7 +85,7 @@ static const FieldSpec fields[] = {
        REQUIRE_CURSOR),
     FB("camera.enabled", "Camera enabled", camera_enabled, TAB_CAMERA, 0, 0),
     FB("camera.visible", "Visible in composition", camera_visible, TAB_CAMERA, 0, 0),
-    FT("camera.device", "Camera device", camera_device, TAB_CAMERA, 0, 0),
+    FT("camera.device", "Camera device", camera_device, TAB_CAMERA, 3, 0),
     FN("camera.width_percent", "Camera width (%)", camera_width_percent, 1, 100, TAB_CAMERA, 0, 0),
     FE("camera.shape", "Shape", shape, "rectangle,rounded,circle", TAB_CAMERA, 0, 0),
     FE("camera.anchor", "Anchor", anchor, "top-left,top-right,bottom-left,bottom-right,free",
@@ -215,7 +215,8 @@ typedef struct {
 typedef struct {
     SDL_Window *window;
     SDL_Renderer *renderer;
-    TTF_Font *font[4];
+    TTF_Font *font[4], *raster_font[4];
+    float density, input_scale;
     PanelClient *client;
     PanelSnapshot snapshot;
     FieldEdit edit[FIELD_COUNT];
@@ -228,6 +229,8 @@ typedef struct {
     size_t caret;
     float mouse_x, mouse_y, scroll;
     float width, height;
+    bool preview_moved, preview_dragging;
+    float preview_x, preview_y, drag_x, drag_y;
     char error[CAST_ERR], reply[CAST_ERR];
     uint64_t command_seen, draw_frame;
     uint64_t frame_generation, frame_epoch;
@@ -237,17 +240,17 @@ typedef struct {
     char strings[49152];
     size_t string_used;
 } Panel;
-static const Clay_Color background = {17, 24, 32, 255};
-static const Clay_Color surface = {25, 35, 45, 255};
-static const Clay_Color control = {37, 52, 64, 255};
-static const Clay_Color hovered = {47, 67, 82, 255};
-static const Clay_Color foreground = {237, 243, 247, 255};
-static const Clay_Color secondary = {173, 191, 203, 255};
-static const Clay_Color muted = {129, 149, 163, 255};
+static const Clay_Color background = {16, 17, 19, 255};
+static const Clay_Color surface = {24, 26, 29, 255};
+static const Clay_Color control = {39, 42, 46, 255};
+static const Clay_Color hovered = {52, 56, 62, 255};
+static const Clay_Color foreground = {248, 249, 251, 255};
+static const Clay_Color secondary = {187, 193, 202, 255};
+static const Clay_Color muted = {151, 158, 168, 255};
 static const Clay_Color accent = {128, 201, 255, 255};
 static const Clay_Color danger = {255, 150, 147, 255};
-static const Clay_Color line = {53, 71, 86, 255};
-static const int font_sizes[] = {13, 15, 18, 25};
+static const Clay_Color line = {68, 73, 81, 255};
+static const int font_sizes[] = {13, 16, 19, 25};
 
 static Clay_String literal(const char *s)
 {
@@ -313,8 +316,8 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
                                          : control;
     Clay_Color ink = enabled ? selected ? accent : foreground : muted;
     CLAY({.id = element_id(id),
-          .layout = {.sizing = {.height = CLAY_SIZING_FIXED(36)},
-                     .padding = {12, 12, 8, 8},
+          .layout = {.sizing = {.height = CLAY_SIZING_FIXED(40)},
+                     .padding = {12, action == A_DROPDOWN ? 26 : 12, 8, 8},
                      .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}},
           .backgroundColor = bg,
           .cornerRadius = CLAY_CORNER_RADIUS(6),
@@ -440,50 +443,53 @@ static void field_row(Panel *p, size_t index)
     if (!p->edit[index].dirty && p->active_text != id) {
         snprintf(p->edit[index].value, sizeof p->edit[index].value, "%s", current);
     }
-    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_FIXED(46)},
-                     .childGap = 10,
+    bool stacked = f->type != FIELD_BOOL && f->type != FIELD_ENUM;
+    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_FIT()},
+                     .padding = {0, 0, 8, 10},
+                     .childGap = 8,
+                     .layoutDirection = stacked ? CLAY_TOP_TO_BOTTOM : CLAY_LEFT_TO_RIGHT,
                      .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}},
           .border = {.color = line, .width = {.bottom = 1}}})
     {
-        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_FIXED(p->width < 680 ? 174 : 218)}}})
+        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}}})
         {
             label(f->label, 1, foreground);
         }
-        if (f->type == FIELD_BOOL) {
-            bool on = !strcmp(current, "true");
-            button(p, id, on ? "On" : "Off", enabled, on, A_SETTING, (int)index);
-            Widget *w = &p->widgets[p->widget_count - 1];
-            snprintf(w->value, sizeof w->value, "%s", on ? "false" : "true");
-        } else if (f->type == FIELD_ENUM) {
-            button(p, id, format(p, "%s", current), enabled, false, A_DROPDOWN, (int)index);
-            p->widgets[p->widget_count - 1].type = W_SELECT;
-        } else {
-            Widget *w = widget(p, id, W_FIELD, A_FIELD, enabled);
-            if (w) {
-                w->index = (int)index;
-            }
-            CLAY({.id = element_id(id),
-                  .layout = {.sizing = {.width = CLAY_SIZING_GROW(),
-                                        .height = CLAY_SIZING_FIXED(34)},
-                             .padding = {10, 10, 7, 7}},
-                  .backgroundColor =
-                      p->active_text == id ? (Clay_Color){31, 43, 46, 255} : background,
-                  .cornerRadius = CLAY_CORNER_RADIUS(5),
-                  .border = {.color = p->focus == id ? accent : line, .width = CLAY_BORDER_ALL(1)},
-                  .custom = {.customData = (void *)(uintptr_t)(index + 1)}})
-            {
-            }
-            if (f->flags & READ_ONLY) {
-                CLAY({.layout = {.sizing = {.width = CLAY_SIZING_FIXED(82)}}})
-                {
-                    label("Restart", 0, secondary);
-                }
+        CLAY({.layout = {.sizing = {.width = stacked ? CLAY_SIZING_GROW() : CLAY_SIZING_FIT()},
+                         .childGap = 8,
+                         .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
+        {
+            if (f->type == FIELD_BOOL) {
+                bool on = !strcmp(current, "true");
+                button(p, id, on ? "On" : "Off", enabled, on, A_SETTING, (int)index);
+                Widget *w = &p->widgets[p->widget_count - 1];
+                snprintf(w->value, sizeof w->value, "%s", on ? "false" : "true");
+            } else if (f->type == FIELD_ENUM) {
+                button(p, id, format(p, "%s", current), enabled, false, A_DROPDOWN, (int)index);
+                p->widgets[p->widget_count - 1].type = W_SELECT;
             } else {
-                button(p, id + 1, "Apply", enabled && p->edit[index].dirty, false, A_APPLY,
-                       (int)index);
+                Widget *w = widget(p, id, W_FIELD, A_FIELD, enabled);
+                if (w) {
+                    w->index = (int)index;
+                }
+                CLAY({.id = element_id(id),
+                      .layout = {.sizing = {.width = CLAY_SIZING_GROW(),
+                                            .height = CLAY_SIZING_FIXED(40)}},
+                      .backgroundColor = p->active_text == id ? surface : background,
+                      .cornerRadius = CLAY_CORNER_RADIUS(4),
+                      .border = {.color = p->focus == id ? accent : line,
+                                 .width = CLAY_BORDER_ALL(1)},
+                      .custom = {.customData = (void *)(uintptr_t)(index + 1)}})
+                {
+                }
+                if (f->flags & READ_ONLY) {
+                    label("Restart", 0, secondary);
+                } else if (p->edit[index].dirty) {
+                    button(p, id + 1, "Apply", enabled, false, A_APPLY, (int)index);
+                }
             }
         }
-        if ((f->flags & RECORD_LOCK) && !enabled && p->snapshot.connected) {
+        if (stacked && (f->flags & RECORD_LOCK) && !enabled && p->snapshot.connected) {
             label("Stop recording to edit", 0, secondary);
         }
     }
@@ -496,194 +502,239 @@ static void text_wrapped(const char *text, Clay_Color color)
         CLAY_TEXT_CONFIG(
             {.fontId = 0, .fontSize = 13, .textColor = color, .wrapMode = CLAY_TEXT_WRAP_WORDS}));
 }
+static const char *const section_names[] = {"Source", "Camera", "Audio", "Effects", "Settings"};
+
 static void status_line(Panel *p)
 {
     const PanelSnapshot *s = &p->snapshot;
+    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_FIXED(42)},
+                     .childGap = 12,
+                     .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
+    {
+        if (p->tab >= 0) {
+            button(p, 99, "Back", true, false, A_TAB, -1);
+        }
+        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}}})
+        {
+            label(p->tab < 0 ? "cast" : section_names[p->tab], 3, foreground);
+        }
+        if (s->state.recording || s->countdown || s->finalizing) {
+            uint64_t secs = s->duration_ns / 1000000000ULL;
+            label(s->countdown ? format(p, "Starts in %.1f s", s->countdown_remaining_ns / 1e9)
+                  : s->finalizing
+                      ? "Saving…"
+                      : format(p, "%02llu:%02llu:%02llu", (unsigned long long)(secs / 3600),
+                               (unsigned long long)(secs / 60 % 60),
+                               (unsigned long long)(secs % 60)),
+                  1, danger);
+        }
+    }
     const char *live = !s->connected             ? "Disconnected"
                        : !s->config.live_enabled ? "Live output off"
                        : s->state.live_paused    ? "Live paused"
                        : s->state.live_frozen    ? "Live frozen"
                                                  : "Live";
-    const char *record = !s->connected            ? "Record unavailable"
-                         : s->countdown           ? "Countdown"
-                         : s->finalizing          ? "Finalizing"
-                         : !s->state.recording    ? "Record stopped"
-                         : s->state.record_paused ? "Record paused"
-                                                  : "Recording";
-    Clay_Color live_color =
-        s->connected && s->config.live_enabled && !s->state.live_paused && !s->state.live_frozen
-            ? (Clay_Color){131, 221, 182, 255}
-            : secondary;
-    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_FIXED(38)},
-                     .childGap = 16,
-                     .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
+    const char *record = s->state.recording
+                             ? (s->state.record_paused ? "Recording paused" : "Recording")
+                             : "Not recording";
+    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 12}})
     {
-        label("cast", 3, foreground);
-        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
-                         .childAlignment = {.y = CLAY_ALIGN_Y_CENTER},
-                         .childGap = 12}})
-        {
-            label(live, 1, live_color);
-            label(record, 1, s->state.recording || s->countdown ? danger : secondary);
-        }
+        label(live, 0,
+              s->connected && s->config.live_enabled && !s->state.live_paused &&
+                      !s->state.live_frozen
+                  ? (Clay_Color){131, 221, 182, 255}
+                  : secondary);
         if (s->connected) {
-            uint64_t secs = s->duration_ns / 1000000000ULL;
-            label(format(p, "%02llu:%02llu:%02llu", (unsigned long long)(secs / 3600),
-                         (unsigned long long)(secs / 60 % 60), (unsigned long long)(secs % 60)),
-                  1, secondary);
+            label(record, 0, s->state.recording ? danger : secondary);
         }
     }
 }
-static void output_controls(Panel *p, bool compact)
+
+static void output_controls(Panel *p)
 {
     const PanelSnapshot *s = &p->snapshot;
-    bool connected = s->connected, live = connected && s->config.live_enabled;
-    CLAY({.layout = {.sizing = {.width = compact ? CLAY_SIZING_GROW() : CLAY_SIZING_FIXED(224),
-                                .height = CLAY_SIZING_FIT()},
-                     .layoutDirection = CLAY_TOP_TO_BOTTOM,
-                     .childGap = 8}})
+    bool live = s->connected && s->config.live_enabled;
+    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 8}})
     {
-        CLAY({.layout = {.childGap = 8, .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
-        {
-            command_button(p, 30, s->state.live_paused ? "Resume live" : "Pause live", live, "live",
-                           s->state.live_paused ? "resume" : "pause", NULL);
-            command_button(p, 31, s->state.live_frozen ? "Unfreeze" : "Freeze",
-                           live && !s->state.live_paused, "live",
+        command_button(p, 30, s->state.live_paused ? "Resume live" : "Pause live", live, "live",
+                       s->state.live_paused ? "resume" : "pause", NULL);
+        if (live && !s->state.live_paused) {
+            command_button(p, 31, s->state.live_frozen ? "Unfreeze" : "Freeze", true, "live",
                            s->state.live_frozen ? "unfreeze" : "freeze", NULL);
         }
-        CLAY({.layout = {.childGap = 8, .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
-        {
-            command_button(p, 32,
-                           s->countdown         ? "Cancel"
-                           : s->state.recording ? "Stop record"
-                                                : "Start record",
-                           connected && !s->finalizing, "record",
-                           s->countdown || s->state.recording ? "stop" : "start", NULL);
-            command_button(p, 33, s->state.record_paused ? "Resume" : "Pause",
-                           connected && s->state.recording, "record",
-                           s->state.record_paused ? "resume" : "pause", NULL);
+        if (!s->state.recording && !s->countdown) {
+            command_button(p, 32, s->finalizing ? "Saving…" : "Start record",
+                           s->connected && !s->finalizing, "record", "start", NULL);
         }
-        CLAY({.layout = {.childGap = 8, .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
+    }
+    if (s->state.recording || s->countdown || s->state.group_paused) {
+        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 8}})
         {
-            command_button(p, 34, s->state.group_paused ? "Resume all" : "Pause all", connected,
-                           s->state.group_paused ? "resume" : "pause", NULL, NULL);
-            if (!compact) {
-                command_button(p, 35, "Reset", connected, "reset", NULL, NULL);
+            if (s->state.recording || s->countdown) {
+                command_button(p, 32, s->countdown ? "Cancel" : "Stop record", s->connected,
+                               "record", "stop", NULL);
             }
-        }
-        if (!compact) {
-            label(s->countdown    ? format(p, "Starts in %.1f s", s->countdown_remaining_ns / 1e9)
-                  : s->finalizing ? "Saving recording…"
-                                  : "Controls apply to active outputs",
-                  0, secondary);
+            if (s->state.recording) {
+                command_button(p, 33, s->state.record_paused ? "Resume" : "Pause", s->connected,
+                               "record", s->state.record_paused ? "resume" : "pause", NULL);
+            }
+            command_button(p, 34, s->state.group_paused ? "Resume all" : "Pause all", s->connected,
+                           s->state.group_paused ? "resume" : "pause", NULL, NULL);
         }
     }
 }
-static void preview_area(Panel *p, bool compact)
+
+static void preview_content(Panel *p, bool compact)
 {
     CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
-                     .childGap = compact ? 8 : 16,
-                     .layoutDirection = compact ? CLAY_TOP_TO_BOTTOM : CLAY_LEFT_TO_RIGHT}})
+                     .childGap = 6,
+                     .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
     {
-        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
-                         .layoutDirection = CLAY_TOP_TO_BOTTOM,
-                         .childGap = 8}})
-        {
+        button(p, 20, "Live", true, !p->record_preview, A_PREVIEW, 0);
+        button(p, 21, "Recording", true, p->record_preview, A_PREVIEW, 1);
+        if (!compact) {
             CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
-                             .childGap = 8,
-                             .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
+                             .childAlignment = {.x = CLAY_ALIGN_X_RIGHT}}})
+            {
+                label("Preview", 0, secondary);
+            }
+        }
+    }
+    CLAY({.id = CLAY_ID("OutputPreview"),
+          .layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_GROW()},
+                     .childAlignment = {.x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER}},
+          .backgroundColor = {5, 6, 7, 255},
+          .custom = {.customData = p}})
+    {
+        if (!p->snapshot.connected) {
+            label(compact ? "Disconnected" : "Start the daemon with cast", 0, secondary);
+        } else if (!p->preview) {
+            label("Waiting for output…", 0, secondary);
+        }
+    }
+}
+
+static void preview_area(Panel *p)
+{
+    bool compact = p->tab >= 0;
+    float preview_height = compact ? 146 : fminf(254, fmaxf(170, p->height - 490));
+    CLAY({.id = CLAY_ID("PreviewSpace"),
+          .layout = {.sizing = {.width = CLAY_SIZING_GROW(),
+                                .height = CLAY_SIZING_FIXED(preview_height)}}})
+    {
+        if (!compact) {
+            CLAY({.id = CLAY_ID("PreviewPanel"),
+                  .layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_GROW()},
+                             .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                             .childGap = 8}})
+            {
+                preview_content(p, false);
+            }
+        } else {
+            CLAY({.layout = {
+                      .sizing = {.width = CLAY_SIZING_FIXED(100), .height = CLAY_SIZING_GROW()},
+                      .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                      .childGap = 6,
+                      .padding = {0, 0, 14, 0}}})
+            {
+                label("Preview", 1, foreground);
+                text_wrapped("Drag to move", secondary);
+            }
+        }
+    }
+}
+
+static void floating_preview(Panel *p)
+{
+    if (p->tab < 0) {
+        return;
+    }
+    Clay_ElementData space = Clay_GetElementData(CLAY_ID("PreviewSpace"));
+    float x = p->preview_moved ? p->preview_x : space.boundingBox.x + space.boundingBox.width - 208;
+    float y = p->preview_moved ? p->preview_y : space.boundingBox.y;
+    x = fmaxf(8, fminf(x, p->width - 216));
+    Clay_BoundingBox scroll = Clay_GetElementData(CLAY_ID("SettingsScroll")).boundingBox;
+    float top = space.boundingBox.y;
+    float bottom = fmaxf(top, scroll.y + scroll.height - 146);
+    y = fmaxf(top, fminf(y, bottom));
+    /* A floating preview may cover settings, never navigation, output actions or notices. */
+    if (y > top && y < scroll.y) {
+        y = y < (top + scroll.y) / 2 || bottom < scroll.y ? top : scroll.y;
+    }
+    p->preview_x = x;
+    p->preview_y = y;
+    CLAY({.id = CLAY_ID("PreviewPanel"),
+          .layout = {.sizing = {.width = CLAY_SIZING_FIXED(208), .height = CLAY_SIZING_FIXED(146)},
+                     .padding = {5, 5, 5, 5},
+                     .childGap = 5,
+                     .layoutDirection = CLAY_TOP_TO_BOTTOM},
+          .backgroundColor = surface,
+          .border = {.color = line, .width = CLAY_BORDER_ALL(1)},
+          .floating = {.offset = {x, y}, .attachTo = CLAY_ATTACH_TO_ROOT, .zIndex = 5}})
+    {
+        preview_content(p, true);
+    }
+}
+
+static void home_navigation(Panel *p)
+{
+    CLAY({.id = CLAY_ID("SettingsScroll"),
+          .layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_GROW()},
+                     .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                     .padding = {0, 0, 8, 0}},
+          .clip = {.vertical = true, .childOffset = Clay_GetScrollOffset()}})
+    {
+        for (int i = 0; i < 5; i++) {
+            uint32_t id = 100 + (uint32_t)i;
+            Widget *w = widget(p, id, W_BUTTON, A_TAB, true);
+            if (w) {
+                w->index = i;
+            }
+            CLAY({.id = element_id(id),
+                  .layout = {.sizing = {.width = CLAY_SIZING_GROW(),
+                                        .height = CLAY_SIZING_FIXED(46)},
+                             .padding = {10, 12, 0, 0},
+                             .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}},
+                  .backgroundColor = hot(id) ? control : background,
+                  .border = {.color = p->focus == id ? accent : line,
+                             .width = p->focus == id ? (Clay_BorderWidth)CLAY_BORDER_ALL(1)
+                                                     : (Clay_BorderWidth){.bottom = 1}}})
             {
                 CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}}})
                 {
-                    label("Output preview", 1, secondary);
+                    label(section_names[i], 1, foreground);
                 }
-                button(p, 20, "Live", true, !p->record_preview, A_PREVIEW, 0);
-                button(p, 21, "Record", true, p->record_preview, A_PREVIEW, 1);
+                label("Open", 0, secondary);
             }
-            CLAY(
-                {.id = CLAY_ID("OutputPreview"),
-                 .layout = {.sizing = {.width = CLAY_SIZING_GROW(),
-                                       .height = CLAY_SIZING_FIXED(compact ? 88 : 164)},
-                            .childAlignment = {.x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER}},
-                 .backgroundColor = (Clay_Color){9, 13, 18, 255},
-                 .cornerRadius = CLAY_CORNER_RADIUS(6),
-                 .custom = {.customData = p}})
-            {
-                if (!p->snapshot.connected) {
-                    label("Start the daemon with cast", 1, secondary);
-                } else if (!p->preview) {
-                    label("Waiting for composed output…", 1, secondary);
-                }
-            }
-        }
-        if (compact) {
-            /* Three action pairs remain reachable at the minimum window height. */
-            CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 8}})
-            {
-                bool connected = p->snapshot.connected;
-                command_button(p, 30, p->snapshot.state.live_paused ? "Resume live" : "Pause live",
-                               connected && p->snapshot.config.live_enabled, "live",
-                               p->snapshot.state.live_paused ? "resume" : "pause", NULL);
-                command_button(
-                    p, 32,
-                    p->snapshot.countdown         ? "Cancel record"
-                    : p->snapshot.state.recording ? "Stop record"
-                                                  : "Start record",
-                    connected && !p->snapshot.finalizing, "record",
-                    p->snapshot.countdown || p->snapshot.state.recording ? "stop" : "start", NULL);
-                command_button(p, 34, p->snapshot.state.group_paused ? "Resume all" : "Pause all",
-                               connected, p->snapshot.state.group_paused ? "resume" : "pause", NULL,
-                               NULL);
-            }
-            CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 8}})
-            {
-                command_button(p, 31,
-                               p->snapshot.state.live_frozen ? "Unfreeze live" : "Freeze live",
-                               p->snapshot.connected && p->snapshot.config.live_enabled &&
-                                   !p->snapshot.state.live_paused,
-                               "live", p->snapshot.state.live_frozen ? "unfreeze" : "freeze", NULL);
-                command_button(p, 33,
-                               p->snapshot.state.record_paused ? "Resume record" : "Pause record",
-                               p->snapshot.connected && p->snapshot.state.recording, "record",
-                               p->snapshot.state.record_paused ? "resume" : "pause", NULL);
-            }
-        } else {
-            output_controls(p, false);
         }
     }
 }
 static void selection_row(Panel *p)
 {
-    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
-                     .childGap = 8,
-                     .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
-    {
-        label("Preset", 1, secondary);
-        button(p, 40, "Choose preset", p->snapshot.connected && p->snapshot.config.preset_count > 0,
-               false, A_DROPDOWN, -1);
-        p->widgets[p->widget_count - 1].type = W_SELECT;
-        command_button(p, 41, "Next", p->snapshot.connected, "preset", "next", NULL);
-        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
-                         .childAlignment = {.x = CLAY_ALIGN_X_RIGHT}}})
+    label("Composition", 2, foreground);
+    static const char *const layouts[] = {"overlay", "split", "screen", "camera"};
+    static const char *const names[] = {"Overlay", "Split", "Screen", "Camera"};
+    for (int row = 0; row < 2; row++) {
+        CLAY({.layout = {.childGap = 8}})
         {
-            command_button(p, 42, "Reset composition", p->snapshot.connected, "reset", NULL, NULL);
-        }
-    }
-    static const char *const layout[] = {"overlay", "split", "screen", "camera"};
-    static const char *const names[] = {"Overlay", "Split", "Screen only", "Camera only"};
-    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 8}})
-    {
-        for (int i = 0; i < 4; i++) {
-            CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}}})
-            {
+            for (int col = 0; col < 2; col++) {
+                int i = row * 2 + col;
                 button(p, 50 + (uint32_t)i, names[i], p->snapshot.connected,
-                       !strcmp(p->snapshot.config.layout, layout[i]), A_COMMAND, 0);
+                       !strcmp(p->snapshot.config.layout, layouts[i]), A_COMMAND, 0);
                 Widget *w = &p->widgets[p->widget_count - 1];
                 w->arg[0] = "layout";
-                w->arg[1] = layout[i];
+                w->arg[1] = layouts[i];
                 w->argc = 2;
             }
         }
+    }
+    CLAY({.layout = {.childGap = 8}})
+    {
+        button(p, 40, "Preset", p->snapshot.connected && p->snapshot.config.preset_count > 0, false,
+               A_DROPDOWN, -1);
+        p->widgets[p->widget_count - 1].type = W_SELECT;
+        command_button(p, 41, "Next", p->snapshot.connected, "preset", "next", NULL);
+        command_button(p, 42, "Reset", p->snapshot.connected, "reset", NULL, NULL);
     }
 }
 static void source_actions(Panel *p)
@@ -695,6 +746,9 @@ static void source_actions(Panel *p)
         if (p->snapshot.capabilities.region_selection) {
             command_button(p, 71, "Select region", native, "capture", "region", "select");
         }
+    }
+    CLAY({.layout = {.childGap = 8}})
+    {
         if (p->snapshot.capabilities.window_selection) {
             command_button(p, 72, "Select window", native, "capture", "window", "select");
         }
@@ -703,6 +757,9 @@ static void source_actions(Panel *p)
     {
         command_button(p, 73, "List monitors", native, "screen", "list", NULL);
         command_button(p, 74, "Next monitor", native, "screen", "next", NULL);
+    }
+    CLAY({.layout = {.childGap = 8}})
+    {
         if (p->snapshot.capabilities.window_selection) {
             command_button(p, 75, "Active window", native, "capture", "window", "active");
         }
@@ -719,6 +776,9 @@ static void source_actions(Panel *p)
     {
         command_button(p, 76, "Zoom out", p->snapshot.connected, "zoom", "out", NULL);
         command_button(p, 77, "Zoom in", p->snapshot.connected, "zoom", "in", NULL);
+    }
+    CLAY({.layout = {.childGap = 8}})
+    {
         command_button(p, 78, "Reset zoom", p->snapshot.connected, "zoom", "reset", NULL);
         command_button(p, 79, "Toggle zoom", p->snapshot.connected, "zoom", "toggle", NULL);
     }
@@ -726,13 +786,12 @@ static void source_actions(Panel *p)
 static void tab_actions(Panel *p)
 {
     if (p->tab == TAB_SOURCE) {
+        selection_row(p);
         source_actions(p);
     } else if (p->tab == TAB_CAMERA) {
         CLAY({.layout = {.childGap = 8}})
         {
             command_button(p, 80, "List cameras", p->snapshot.connected, "camera", "list", NULL);
-            command_button(p, 81, "Next shape", p->snapshot.connected, "camera", "shape", "next");
-            command_button(p, 82, "Next corner", p->snapshot.connected, "camera", "anchor", "next");
         }
     } else if (p->tab == TAB_AUDIO) {
         command_button(p, 83, "List audio sources", p->snapshot.connected, "audio", "list", NULL);
@@ -769,29 +828,17 @@ static void tab_actions(Panel *p)
 }
 static const char *const group_names[5][4] = {
     {"", "Region geometry", "Zoom behavior", ""},
-    {"", "Position, crop and split", "Camera appearance", ""},
+    {"", "Position and crop", "Appearance", "Device"},
     {"", "Virtual microphone", "", ""},
-    {"", "Output annotation policy", "Cursor and click appearance",
-     "Keystroke appearance and filtering"},
-    {"", "Recording format and quality", "Cycle order",
-     "Output and connection · restart required"}};
+    {"", "Output annotations", "Cursor and clicks", "Keystroke style"},
+    {"", "Recording format", "Cycle order", "Output and connection"}};
 static void settings_area(Panel *p)
 {
-    static const char *const tabs[] = {"Source", "Camera", "Audio", "Effects", "Settings"};
-    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 8},
-          .border = {.color = line, .width = {.bottom = 1}}})
-    {
-        for (int i = 0; i < 5; i++) {
-            button(p, 100 + (uint32_t)i, tabs[i], true, p->tab == i, A_TAB, i);
-        }
-    }
     CLAY({.id = CLAY_ID("SettingsScroll"),
           .layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_GROW()},
-                     .padding = {16, 16, 12, 12},
+                     .padding = {0, 10, 0, 12},
                      .childGap = 8,
                      .layoutDirection = CLAY_TOP_TO_BOTTOM},
-          .backgroundColor = surface,
-          .cornerRadius = CLAY_CORNER_RADIUS(6),
           .clip = {.vertical = true, .childOffset = Clay_GetScrollOffset()}})
     {
         tab_actions(p);
@@ -815,8 +862,8 @@ static void settings_area(Panel *p)
                 continue;
             }
             button(p, 200 + (uint32_t)p->tab * 4 + (uint32_t)group,
-                   format(p, "%s  ·  %s", group_names[p->tab][group],
-                          p->groups[p->tab][group] ? "Hide" : "Show"),
+                   format(p, "%s  %s", p->groups[p->tab][group] ? "Hide" : "Show",
+                          group_names[p->tab][group]),
                    true, false, A_GROUP, group);
             if (p->groups[p->tab][group]) {
                 for (size_t i = 0; i < FIELD_COUNT; i++) {
@@ -864,11 +911,11 @@ static void footer(Panel *p)
             text_wrapped(error, danger);
         } else if (p->snapshot.command_queued > p->snapshot.command_completed) {
             label("Applying…", 0, accent);
-        } else if (p->reply[0]) {
+        } else if (p->reply[0] && strcmp(p->reply, "ok")) {
             text_wrapped(strchr(p->reply, '\n') ? "Command result appears in the settings area."
                                                 : p->reply,
                          secondary);
-        } else {
+        } else if (p->tab == TAB_SETTINGS) {
             text_wrapped(format(p, "%s · %d × %d · %d fps", p->snapshot.config.backend,
                                 p->snapshot.config.width, p->snapshot.config.height,
                                 p->snapshot.config.fps),
@@ -891,7 +938,7 @@ static void dropdown_layout(Panel *p)
     }
     int count = p->dropdown_field < 0 ? p->snapshot.config.preset_count
                                       : choice_count(fields[p->dropdown_field].choices);
-    float h = 36 * count + 8;
+    float h = 40 * count + 8;
     float x = fminf(anchor.boundingBox.x, p->width - 264),
           y = anchor.boundingBox.y + anchor.boundingBox.height + 4;
     if (y + h > p->height - 16) {
@@ -930,17 +977,29 @@ static Clay_RenderCommandArray layout(Panel *p)
     Clay_BeginLayout();
     CLAY({.id = CLAY_ID("Panel"),
           .layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_GROW()},
-                     .padding = {24, 24, 16, 12},
-                     .childGap = p->width < 680 ? 8 : 12,
+                     .padding = {16, 16, 12, 12},
+                     .childGap = 10,
+                     .childAlignment = {.x = CLAY_ALIGN_X_CENTER},
                      .layoutDirection = CLAY_TOP_TO_BOTTOM},
           .backgroundColor = background})
     {
-        status_line(p);
-        preview_area(p, p->width < 680);
-        selection_row(p);
-        settings_area(p);
-        footer(p);
+        CLAY(
+            {.layout = {.sizing = {.width = CLAY_SIZING_GROW(0, 520), .height = CLAY_SIZING_GROW()},
+                        .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                        .childGap = 10}})
+        {
+            status_line(p);
+            preview_area(p);
+            output_controls(p);
+            if (p->tab < 0) {
+                home_navigation(p);
+            } else {
+                settings_area(p);
+            }
+            footer(p);
+        }
     }
+    floating_preview(p);
     dropdown_layout(p);
     Clay_RenderCommandArray commands = Clay_EndLayout();
     for (int i = 0; i < p->widget_count; i++) {
@@ -1037,7 +1096,7 @@ static TextCache *cached_text(Panel *p, const char *text, size_t length, int fon
     memcpy(slot->text, text, length);
     slot->text[length] = 0;
     SDL_Surface *surface_text =
-        TTF_RenderText_Blended(p->font[font], text, length, (SDL_Color){255, 255, 255, 255});
+        TTF_RenderText_Blended(p->raster_font[font], text, length, (SDL_Color){255, 255, 255, 255});
     if (!surface_text) {
         free(slot->text);
         slot->text = NULL;
@@ -1048,6 +1107,9 @@ static TextCache *cached_text(Panel *p, const char *text, size_t length, int fon
     slot->size = font;
     slot->texture = SDL_CreateTextureFromSurface(p->renderer, surface_text);
     SDL_DestroySurface(surface_text);
+    if (slot->texture) {
+        SDL_SetTextureScaleMode(slot->texture, SDL_SCALEMODE_NEAREST);
+    }
     slot->used = p->draw_frame;
     return slot;
 }
@@ -1087,7 +1149,8 @@ static void draw_text(Panel *p, const char *text, size_t length, int font, Clay_
     }
     SDL_SetTextureColorMod(c->texture, (Uint8)ink.r, (Uint8)ink.g, (Uint8)ink.b);
     SDL_SetTextureAlphaMod(c->texture, (Uint8)ink.a);
-    SDL_FRect box = {x, y, (float)c->width, (float)c->height};
+    SDL_FRect box = {roundf(x * p->density) / p->density, roundf(y * p->density) / p->density,
+                     c->width / p->density, c->height / p->density};
     SDL_RenderTexture(p->renderer, c->texture, NULL, &box);
 }
 static SDL_Rect intersect(SDL_Rect a, SDL_Rect b)
@@ -1294,7 +1357,8 @@ static void set_focus(Panel *p, Widget *w)
         SDL_Rect area = clip_rect(w->box);
         SDL_SetTextInputArea(p->window, &area, (int)p->caret);
     }
-    if (w->id >= 1000 || (w->id >= 200 && w->id < 300) || (w->id >= 70 && w->id < 90)) {
+    if (w->id >= 1000 || (w->id >= 200 && w->id < 300) || (w->id >= 40 && w->id < 90) ||
+        (w->id >= 100 && w->id < 105)) {
         Clay_ElementData area = Clay_GetElementData(CLAY_ID("SettingsScroll"));
         Clay_ScrollContainerData scroll = Clay_GetScrollContainerData(CLAY_ID("SettingsScroll"));
         if (scroll.found) {
@@ -1432,6 +1496,7 @@ static void activate(Panel *p, Widget *w)
     case A_TAB:
         stop_editing(p);
         p->tab = w->index;
+        p->focus = p->tab < 0 ? 100 : 99;
         p->dropdown = 0;
         {
             Clay_ScrollContainerData scroll =
@@ -1576,6 +1641,10 @@ static void key_event(Panel *p, const SDL_KeyboardEvent *event)
             edit->dirty = false;
         }
         stop_editing(p);
+        if (!edit && p->tab >= 0) {
+            p->tab = -1;
+            p->focus = 100;
+        }
         return;
     }
     if (p->dropdown &&
@@ -1662,6 +1731,25 @@ static void key_event(Panel *p, const SDL_KeyboardEvent *event)
 }
 static void click_event(Panel *p, float x, float y)
 {
+    if (p->tab >= 0 && !p->dropdown) {
+        Clay_BoundingBox b = Clay_GetElementData(CLAY_ID("PreviewPanel")).boundingBox;
+        if (x >= b.x && x < b.x + b.width && y >= b.y && y < b.y + b.height) {
+            for (int i = 20; i <= 21; i++) {
+                Widget *w = find_widget(p, (uint32_t)i);
+                if (w && x >= w->box.x && x < w->box.x + w->box.width && y >= w->box.y &&
+                    y < w->box.y + w->box.height) {
+                    set_focus(p, w);
+                    activate(p, w);
+                    return;
+                }
+            }
+            p->preview_dragging = true;
+            p->preview_moved = true;
+            p->drag_x = x - b.x;
+            p->drag_y = y - b.y;
+            return;
+        }
+    }
     for (int i = p->widget_count - 1; i >= 0; i--) {
         Widget *w = &p->widgets[i];
         if (p->dropdown && w->type != W_OPTION && w->id != p->dropdown) {
@@ -1671,7 +1759,8 @@ static void click_event(Panel *p, float x, float y)
             y >= w->box.y + w->box.height) {
             continue;
         }
-        if (w->id >= 1000 || (w->id >= 200 && w->id < 300) || (w->id >= 70 && w->id < 90)) {
+        if (w->id >= 1000 || (w->id >= 200 && w->id < 300) || (w->id >= 40 && w->id < 90) ||
+            (w->id >= 100 && w->id < 105)) {
             Clay_ElementData area = Clay_GetElementData(CLAY_ID("SettingsScroll"));
             if (y < area.boundingBox.y || y >= area.boundingBox.y + area.boundingBox.height) {
                 continue;
@@ -1692,18 +1781,23 @@ static void event(Panel *p, const SDL_Event *e)
         p->quit = true;
         break;
     case SDL_EVENT_MOUSE_MOTION:
-        p->mouse_x = e->motion.x;
-        p->mouse_y = e->motion.y;
+        p->mouse_x = e->motion.x / p->input_scale;
+        p->mouse_y = e->motion.y / p->input_scale;
+        if (p->preview_dragging) {
+            p->preview_x = p->mouse_x - p->drag_x;
+            p->preview_y = p->mouse_y - p->drag_y;
+        }
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
         if (e->button.button == SDL_BUTTON_LEFT) {
             p->mouse_down = true;
-            click_event(p, e->button.x, e->button.y);
+            click_event(p, e->button.x / p->input_scale, e->button.y / p->input_scale);
         }
         break;
     case SDL_EVENT_MOUSE_BUTTON_UP:
         if (e->button.button == SDL_BUTTON_LEFT) {
             p->mouse_down = false;
+            p->preview_dragging = false;
         }
         break;
     case SDL_EVENT_MOUSE_WHEEL:
@@ -1717,6 +1811,7 @@ static void event(Panel *p, const SDL_Event *e)
         break;
     case SDL_EVENT_WINDOW_FOCUS_LOST:
         p->mouse_down = false;
+        p->preview_dragging = false;
         p->dropdown = 0;
         stop_editing(p);
         break;
@@ -1821,6 +1916,7 @@ static void cleanup(Panel *p, void *clay_memory)
     }
     for (int i = 0; i < 4; i++) {
         TTF_CloseFont(p->font[i]);
+        TTF_CloseFont(p->raster_font[i]);
     }
     SDL_DestroyRenderer(p->renderer);
     SDL_DestroyWindow(p->window);
@@ -1829,6 +1925,45 @@ static void cleanup(Panel *p, void *clay_memory)
     TTF_Quit();
     SDL_Quit();
 }
+/* Opt-in native test diagnostics report actual layout and decoded preview state. */
+static void write_ui_state(Panel *p, const char *path)
+{
+    if (!path) {
+        return;
+    }
+    FILE *file = fopen(path, "w");
+    if (!file) {
+        return;
+    }
+    Clay_BoundingBox preview = Clay_GetElementData(CLAY_ID("OutputPreview")).boundingBox;
+    Clay_BoundingBox panel = Clay_GetElementData(CLAY_ID("PreviewPanel")).boundingBox;
+    Clay_BoundingBox scroll = Clay_GetElementData(CLAY_ID("SettingsScroll")).boundingBox;
+    fprintf(file,
+            "{\"tab\":%d,\"frame\":%llu,\"has_preview\":%s,\"record_preview\":%s,"
+            "\"density\":%.3f,\"input_scale\":%.3f,\"raster_font_size\":%.3f,"
+            "\"preview\":[%.1f,%.1f,%.1f,%.1f],"
+            "\"preview_panel\":[%.1f,%.1f,%.1f,%.1f],"
+            "\"scroll\":[%.1f,%.1f,%.1f,%.1f],\"widgets\":[",
+            p->tab, (unsigned long long)p->draw_frame, p->preview ? "true" : "false",
+            p->record_preview ? "true" : "false", p->density, p->input_scale,
+            TTF_GetFontSize(p->raster_font[1]), preview.x, preview.y, preview.width, preview.height,
+            panel.x, panel.y, panel.width, panel.height, scroll.x, scroll.y, scroll.width,
+            scroll.height);
+    for (int i = 0; i < p->widget_count; i++) {
+        const Widget *w = &p->widgets[i];
+        const char *key = w->id >= 1000 && w->index >= 0 && (size_t)w->index < FIELD_COUNT
+                              ? fields[w->index].key
+                              : "";
+        fprintf(file,
+                "%s{\"id\":%u,\"key\":\"%s\",\"enabled\":%s,"
+                "\"box\":[%.1f,%.1f,%.1f,%.1f]}",
+                i ? "," : "", w->id, key, w->enabled ? "true" : "false", w->box.x, w->box.y,
+                w->box.width, w->box.height);
+    }
+    fputs("]}\n", file);
+    fclose(file);
+}
+
 int panel_run(const Config *config, char *error, size_t n)
 {
     void *clay_memory = NULL;
@@ -1838,6 +1973,9 @@ int panel_run(const Config *config, char *error, size_t n)
         return -1;
     }
     p->snapshot.config = *config;
+    p->tab = -1;
+    p->density = 1;
+    p->input_scale = 1;
     SDL_SetHint(SDL_HINT_APP_ID, "org.cast.Panel");
     SDL_SetHint(SDL_HINT_X11_WINDOW_TYPE, "_NET_WM_WINDOW_TYPE_NORMAL");
     if (!SDL_Init(SDL_INIT_VIDEO) || !TTF_Init()) {
@@ -1845,14 +1983,21 @@ int panel_run(const Config *config, char *error, size_t n)
         cleanup(p, NULL);
         return -1;
     }
-    p->window = SDL_CreateWindow("cast control panel", 760, 900,
+    p->window = SDL_CreateWindow("cast control panel", 480, 760,
                                  SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (!p->window) {
         snprintf(error, n, "cannot create control panel window: %s", SDL_GetError());
         cleanup(p, NULL);
         return -1;
     }
-    SDL_SetWindowMinimumSize(p->window, 540, 620);
+    p->input_scale = SDL_GetWindowDisplayScale(p->window) / SDL_GetWindowPixelDensity(p->window);
+    if (p->input_scale <= 0) {
+        p->input_scale = 1;
+    }
+    SDL_SetWindowSize(p->window, (int)roundf(480 * p->input_scale),
+                      (int)roundf(760 * p->input_scale));
+    SDL_SetWindowMinimumSize(p->window, (int)roundf(360 * p->input_scale),
+                             (int)roundf(640 * p->input_scale));
     p->renderer = SDL_CreateRenderer(p->window, NULL);
     if (!p->renderer) {
         snprintf(error, n, "cannot create control panel renderer: %s", SDL_GetError());
@@ -1865,7 +2010,9 @@ int panel_run(const Config *config, char *error, size_t n)
     for (int i = 0; i < 4; i++) {
         SDL_IOStream *stream = SDL_IOFromConstMem(cast_panel_font_data, font_length);
         p->font[i] = stream ? TTF_OpenFontIO(stream, true, (float)font_sizes[i]) : NULL;
-        if (!p->font[i]) {
+        stream = SDL_IOFromConstMem(cast_panel_font_data, font_length);
+        p->raster_font[i] = stream ? TTF_OpenFontIO(stream, true, (float)font_sizes[i]) : NULL;
+        if (!p->font[i] || !p->raster_font[i]) {
             snprintf(error, n, "cannot open bundled control panel font: %s", SDL_GetError());
             cleanup(p, NULL);
             return -1;
@@ -1879,18 +2026,19 @@ int panel_run(const Config *config, char *error, size_t n)
         return -1;
     }
     Clay_Initialize(Clay_CreateArenaWithCapacityAndMemory(memory_size, clay_memory),
-                    (Clay_Dimensions){760, 900},
+                    (Clay_Dimensions){480, 760},
                     (Clay_ErrorHandler){.errorHandlerFunction = clay_error, .userData = p});
     Clay_SetMeasureTextFunction(measure, p);
-    p->width = 760;
-    p->height = 900;
+    p->width = 480;
+    p->height = 760;
     p->client = panel_client_open(config, window_xid(p->window), error, n);
     if (!p->client) {
         cleanup(p, clay_memory);
         return -1;
     }
     const char *smoke = getenv("CAST_PANEL_SMOKE_MS"),
-               *screenshot = getenv("CAST_PANEL_SCREENSHOT");
+               *screenshot = getenv("CAST_PANEL_SCREENSHOT"),
+               *ui_state = getenv("CAST_PANEL_UI_STATE");
     uint64_t started = SDL_GetTicks(), deadline = 0;
     if (smoke) {
         char *end;
@@ -1910,11 +2058,30 @@ int panel_run(const Config *config, char *error, size_t n)
         }
         int width, height;
         SDL_GetWindowSize(p->window, &width, &height);
-        p->width = (float)width;
-        p->height = (float)height;
+        float input_scale =
+            SDL_GetWindowDisplayScale(p->window) / SDL_GetWindowPixelDensity(p->window);
+        if (input_scale > 0 && fabsf(input_scale - p->input_scale) > .001f) {
+            p->input_scale = input_scale;
+            SDL_SetWindowMinimumSize(p->window, (int)roundf(360 * input_scale),
+                                     (int)roundf(640 * input_scale));
+        }
+        p->width = width / p->input_scale;
+        p->height = height / p->input_scale;
         int pixel_w, pixel_h;
         SDL_GetRenderOutputSize(p->renderer, &pixel_w, &pixel_h);
-        SDL_SetRenderScale(p->renderer, (float)pixel_w / width, (float)pixel_h / height);
+        float density = pixel_w / p->width;
+        if (fabsf(density - p->density) > .001f) {
+            p->density = density;
+            for (int i = 0; i < 4; i++) {
+                TTF_SetFontSize(p->raster_font[i], font_sizes[i] * density);
+            }
+            for (int i = 0; i < TEXT_CACHE_MAX; i++) {
+                SDL_DestroyTexture(p->cache[i].texture);
+                free(p->cache[i].text);
+                memset(&p->cache[i], 0, sizeof p->cache[i]);
+            }
+        }
+        SDL_SetRenderScale(p->renderer, density, pixel_h / p->height);
         Clay_SetLayoutDimensions((Clay_Dimensions){p->width, p->height});
         Clay_SetPointerState((Clay_Vector2){p->mouse_x, p->mouse_y}, p->mouse_down);
         Clay_UpdateScrollContainers(false, (Clay_Vector2){0, p->scroll}, 1.f / 60);
@@ -1922,6 +2089,9 @@ int panel_run(const Config *config, char *error, size_t n)
         poll_client(p);
         commands = layout(p);
         render(p, commands);
+        if (ui_state && p->draw_frame % 4 == 0) {
+            write_ui_state(p, ui_state);
+        }
         uint64_t now = SDL_GetTicks();
         if (!captured && screenshot &&
             now - started >= (deadline ? (deadline - started) * 3 / 4 : 2000)) {

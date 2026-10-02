@@ -31,7 +31,8 @@ def exercise():
     with tempfile.TemporaryDirectory(prefix="cast-panel-ui-") as directory:
         root = Path(directory)
         env = os.environ.copy()
-        env.update(XDG_RUNTIME_DIR=directory, SDL_VIDEODRIVER="x11")
+        env.update(XDG_RUNTIME_DIR=directory, SDL_VIDEODRIVER="x11",
+                   CAST_PANEL_UI_STATE=str(root / "ui.json"))
         config = root / "cast.conf"
         config.write_text("[record]\ndirectory=" + directory + "\ncountdown=0\n")
         common = ["--config", str(config), "--socket", str(root / "daemon.sock")]
@@ -48,7 +49,17 @@ def exercise():
         def state():
             return json.loads(cli("status", "--json"))
 
+        scale = float(env.get("SDL_VIDEO_X11_SCALING_FACTOR", "1"))
+
         def xdo(*args):
+            args = list(args)
+            for index, arg in enumerate(args):
+                if arg == "mousemove" and args[index+1] == "--window":
+                    args[index+3] = round(float(args[index+3])*scale)
+                    args[index+4] = round(float(args[index+4])*scale)
+                elif arg == "windowsize":
+                    args[index+2] = round(float(args[index+2])*scale)
+                    args[index+3] = round(float(args[index+3])*scale)
             return subprocess.run(["xdotool", *map(str, args)], env=env, check=True,
                                   text=True, capture_output=True, timeout=8).stdout.strip()
 
@@ -80,78 +91,175 @@ def exercise():
                 xdo("mousemove", "--window", window, x, y, "click", 1)
                 time.sleep(0.12)
 
-            # Live output begins privacy paused. The UI reads the daemon's actual state.
+            def ui():
+                for attempt in range(20):
+                    try:
+                        return json.loads((root / "ui.json").read_text())
+                    except (FileNotFoundError, json.JSONDecodeError):
+                        time.sleep(.03)
+                raise AssertionError("No native layout diagnostics")
+
+            def widget(identifier):
+                return next((w for w in ui()["widgets"]
+                             if w["id"] == identifier or w["key"] == identifier), None)
+
+            def click_widget(identifier):
+                wait_until(lambda: widget(identifier) and widget(identifier)["enabled"],
+                           f"Control {identifier} is unavailable")
+                for attempt in range(25):
+                    item = widget(identifier)
+                    x, y, w, h = item["box"]
+                    area = ui()["scroll"]
+                    inside_scroll = (item["id"] >= 1000 or 40 <= item["id"] < 90 or
+                                     100 <= item["id"] < 105 or 200 <= item["id"] < 300)
+                    if not inside_scroll or (y >= area[1] and y+h <= area[1]+area[3]):
+                        click(x+w/2, y+h/2)
+                        return
+                    xdo("mousemove", "--window", window, int(area[0]+area[2]/2),
+                        int(area[1]+area[3]/2), "click", 4 if y < area[1] else 5)
+                    time.sleep(.10)
+                raise AssertionError(f"Control {identifier} could not be reached by scrolling")
+
+            def navigate(tab):
+                if ui()["tab"] >= 0:
+                    click_widget(99)
+                    wait_until(lambda: ui()["tab"] == -1, "Back did not reach home")
+                click_widget(100+tab)
+                wait_until(lambda: ui()["tab"] == tab, "Section did not open")
+
+            def assert_preview():
+                wait_until(lambda: ui()["has_preview"], "Actual preview frame missing")
+                x, y, w, h = ui()["preview"]
+                geometry = xdo("getwindowgeometry", "--shell", window)
+                dimensions = dict(line.split("=", 1) for line in geometry.splitlines() if "=" in line)
+                assert w > 80 and h > 50 and x >= 0 and y >= 0
+                assert x+w <= int(dimensions["WIDTH"])/scale and y+h <= int(dimensions["HEIGHT"])/scale
+
+            def capture(name):
+                destination = os.environ.get("CAST_PANEL_TEST_SCREENSHOTS")
+                if destination:
+                    Path(destination).mkdir(parents=True, exist_ok=True)
+                    subprocess.run(["import", "-window", window,
+                                    str(Path(destination) / (name+".png"))], env=env, check=True)
+
+            # Home contains navigation and only currently relevant output actions.
+            assert ui()["tab"] == -1
+            assert ui()["density"] == scale
+            assert ui()["raster_font_size"] == 16*scale
             assert state()["live"]["state"] == "paused"
-            click(564, 84)
+            assert widget(31) is None and widget(33) is None
+            assert_preview()
+            click_widget(30)
             wait_until(lambda: state()["live"]["state"] == "live", "Resume live did not apply")
-            click(652, 84)
+            capture("home")
+            click_widget(31)
             wait_until(lambda: state()["live"]["state"] == "frozen", "Freeze did not apply")
-            click(652, 84)
+            click_widget(31)
             wait_until(lambda: state()["live"]["state"] == "live", "Unfreeze did not apply")
 
-            click(240, 352)
+            # Every screen keeps the actual preview and output controls accessible.
+            for tab in range(5):
+                navigate(tab)
+                assert_preview()
+                assert widget(30) and widget(32)
+            navigate(1)
+            capture("camera")
+            old = ui()["preview_panel"]
+            x, y, w, h = old
+            xdo("mousemove", "--window", window, int(x+w/2), int(y+h-15), "mousedown", 1,
+                "mousemove", "--window", window, int(x+w/2-60), int(y+h+20), "mouseup", 1)
+            wait_until(lambda: ui()["preview_panel"][0] < x-40, "Preview could not be dragged")
+            assert_preview()
+            moved = ui()["preview_panel"]
+            for identifier in (99, 30, 32):
+                bx, by, bw, bh = widget(identifier)["box"]
+                px, py, pw, ph = moved
+                assert px+pw <= bx or px >= bx+bw or py+ph <= by or py >= by+bh, "Preview obscured protected controls"
+            navigate(2)
+            assert ui()["preview_panel"] == moved, "Preview position reset during navigation"
+            # Return it to the reserved top corner before testing controls underneath.
+            x, y, w, h = moved
+            xdo("mousemove", "--window", window, int(x+w/2), int(y+h-15), "mousedown", 1,
+                "mousemove", "--window", window, int(old[0]+w/2), int(old[1]+h-15), "mouseup", 1)
+            time.sleep(.15)
+            click_widget(21)
+            wait_until(lambda: ui()["record_preview"], "Record preview was not selected")
+            assert_preview()
+            navigate(0)
+            assert ui()["record_preview"], "Preview target reset during navigation"
+            click_widget(20)
+            click_widget(51)
             wait_until(lambda: state()["layout"] == "split", "Split layout did not apply")
             cli("layout", "camera")
-            time.sleep(0.2)
-            click(52, 352)
+            time.sleep(.15)
+            click_widget(50)
             wait_until(lambda: state()["layout"] == "overlay", "CLI/UI layout synchronization failed")
 
-            # Start/pause/resume/stop are acknowledged asynchronously, preserving output state.
-            click(565, 128)
-            wait_until(lambda: state()["record"]["state"] == "recording", "Start record did not apply")
-            click(667, 128)
+            # Start/pause/resume/stop preserve independent live state and the same file.
+            click_widget(32)
+            wait_until(lambda: state()["record"]["state"] == "recording", "Record did not start")
+            click_widget(33)
             wait_until(lambda: state()["record"]["state"] == "paused", "Pause record did not apply")
-            click(667, 128)
+            click_widget(33)
             wait_until(lambda: state()["record"]["state"] == "recording", "Resume record did not apply")
-            click(565, 128)
+            click_widget(34)
+            wait_until(lambda: state()["live"]["state"] == "paused" and
+                       state()["record"]["state"] == "paused", "Pause all did not apply")
+            click_widget(34)
+            wait_until(lambda: state()["record"]["state"] == "recording", "Resume all did not apply")
+            click_widget(32)
             wait_until(lambda: state()["record"]["state"] == "stopped" and not state()["record"]["finalizing"],
                        "Stop record did not finalize")
 
-            # Pause text is an explicit draft until Apply (Enter is its keyboard equivalent).
-            click(382, 400)
-            click(404, 537)
+            # Drafts survive navigation and only Apply/Enter submits them.
+            navigate(4)
+            click_widget("output.pause_text")
             xdo("key", "--clearmodifiers", "ctrl+a")
             xdo("type", "--clearmodifiers", "--delay", "12", "Private session")
             assert state()["live"]["message"] != "Private session", "Editing applied a draft"
+            navigate(1)
+            navigate(4)
+            click_widget("output.pause_text")
             xdo("key", "--clearmodifiers", "Return")
-            wait_until(lambda: state()["live"]["message"] == "Private session",
-                       "Pause-message text edit did not apply")
-            # The CLI state can lead the next UI frame; let its Apply acknowledgment settle.
-            time.sleep(0.2)
-            xdo("key", "--clearmodifiers", "Tab", "Tab", "shift+Tab", "shift+Tab")
-            # XTest's transient Unicode keymap is unreliable; exercise native UTF-8 paste.
+            wait_until(lambda: state()["live"]["message"] == "Private session", "Draft did not survive navigation")
+            time.sleep(.2)
+            click_widget("output.pause_text")
+            xdo("key", "--clearmodifiers", "Tab", "shift+Tab")
             subprocess.run(["xclip", "-selection", "clipboard", "-loops", "2"], env=env,
                            input="Private café", text=True, stdout=subprocess.DEVNULL,
                            stderr=log, check=True, timeout=3)
-            xdo("key", "--clearmodifiers", "ctrl+v")
-            xdo("key", "--clearmodifiers", "Return")
-            wait_until(lambda: state()["live"]["message"] == "Private café",
-                       "Tab/Shift+Tab focus or UTF-8 text editing failed")
+            xdo("key", "--clearmodifiers", "ctrl+v", "Return")
+            wait_until(lambda: state()["live"]["message"] == "Private café", "UTF-8 paste or keyboard focus failed")
+            xdo("key", "--clearmodifiers", "Escape")
+            wait_until(lambda: ui()["tab"] == -1, "Escape did not return home")
 
-            # A valid dropdown selection works with native keyboard focus and arrows.
-            click(59, 400)
-            click(307, 699)
+            navigate(0)
+            click_widget("composition.fit")
             xdo("key", "--clearmodifiers", "Down", "Return")
-            time.sleep(0.25)
             original_zoom = state()["zoom"]
-            click(392, 753)
+            click_widget("zoom.factor")
             xdo("key", "--clearmodifiers", "ctrl+a")
             xdo("type", "--clearmodifiers", "99")
             xdo("key", "--clearmodifiers", "Return")
-            time.sleep(0.2)
-            assert state()["zoom"] == original_zoom, "Out-of-range input changed the daemon"
-            click(392, 753)
+            time.sleep(.2)
+            assert state()["zoom"] == original_zoom, "Invalid numeric value reached daemon"
+            click_widget("zoom.factor")
             xdo("key", "--clearmodifiers", "ctrl+a")
             xdo("type", "--clearmodifiers", "3.25")
             xdo("key", "--clearmodifiers", "Return")
-            wait_until(lambda: state()["zoom"] == 3.25, "Valid numeric input did not apply")
-            cli("layout", "screen")
+            wait_until(lambda: state()["zoom"] == 3.25, "Valid numeric edit did not apply")
 
-            # Compact layout keeps pause/record controls available and the same window identity.
-            xdo("windowsize", window, "540", "620")
-            time.sleep(0.2)
-            click(70, 220)
-            wait_until(lambda: state()["live"]["state"] == "paused", "Compact pause control failed")
+            # Minimum width keeps state, preview, controls, and section back navigation.
+            xdo("windowsize", window, "360", "640")
+            time.sleep(.2)
+            navigate(1)
+            assert_preview()
+            capture("narrow-camera")
+            click_widget(30)
+            wait_until(lambda: state()["live"]["state"] == "paused", "Narrow pause control failed")
+            click_widget(99)
+            capture("narrow-home")
+            assert_preview()
 
             # A lost daemon does not close the window; it reconnects to a new generation.
             cli("quit")
@@ -161,7 +269,7 @@ def exercise():
             daemon = start_daemon()
             wait_until(lambda: (root / "daemon.sock").exists(), "daemon restart did not open socket")
             time.sleep(0.9)
-            click(70, 220)
+            click_widget(30)
             wait_until(lambda: state()["live"]["state"] == "live", "Panel did not reconnect")
             xdo("key", "--clearmodifiers", "ctrl+q")
             assert panel.wait(timeout=8) == 0, "panel window did not close cleanly"
@@ -187,8 +295,8 @@ if __name__ == "__main__":
         if not shutil.which(dependency):
             raise SystemExit(f"native panel check requires {dependency}")
     if "--inside" not in sys.argv:
-        result = subprocess.run(["xvfb-run", "-a", "-s", "-screen 0 1280x1024x24",
-                                 sys.executable, __file__, "--inside"], timeout=90)
+        result = subprocess.run(["xvfb-run", "-a", "-s", "-screen 0 2048x2048x24",
+                                 sys.executable, __file__, "--inside"], timeout=120)
         raise SystemExit(result.returncode)
     exercise()
-    print("native panel: live/record, settings drafts, keyboard focus, resize, reconnect, clean close passed")
+    print("native panel: navigation, persistent draggable preview, live/record, drafts, UTF-8, keyboard, 360px resize, reconnect passed")
