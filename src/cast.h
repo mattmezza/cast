@@ -58,6 +58,13 @@ typedef struct {
     char preview_target[16];
     uint32_t pause_color;
     char pause_text[128];
+    char pause_subtitle[256], pause_font[256];
+    uint32_t pause_foreground;
+    int pause_title_size, pause_subtitle_size;
+    char blur_title[128], blur_subtitle[256], blur_font[256];
+    uint32_t blur_color, blur_foreground;
+    int blur_radius, blur_title_size, blur_subtitle_size;
+    double blur_opacity;
     int ipc_timeout_ms;
     Preset presets[CAST_MAX_PRESETS];
     int preset_count;
@@ -122,7 +129,11 @@ Compositor *compositor_create(void);
 void compositor_destroy(Compositor *);
 int compositor_render(Compositor *, const Config *, const Frame *, const Frame *, const Cursor *,
                       bool, Frame *, char *, size_t);
-void compositor_neutral(const Config *, Frame *);
+/* Validate/load candidate fonts atomically before applying configuration. */
+int compositor_prepare(Compositor *, const Config *, char *, size_t);
+int compositor_neutral(Compositor *, const Config *, Frame *, char *, size_t);
+/* In-place output effect; callers select/copy their unmodified or frozen lane first. */
+int compositor_blur(Compositor *, const Config *, Frame *, char *, size_t);
 void compositor_clear(Compositor *);
 void compositor_click(Compositor *, int, int, int, uint64_t);
 /* Keep only bounded transient display labels; adjacent repeats refresh one row. */

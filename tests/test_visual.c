@@ -1,4 +1,5 @@
 #include "cast.h"
+#include "presentation_text.h"
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
@@ -107,8 +108,227 @@ static void test_geometry(void)
     cfg.camera_y = 9000;
     assert(compositor_geometry(&cfg, 1920, 1080, &x, &y, &w, &h, error, sizeof(error)) == 0);
     assert(x == 20 && y == 20);
+    cfg.camera_width_percent = 25;
+    snprintf(cfg.shape, sizeof(cfg.shape), "rectangle");
+    const char *anchors[] = {"top",        "bottom",        "left",        "right",
+                             "top-center", "bottom-center", "center-left", "center-right"};
+    for (size_t i = 0; i < sizeof anchors / sizeof *anchors; i++) {
+        snprintf(cfg.anchor, sizeof cfg.anchor, "%s", anchors[i]);
+        assert(!compositor_geometry(&cfg, 1920, 1080, &x, &y, &w, &h, error, sizeof error));
+        int side = (int)i % 4;
+        if (side < 2) {
+            assert(x == (cfg.width - w) / 2);
+            assert(y == (side == 0 ? cfg.margin : cfg.height - cfg.margin - h));
+        } else {
+            assert(y == (cfg.height - h) / 2);
+            assert(x == (side == 2 ? cfg.margin : cfg.width - cfg.margin - w));
+        }
+        cfg.camera_width_percent += 5;
+        int resized_x, resized_y, resized_w, resized_h;
+        assert(!compositor_geometry(&cfg, 1920, 1080, &resized_x, &resized_y, &resized_w,
+                                    &resized_h, error, sizeof error));
+        if (side < 2) {
+            assert(resized_x == (cfg.width - resized_w) / 2);
+            assert(resized_y == (side == 0 ? cfg.margin : cfg.height - cfg.margin - resized_h));
+        } else {
+            assert(resized_y == (cfg.height - resized_h) / 2);
+            assert(resized_x == (side == 2 ? cfg.margin : cfg.width - cfg.margin - resized_w));
+        }
+        cfg.camera_width_percent -= 5;
+    }
     cfg.margin = 300;
     assert(compositor_geometry(&cfg, 1920, 1080, &x, &y, &w, &h, error, sizeof(error)) < 0);
+}
+
+static void test_text_templates(void)
+{
+    struct tm captured = {.tm_year = 126,
+                          .tm_mon = 9,
+                          .tm_mday = 2,
+                          .tm_hour = 14,
+                          .tm_min = 37,
+                          .tm_sec = 59,
+                          .tm_wday = 5,
+                          .tm_yday = 274};
+    char output[256], error[CAST_ERR];
+    const char *input = "{{Meet}} {date} {time} {datetime} {date:%d/%m/%Y} {time:%Hh%M}";
+    assert(!presentation_template_expand(input, &captured, output, sizeof output, error,
+                                         sizeof error));
+    assert(!strcmp(output, "{Meet} 2026-10-02 14:37:59 2026-10-02 14:37:59 02/10/2026 14h37"));
+    assert(!presentation_template_expand("café {{date}}", &captured, output, sizeof output, error,
+                                         sizeof error));
+    assert(!strcmp(output, "café {date}"));
+    assert(!presentation_template_expand("$(date) `time`", &captured, output, sizeof output, error,
+                                         sizeof error));
+    assert(!strcmp(output, "$(date) `time`")); /* Plain text, never shell execution. */
+    const char *invalid[] = {"{unknown}",     "{date",     "date}",
+                             "{time:}",       "{date:%Q}", "{date:%999999999Y}",
+                             "{date:{time}}", "\xc0\x80",  "\xed\xa0\x80"};
+    for (size_t i = 0; i < sizeof invalid / sizeof *invalid; i++) {
+        assert(presentation_template_validate(invalid[i], error, sizeof error) < 0);
+        assert(error[0]);
+    }
+    struct {
+        char value[8];
+        unsigned char guard[8];
+    } bounded = {.guard = {0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa}};
+    assert(presentation_template_expand("{datetime}", &captured, bounded.value,
+                                        sizeof bounded.value, error, sizeof error) < 0);
+    for (size_t i = 0; i < sizeof bounded.guard; i++) {
+        assert(bounded.guard[i] == 0xaa);
+    }
+}
+
+static void assert_solid(const Frame *frame, uint32_t color)
+{
+    for (int y = 0; y < frame->height; y++) {
+        for (int x = 0; x < frame->width; x++) {
+            assert(at(frame, x, y) == color);
+            assert(frame->data[(size_t)y * frame->stride + x * 4 + 3] == 255);
+        }
+    }
+}
+
+static void test_styled_text(void)
+{
+    Config cfg = config(320, 180);
+    strcpy(cfg.pause_font, "Noto Sans");
+    strcpy(cfg.blur_font, "Noto Sans");
+    cfg.pause_foreground = cfg.blur_foreground = 0xffffff;
+    cfg.pause_title_size = cfg.blur_title_size = 48;
+    cfg.pause_subtitle_size = cfg.blur_subtitle_size = 24;
+    cfg.pause_color = 0x123456;
+    cfg.blur_radius = 16;
+    cfg.blur_opacity = .5;
+    Compositor *c = compositor_create();
+    assert(c);
+    Frame out = {0}, expected = {0};
+    char error[CAST_ERR];
+    assert(!compositor_neutral(c, &cfg, &out, error, sizeof error));
+    assert_solid(&out, cfg.pause_color); /* Both text fields are optional. */
+    strcpy(cfg.pause_subtitle, "Réunion – café");
+    assert(!compositor_neutral(c, &cfg, &out, error, sizeof error));
+    int left = out.width, right = 0, top = out.height, bottom = 0;
+    bool antialiased = false, opaque = false;
+    for (int y = 0; y < out.height; y++) {
+        for (int x = 0; x < out.width; x++) {
+            uint32_t color = at(&out, x, y);
+            if (color != cfg.pause_color) {
+                if (x < left) {
+                    left = x;
+                }
+                if (x > right) {
+                    right = x;
+                }
+                if (y < top) {
+                    top = y;
+                }
+                if (y > bottom) {
+                    bottom = y;
+                }
+                opaque |= color == cfg.pause_foreground;
+                antialiased |= color != cfg.pause_foreground;
+            }
+        }
+    }
+    assert(left < right && top < bottom && opaque && antialiased);
+    assert(abs(left + right + 1 - out.width) <= 1);
+    assert(abs(top + bottom + 1 - out.height) <= 1);
+    strcpy(cfg.pause_text, "Title");
+    assert(!compositor_neutral(c, &cfg, &out, error, sizeof error));
+    assert(!frame_copy(&expected, &out));
+    Config bad = cfg;
+    strcpy(bad.pause_font, "serif");
+    strcpy(bad.blur_font, "Noto Sans:file=/no/such/cast-font.ttf");
+    assert(compositor_prepare(c, &bad, error, sizeof error) < 0);
+    assert(strstr(error, "font file"));
+    assert(!compositor_neutral(c, &cfg, &out, error, sizeof error));
+    assert(!memcmp(out.data, expected.data, (size_t)out.stride * out.height));
+    /* Expansion and literal messages use exactly the same styled renderer. */
+    strcpy(cfg.pause_text, "{date:Title}");
+    assert(!compositor_neutral(c, &cfg, &out, error, sizeof error));
+    assert(!memcmp(out.data, expected.data, (size_t)out.stride * out.height));
+    cfg.width = 80;
+    cfg.height = 40;
+    strcpy(cfg.pause_text, "A very long title with café and accented UTF-8");
+    strcpy(cfg.pause_subtitle, "A second line");
+    cfg.pause_title_size = cfg.pause_subtitle_size = 256;
+    assert(!compositor_neutral(c, &cfg, &out, error, sizeof error));
+    for (int x = 0; x < out.width; x++) {
+        assert(at(&out, x, 0) == cfg.pause_color);
+        assert(at(&out, x, out.height - 1) == cfg.pause_color);
+    }
+    cfg.pause_text[0] = cfg.pause_subtitle[0] = 0;
+    assert(!compositor_neutral(c, &cfg, &out, error, sizeof error));
+    assert_solid(&out, cfg.pause_color); /* No cached previous message remains. */
+    frame_free(&out);
+    frame_free(&expected);
+    compositor_destroy(c);
+}
+
+static void test_blurred_frames(void)
+{
+    Config cfg = config(100, 60);
+    cfg.blur_radius = 8;
+    cfg.blur_opacity = 0;
+    cfg.blur_foreground = 0xffffff;
+    cfg.blur_title_size = 24;
+    cfg.blur_subtitle_size = 12;
+    strcpy(cfg.blur_font, "Noto Sans");
+    strcpy(cfg.pause_font, "Noto Sans");
+    Compositor *c = compositor_create();
+    assert(c);
+    char error[CAST_ERR];
+    Frame uniform = source(100, 60, 0x123456, false);
+    assert(!compositor_blur(c, &cfg, &uniform, error, sizeof error));
+    assert_solid(&uniform, 0x123456);
+    cfg.blur_opacity = 1;
+    cfg.blur_color = 0xabcdef;
+    assert(!compositor_blur(c, &cfg, &uniform, error, sizeof error));
+    assert_solid(&uniform, cfg.blur_color);
+    Frame impulse = source(100, 60, 0, false), narrow = {0}, broad = {0};
+    uint8_t *center = impulse.data + 30 * impulse.stride + 50 * 4;
+    center[0] = center[1] = center[2] = 255;
+    assert(!frame_copy(&narrow, &impulse) && !frame_copy(&broad, &impulse));
+    cfg.blur_opacity = 0;
+    cfg.blur_radius = 1;
+    assert(!compositor_blur(c, &cfg, &narrow, error, sizeof error));
+    cfg.blur_radius = 4;
+    assert(!compositor_blur(c, &cfg, &broad, error, sizeof error));
+    assert(at(&narrow, 50, 30) < 0xffffff && at(&narrow, 50, 30) > 0);
+    assert(at(&narrow, 50, 30) > at(&broad, 50, 30));
+    assert(at(&narrow, 54, 30) == 0);
+    assert(at(&impulse, 50, 30) == 0xffffff); /* The selected raw/frozen frame stays untouched. */
+    Frame a = source(100, 60, 0x123456, false), b = source(100, 60, 0x123456, false);
+    strcpy(cfg.blur_title, "Title");
+    strcpy(cfg.blur_subtitle, "Subtitle");
+    cfg.blur_opacity = 1;
+    cfg.blur_color = cfg.pause_color = 0x203040;
+    cfg.pause_foreground = cfg.blur_foreground;
+    cfg.pause_title_size = cfg.blur_title_size;
+    cfg.pause_subtitle_size = cfg.blur_subtitle_size;
+    strcpy(cfg.pause_text, cfg.blur_title);
+    strcpy(cfg.pause_subtitle, cfg.blur_subtitle);
+    assert(!compositor_blur(c, &cfg, &a, error, sizeof error));
+    assert(!compositor_neutral(c, &cfg, &b, error, sizeof error));
+    assert(!memcmp(a.data, b.data, (size_t)a.stride * a.height));
+    assert(a.ts_ns == now); /* Blur preserves the selected lane's timestamp. */
+    cfg.blur_title[0] = cfg.blur_subtitle[0] = 0;
+    cfg.blur_opacity = .5;
+    cfg.blur_color = 0x000000;
+    Frame large = source(1280, 720, 0x2468ac, false);
+    assert(!compositor_blur(c, &cfg, &large, error, sizeof error));
+    assert_solid(&large, 0x123456); /* Bounded downsample path preserves uniform colour. */
+    cfg.blur_radius = 0;
+    assert(compositor_blur(c, &cfg, &large, error, sizeof error) < 0);
+    frame_free(&uniform);
+    frame_free(&impulse);
+    frame_free(&narrow);
+    frame_free(&broad);
+    frame_free(&a);
+    frame_free(&b);
+    frame_free(&large);
+    compositor_destroy(c);
 }
 
 static void test_layout_and_masks(void)
@@ -239,7 +459,9 @@ static void test_neutral(void)
     cfg.pause_color = 0x334455;
     snprintf(cfg.pause_text, sizeof(cfg.pause_text), "Paused");
     Frame out = {0};
-    compositor_neutral(&cfg, &out);
+    Compositor *c = compositor_create();
+    char error[CAST_ERR];
+    assert(compositor_neutral(c, &cfg, &out, error, sizeof error) == 0);
     assert(at(&out, 0, 0) == 0x334455);
     bool found = false;
     for (int y = 0; y < out.height; y++) {
@@ -249,6 +471,7 @@ static void test_neutral(void)
     }
     assert(found && out.ts_ns == now);
     frame_free(&out);
+    compositor_destroy(c);
 }
 
 /* Compare the synthetic input sequence with literal display labels, so repeat
@@ -493,6 +716,9 @@ int main(void)
     test_follow_lane_consistency();
     test_screen_sampling();
     test_neutral();
+    test_text_templates();
+    test_styled_text();
+    test_blurred_frames();
     test_key_history();
     test_key_canvas_bounds();
     puts("visual: owned frames, geometry, masks, fitting, crop/mirror, zoom transforms and lane "

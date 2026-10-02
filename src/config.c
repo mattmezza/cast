@@ -1,5 +1,6 @@
 #include "cast.h"
 #include "ini.h"
+#include "presentation_text.h"
 #include <ctype.h>
 #include <errno.h>
 #include <math.h>
@@ -33,6 +34,9 @@ typedef struct {
     {sec, key, T_DOUBLE, offsetof(Config, field), 0, min, max, NULL, def}
 #define B(sec, key, field, def) {sec, key, T_BOOL, offsetof(Config, field), 0, 0, 0, NULL, def}
 #define C(sec, key, field, def) {sec, key, T_COLOR, offsetof(Config, field), 0, 0, 0, NULL, def}
+#define ANCHORS                                                                                    \
+    "top-left,top-right,bottom-left,bottom-right,top,bottom,left,right,free,"                      \
+    "top-center,bottom-center,center-left,center-right"
 static const Setting settings[] = {
     E("output", "backend", backend, "xorg,wayland,synthetic", "xorg"),
     S("output", "device", output_device, "/dev/video10"),
@@ -40,14 +44,27 @@ static const Setting settings[] = {
     I("output", "height", height, 64, 4320, "1080"),
     I("output", "fps", fps, 1, 120, "30"),
     B("output", "enabled", live_enabled, "true"),
-    C("output", "pause_color", pause_color, "#20252b"),
-    S("output", "pause_text", pause_text, "Paused"),
+    C("output", "pause_background", pause_color, "#20252b"),
+    S("output", "pause_title", pause_text, "Paused"),
+    S("output", "pause_subtitle", pause_subtitle, ""),
+    S("output", "pause_font", pause_font, "Noto Sans"),
+    C("output", "pause_foreground", pause_foreground, "#ffffff"),
+    I("output", "pause_title_size", pause_title_size, 8, 256, "48"),
+    I("output", "pause_subtitle_size", pause_subtitle_size, 8, 256, "24"),
+    S("output", "blur_title", blur_title, "Blurred"),
+    S("output", "blur_subtitle", blur_subtitle, ""),
+    S("output", "blur_font", blur_font, "Noto Sans"),
+    C("output", "blur_color", blur_color, "#101113"),
+    C("output", "blur_foreground", blur_foreground, "#ffffff"),
+    I("output", "blur_radius", blur_radius, 1, 128, "32"),
+    D("output", "blur_opacity", blur_opacity, 0, 1, "0.60"),
+    I("output", "blur_title_size", blur_title_size, 8, 256, "48"),
+    I("output", "blur_subtitle_size", blur_subtitle_size, 8, 256, "24"),
     S("camera", "device", camera_device, "/dev/video0"),
     B("camera", "enabled", camera_enabled, "true"),
     B("camera", "visible", camera_visible, "true"),
     E("camera", "shape", shape, "rectangle,rounded,circle", "rounded"),
-    E("camera", "anchor", anchor, "top-left,top-right,bottom-left,bottom-right,free",
-      "bottom-right"),
+    E("camera", "anchor", anchor, ANCHORS, "bottom-right"),
     E("camera", "aspect", aspect, "native,16:9,4:3,1:1", "native"),
     D("camera", "width_percent", camera_width_percent, 1, 100, "22"),
     I("camera", "margin", margin, 0, 4096, "24"),
@@ -152,6 +169,25 @@ static bool choice(const char *s, const char *list)
     }
     return false;
 }
+static const char *canonical_key(const char *section, const char *key)
+{
+    if (!strcmp(section, "output")) {
+        if (!strcmp(key, "pause_text")) {
+            return "pause_title";
+        }
+        if (!strcmp(key, "pause_color")) {
+            return "pause_background";
+        }
+    }
+    return key;
+}
+static bool template_setting(const Setting *setting)
+{
+    return setting->offset == offsetof(Config, pause_text) ||
+           setting->offset == offsetof(Config, pause_subtitle) ||
+           setting->offset == offsetof(Config, blur_title) ||
+           setting->offset == offsetof(Config, blur_subtitle);
+}
 static int assign(void *base, const Setting *s, const char *v, char *err, size_t n)
 {
     char *p = (char *)base + s->offset, *end;
@@ -165,6 +201,10 @@ static int assign(void *base, const Setting *s, const char *v, char *err, size_t
         }
         if (s->type == T_ENUM && !choice(v, s->choices)) {
             return fail(err, n, "%s.%s expects one of %s", s->section, s->key, s->choices);
+        }
+        if (!strcmp(s->section, "output") && template_setting(s) &&
+            presentation_template_validate(v, err, n)) {
+            return -1;
         }
         strcpy(p, v);
         break;
@@ -218,10 +258,17 @@ int config_set_value(Config *config, const char *name, const char *value, char *
         return fail(error, size, "setting name must be SECTION.KEY");
     }
     size_t section_length = (size_t)(dot - name);
+    char section[64];
+    if (section_length >= sizeof section) {
+        return fail(error, size, "unknown setting %s", name);
+    }
+    memcpy(section, name, section_length);
+    section[section_length] = 0;
+    const char *key = canonical_key(section, dot + 1);
     for (size_t i = 0; i < NSET; i++) {
         const Setting *setting = &settings[i];
         if (strlen(setting->section) == section_length &&
-            !strncmp(name, setting->section, section_length) && !strcmp(dot + 1, setting->key)) {
+            !strncmp(name, setting->section, section_length) && !strcmp(key, setting->key)) {
             Config candidate = *config;
             if (assign(&candidate, setting, value, error, size)) {
                 return -1;
@@ -290,6 +337,9 @@ int config_validate(const Config *c, char *err, size_t n)
             return fail(err, n, "%s.%s expects one of %s", setting->section, setting->key,
                         setting->choices);
         }
+        if (template_setting(setting) && presentation_template_validate(value, err, n)) {
+            return -1;
+        }
         if (setting->type == T_INT) {
             int number = *(const int *)value;
             if (number < setting->min || number > setting->max) {
@@ -334,7 +384,10 @@ int config_validate(const Config *c, char *err, size_t n)
     if (c->virtual_audio && !c->virtual_name[0]) {
         return fail(err, n, "virtual microphone name must not be empty");
     }
-    if (valid_list(c->corner_order, "top-left,top-right,bottom-left,bottom-right", err, n) ||
+    if (!c->pause_font[0] || !c->blur_font[0]) {
+        return fail(err, n, "output.pause_font and output.blur_font cannot be empty");
+    }
+    if (valid_list(c->corner_order, ANCHORS, err, n) ||
         valid_list(c->layout_order, "overlay,split,screen,camera", err, n)) {
         return -1;
     }
@@ -409,7 +462,7 @@ static int preset_assign(Preset *p, const char *key, const char *value, char *e,
     } else if (!strcmp(key, "camera_anchor")) {
         s.offset = offsetof(Preset, camera_anchor);
         s.size = sizeof p->camera_anchor;
-        s.choices = "top-left,top-right,bottom-left,bottom-right,free";
+        s.choices = ANCHORS;
         bit = 64;
     } else if (!strcmp(key, "camera_aspect")) {
         s.offset = offsetof(Preset, camera_aspect);
@@ -471,6 +524,7 @@ static int handler(void *u, const char *section, const char *key, const char *va
     if (!key) {
         return 1;
     }
+    key = canonical_key(section, key);
     if (snprintf(full, sizeof full, "%s.%s", section, key) >= (int)sizeof full) {
         fail(p->err, p->n, "%s:%d: key too long", p->path, line);
         return 0;

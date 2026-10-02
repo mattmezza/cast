@@ -26,8 +26,48 @@ static void load_test(const char *text, bool pass, Config *c)
     }
     unlink(path);
 }
+static void test_presentation_config(void)
+{
+    Config c;
+    config_defaults(&c);
+    char error[CAST_ERR];
+    assert(c.pause_foreground == 0xffffff && c.blur_radius == 32 && c.blur_opacity == .60);
+    assert(!strcmp(c.pause_font, "Noto Sans") && !strcmp(c.blur_font, "Noto Sans"));
+    load_test("[output]\npause_text=Back at {time:%H:%M}\npause_color=#123456\n", true, &c);
+    assert(!strcmp(c.pause_text, "Back at {time:%H:%M}") && c.pause_color == 0x123456);
+    load_test("[output]\npause_title=Réunion {{private}}\npause_subtitle={date}\n"
+              "pause_background=#234567\npause_foreground=#000000\n"
+              "pause_title_size=56\npause_subtitle_size=28\nblur_title=Break\n"
+              "blur_subtitle={datetime:%Y-%m-%d %H:%M}\nblur_color=#345678\n"
+              "blur_foreground=#fedcba\nblur_radius=48\nblur_opacity=0.75\n",
+              true, &c);
+    assert(c.pause_color == 0x234567 && c.pause_foreground == 0 && c.pause_title_size == 56);
+    assert(!strcmp(c.pause_subtitle, "{date}") && c.blur_radius == 48 && c.blur_opacity == .75);
+    load_test("[output]\npause_title=One\npause_text=Two\n", false, &c);
+    load_test("[output]\npause_background=#111111\npause_color=#222222\n", false, &c);
+    load_test("[output]\npause_title={password}\n", false, &c);
+    load_test("[output]\nblur_subtitle={date\n", false, &c);
+    load_test("[output]\npause_subtitle={time:%Q}\n", false, &c);
+    load_test("[output]\npause_subtitle={time:%99999999999Y}\n", false, &c);
+    load_test("[output]\nblur_radius=0\n", false, &c);
+    load_test("[output]\nblur_radius=129\n", false, &c);
+    load_test("[output]\nblur_opacity=nan\n", false, &c);
+    load_test("[output]\npause_font=\n", false, &c);
+    load_test("[output]\npause_title=\npause_subtitle=\nblur_title=\nblur_subtitle=\n", true, &c);
+    const char *anchors[] = {"top",        "bottom",        "left",        "right",
+                             "top-center", "bottom-center", "center-left", "center-right"};
+    for (size_t i = 0; i < sizeof anchors / sizeof *anchors; i++) {
+        assert(!config_set_value(&c, "camera.anchor", anchors[i], error, sizeof error));
+        assert(!config_validate(&c, error, sizeof error));
+    }
+    load_test("[camera]\nanchor=top\ncorner_order=top,right,bottom,left\n"
+              "[preset.edges]\ncamera_anchor=center-left\n",
+              true, &c);
+    assert(!strcmp(c.anchor, "top"));
+}
 int main(void)
 {
+    test_presentation_config();
     Config c;
     config_defaults(&c);
     char e[CAST_ERR];

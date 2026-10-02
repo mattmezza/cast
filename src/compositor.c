@@ -1,5 +1,6 @@
 /* Shared RGBA composition. Original bitmap glyphs below are part of cast's license. */
 #include "cast.h"
+#include "presentation_text.h"
 #include <errno.h>
 #include <limits.h>
 #include <math.h>
@@ -27,6 +28,7 @@ struct Compositor {
     unsigned next;
     Key keys[KEY_MAX];
     unsigned key_count;
+    PresentationText *presentation;
 };
 typedef struct {
     double sx, sy, sw, sh, dx, dy, dw, dh;
@@ -96,6 +98,9 @@ Compositor *compositor_create(void)
 }
 void compositor_destroy(Compositor *c)
 {
+    if (c) {
+        presentation_text_destroy(c->presentation);
+    }
     free(c);
 }
 void compositor_clear(Compositor *c)
@@ -335,26 +340,129 @@ static void keys_draw(Compositor *c, const Config *cfg, Frame *out, uint64_t now
         text(out, label, x + padding, row_y + padding, scale, cfg->keys_color);
     }
 }
-void compositor_neutral(const Config *cfg, Frame *f)
+int compositor_prepare(Compositor *c, const Config *cfg, char *error, size_t n)
 {
+    if (!c || !cfg) {
+        return fail(error, n, "composition and configuration are required");
+    }
+    if (!c->presentation) {
+        c->presentation = presentation_text_create();
+        if (!c->presentation) {
+            return fail(error, n, "cannot initialize FreeType presentation text renderer");
+        }
+    }
+    return presentation_text_prepare(c->presentation, cfg, error, n);
+}
+int compositor_neutral(Compositor *c, const Config *cfg, Frame *f, char *error, size_t n)
+{
+    if (compositor_prepare(c, cfg, error, n)) {
+        return -1;
+    }
     if (frame_alloc(f, cfg->width, cfg->height) < 0) {
-        return;
+        return fail(error, n, "cannot allocate solid paused frame");
     }
     fill(f, cfg->pause_color);
-    int scale = cfg->height / 180;
-    if (scale < 1) {
-        scale = 1;
-    }
-    int maxscale = cfg->pause_text[0] ? cfg->width / ((int)strlen(cfg->pause_text) * 6 + 4) : scale;
-    if (maxscale < scale) {
-        scale = maxscale;
-    }
-    if (scale < 1) {
-        scale = 1;
-    }
-    text(f, cfg->pause_text, (cfg->width - (int)strlen(cfg->pause_text) * 6 * scale) / 2,
-         (cfg->height - 7 * scale) / 2, scale, 0xffffff);
     f->ts_ns = cast_now_ns();
+    return presentation_text_draw(c->presentation, cfg, false, f, error, n);
+}
+/* Three sliding-window box passes approximate a Gaussian, at linear cost in pixels.
+ * Larger output canvases are sampled to a bounded working image before filtering. */
+static void blur_pass(const uint8_t *src, uint8_t *dst, int width, int height, int radius,
+                      bool vertical)
+{
+    int lines = vertical ? width : height, length = vertical ? height : width;
+    int stride = vertical ? width * 4 : 4;
+    unsigned divisor = (unsigned)(radius * 2 + 1);
+    for (int line = 0; line < lines; line++) {
+        int offset = vertical ? line * 4 : line * width * 4;
+        unsigned sum[3] = {0};
+        for (int i = -radius; i <= radius; i++) {
+            int index = i < 0 ? 0 : i >= length ? length - 1 : i;
+            const uint8_t *pixel = src + offset + index * stride;
+            for (int ch = 0; ch < 3; ch++) {
+                sum[ch] += pixel[ch];
+            }
+        }
+        for (int i = 0; i < length; i++) {
+            uint8_t *pixel = dst + offset + i * stride;
+            for (int ch = 0; ch < 3; ch++) {
+                pixel[ch] = (uint8_t)((sum[ch] + divisor / 2) / divisor);
+            }
+            pixel[3] = 255;
+            int removed = i - radius, added = i + radius + 1;
+            removed = removed < 0 ? 0 : removed;
+            added = added >= length ? length - 1 : added;
+            const uint8_t *old = src + offset + removed * stride;
+            const uint8_t *next = src + offset + added * stride;
+            for (int ch = 0; ch < 3; ch++) {
+                sum[ch] += next[ch];
+                sum[ch] -= old[ch];
+            }
+        }
+    }
+}
+int compositor_blur(Compositor *c, const Config *cfg, Frame *frame, char *error, size_t n)
+{
+    if (!frame || !frame->data || frame->width < 1 || frame->height < 1 ||
+        frame->stride < frame->width * 4) {
+        return fail(error, n, "blur requires an owned RGBA frame");
+    }
+    if (compositor_prepare(c, cfg, error, n)) {
+        return -1;
+    }
+    if (cfg->blur_radius < 1 || cfg->blur_radius > 128 || !isfinite(cfg->blur_opacity) ||
+        cfg->blur_opacity < 0 || cfg->blur_opacity > 1) {
+        return fail(error, n, "blur radius must be 1..128 and opacity must be 0..1");
+    }
+    int step = (int)fmax(1, ceil(fmax((double)frame->width / 640, (double)frame->height / 360)));
+    int width = (frame->width + step - 1) / step, height = (frame->height + step - 1) / step;
+    size_t bytes = (size_t)width * height * 4;
+    uint8_t *first = malloc(bytes), *second = malloc(bytes);
+    if (!first || !second) {
+        free(first);
+        free(second);
+        return fail(error, n, "cannot allocate bounded blur working image");
+    }
+    /* Average every source pixel during downsampling rather than aliasing fine text. */
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            unsigned sum[3] = {0}, count = 0;
+            for (int sy = y * step; sy < (y + 1) * step && sy < frame->height; sy++) {
+                for (int sx = x * step; sx < (x + 1) * step && sx < frame->width; sx++) {
+                    const uint8_t *pixel = frame->data + (size_t)sy * frame->stride + sx * 4;
+                    for (int ch = 0; ch < 3; ch++) {
+                        sum[ch] += pixel[ch];
+                    }
+                    count++;
+                }
+            }
+            uint8_t *pixel = first + ((size_t)y * width + x) * 4;
+            for (int ch = 0; ch < 3; ch++) {
+                pixel[ch] = (uint8_t)((sum[ch] + count / 2) / count);
+            }
+            pixel[3] = 255;
+        }
+    }
+    int radius = (int)fmax(1, lround((double)cfg->blur_radius / step));
+    for (int pass = 0; pass < 3; pass++) {
+        blur_pass(first, second, width, height, radius, false);
+        blur_pass(second, first, width, height, radius, true);
+    }
+    unsigned alpha = (unsigned)lround(cfg->blur_opacity * 255);
+    for (int y = 0; y < frame->height; y++) {
+        for (int x = 0; x < frame->width; x++) {
+            const uint8_t *sample = first + ((size_t)(y / step) * width + x / step) * 4;
+            uint8_t *pixel = frame->data + (size_t)y * frame->stride + x * 4;
+            for (int ch = 0; ch < 3; ch++) {
+                unsigned tint = (cfg->blur_color >> (16 - ch * 8)) & 255;
+                pixel[ch] = (uint8_t)((tint * alpha + sample[ch] * (255 - alpha) + 127) / 255);
+            }
+            pixel[3] = 255;
+        }
+    }
+    free(first);
+    free(second);
+    return presentation_text_draw(c->presentation, cfg, true, frame, error, n);
 }
 static double camera_aspect(const Config *cfg, int sw, int sh)
 {
@@ -405,6 +513,18 @@ int compositor_geometry(const Config *cfg, int sw, int sh, int *x, int *y, int *
     } else if (!strcmp(cfg->anchor, "bottom-right")) {
         cx = cfg->width - cfg->margin - cw;
         cy = cfg->height - cfg->margin - ch;
+    } else if (!strcmp(cfg->anchor, "top") || !strcmp(cfg->anchor, "top-center")) {
+        cx = (cfg->width - cw) / 2;
+        cy = cfg->margin;
+    } else if (!strcmp(cfg->anchor, "bottom") || !strcmp(cfg->anchor, "bottom-center")) {
+        cx = (cfg->width - cw) / 2;
+        cy = cfg->height - cfg->margin - ch;
+    } else if (!strcmp(cfg->anchor, "left") || !strcmp(cfg->anchor, "center-left")) {
+        cx = cfg->margin;
+        cy = (cfg->height - ch) / 2;
+    } else if (!strcmp(cfg->anchor, "right") || !strcmp(cfg->anchor, "center-right")) {
+        cx = cfg->width - cfg->margin - cw;
+        cy = (cfg->height - ch) / 2;
     }
     cx = (int)clampd(cx, cfg->margin, cfg->width - cfg->margin - cw);
     cy = (int)clampd(cy, cfg->margin, cfg->height - cfg->margin - ch);
