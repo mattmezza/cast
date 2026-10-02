@@ -30,6 +30,10 @@ typedef struct {
     double camera_width_percent, split_ratio;
     int margin, radius, border_width;
     uint32_t border_color;
+    char camera_background[16];
+    uint32_t camera_background_color;
+    int camera_background_blur_radius;
+    double camera_background_brightness;
     int camera_x, camera_y, crop_x, crop_y;
     bool camera_visible, mirror;
     char corner_order[128], layout_order[128], preset_order[256], monitor[128];

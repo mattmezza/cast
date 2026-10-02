@@ -64,6 +64,14 @@ static void test_presentation_config(void)
               "[preset.edges]\ncamera_anchor=center-left\n",
               true, &c);
     assert(!strcmp(c.anchor, "top"));
+    load_test("[camera]\nbackground=gradient\nbackground_color=#223344\n"
+              "background_blur_radius=100\nbackground_brightness=0.30\n",
+              true, &c);
+    assert(!strcmp(c.camera_background, "gradient") && c.camera_background_color == 0x223344);
+    assert(c.camera_background_blur_radius == 100 && c.camera_background_brightness == .30);
+    load_test("[camera]\nbackground=unknown\n", false, &c);
+    load_test("[camera]\nbackground_brightness=-1\n", false, &c);
+    load_test("[camera]\nbackground_blur_radius=129\n", false, &c);
 }
 int main(void)
 {

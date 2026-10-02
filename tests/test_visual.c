@@ -32,6 +32,9 @@ static Config config(int w, int h)
     c.click_radius = 10;
     c.click_left_color = 0xff0000;
     c.click_right_color = 0x00ff00;
+    c.camera_background_color = 0x20252b;
+    c.camera_background_blur_radius = 96;
+    c.camera_background_brightness = .25;
     c.annotations_live_keys = c.annotations_record_keys = true;
     c.annotations_live_clicks = c.annotations_record_clicks = true;
     snprintf(c.layout, sizeof(c.layout), "overlay");
@@ -41,6 +44,7 @@ static Config config(int w, int h)
     snprintf(c.fit, sizeof(c.fit), "contain");
     snprintf(c.split_side, sizeof(c.split_side), "left");
     snprintf(c.keys_position, sizeof(c.keys_position), "bottom-left");
+    snprintf(c.camera_background, sizeof(c.camera_background), "blurred");
     return c;
 }
 
@@ -328,6 +332,76 @@ static void test_blurred_frames(void)
     frame_free(&a);
     frame_free(&b);
     frame_free(&large);
+    compositor_destroy(c);
+}
+
+static void test_camera_backgrounds(void)
+{
+    Config cfg = config(240, 180);
+    strcpy(cfg.layout, "camera");
+    Frame screen = source(240, 180, 0x123456, false);
+    Frame camera = source(160, 90, 0xff0000, false), out = {0}, first = {0};
+    Compositor *c = compositor_create();
+    assert(c);
+    render(c, &cfg, &screen, &camera, NULL, false, &out);
+    assert(at(&out, 120, 90) == 0xff0000); /* Full-quality foreground geometry is preserved. */
+    uint32_t background = at(&out, 120, 5);
+    assert(background != cfg.pause_color && background != 0xff0000);
+    assert((background >> 16) > (background & 255));
+    assert(!frame_copy(&first, &out));
+    render(c, &cfg, &screen, &camera, NULL, true,
+           &out); /* Same snapshot can reuse its processed backdrop. */
+    assert(!memcmp(first.data, out.data, (size_t)out.stride * out.height));
+    for (int y = 0; y < camera.height; y++) {
+        for (int x = 0; x < camera.width; x++) {
+            uint8_t *pixel = camera.data + (size_t)y * camera.stride + x * 4;
+            pixel[0] = pixel[1] = 0;
+            pixel[2] = 255;
+        }
+    }
+    camera.ts_ns++;
+    render(c, &cfg, &screen, &camera, NULL, false, &out);
+    assert(at(&out, 120, 90) == 0x0000ff);
+    assert(at(&out, 120, 5) !=
+           background); /* Every new camera frame repaints the dynamic backdrop. */
+    assert((at(&out, 120, 5) & 255) > (at(&out, 120, 5) >> 16));
+    cfg.camera_visible = false;
+    render(c, &cfg, &screen, &camera, NULL, false, &out);
+    assert(!frame_copy(&first, &out));
+    render(c, &cfg, &screen, NULL, NULL, false, &out);
+    assert(!memcmp(first.data, out.data, (size_t)out.stride * out.height));
+    assert(at(&out, 120, 5) != at(&out, 120, 175)); /* Fresh static gradient fallback. */
+    cfg.camera_visible = true;
+    render(c, &cfg, &screen, NULL, NULL, false, &out);
+    assert(!memcmp(first.data, out.data, (size_t)out.stride * out.height));
+    strcpy(cfg.camera_background, "solid");
+    render(c, &cfg, &screen, NULL, NULL, false, &out);
+    assert_solid(&out, cfg.camera_background_color);
+    /* The gradient fills only the split camera slot; screen letterboxing stays neutral. */
+    strcpy(cfg.layout, "split");
+    strcpy(cfg.camera_background, "gradient");
+    cfg.split_ratio = 50;
+    for (int right = 0; right < 2; right++) {
+        strcpy(cfg.split_side, right ? "right" : "left");
+        render(c, &cfg, &screen, NULL, NULL, false, &out);
+        int camera_x = right ? 180 : 60, screen_x = right ? 60 : 180;
+        assert(at(&out, camera_x, 2) != at(&out, camera_x, 177));
+        assert(at(&out, screen_x, 2) == cfg.pause_color);
+        assert(at(&out, screen_x, 90) == 0x123456);
+    }
+    /* Overlay/screen composition is unaffected, and clearing rejects an old cached backdrop. */
+    strcpy(cfg.layout, "screen");
+    render(c, &cfg, &screen, &camera, NULL, false, &out);
+    assert_solid(&out, 0x123456);
+    compositor_clear(c);
+    strcpy(cfg.layout, "camera");
+    strcpy(cfg.camera_background, "blurred");
+    render(c, &cfg, &screen, NULL, NULL, false, &out);
+    assert(at(&out, 120, 5) != background);
+    frame_free(&screen);
+    frame_free(&camera);
+    frame_free(&out);
+    frame_free(&first);
     compositor_destroy(c);
 }
 
@@ -719,9 +793,11 @@ int main(void)
     test_text_templates();
     test_styled_text();
     test_blurred_frames();
+    test_camera_backgrounds();
     test_key_history();
     test_key_canvas_bounds();
-    puts("visual: owned frames, geometry, masks, fitting, crop/mirror, zoom transforms and lane "
-         "privacy, bounded key history and repeat counts passed");
+    puts(
+        "visual: owned frames, geometry, masks, fitting, crop/mirror, zoom transforms and lane "
+        "privacy, bounded key history, styled UTF-8/templates, blur and camera backgrounds passed");
     return 0;
 }

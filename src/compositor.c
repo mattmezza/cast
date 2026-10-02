@@ -29,6 +29,12 @@ struct Compositor {
     Key keys[KEY_MAX];
     unsigned key_count;
     PresentationText *presentation;
+    Frame camera_backdrop;
+    uint64_t camera_backdrop_at;
+    int camera_backdrop_sw, camera_backdrop_sh, camera_backdrop_radius;
+    bool camera_backdrop_mirror;
+    uint32_t camera_backdrop_color;
+    double camera_backdrop_brightness;
 };
 typedef struct {
     double sx, sy, sw, sh, dx, dy, dw, dh;
@@ -100,6 +106,7 @@ void compositor_destroy(Compositor *c)
 {
     if (c) {
         presentation_text_destroy(c->presentation);
+        frame_free(&c->camera_backdrop);
     }
     free(c);
 }
@@ -110,6 +117,8 @@ void compositor_clear(Compositor *c)
         c->next = 0;
         memset(c->keys, 0, sizeof(c->keys));
         c->key_count = 0;
+        frame_free(&c->camera_backdrop);
+        c->camera_backdrop_at = 0;
     }
 }
 void compositor_click(Compositor *c, int x, int y, int button, uint64_t at)
@@ -401,17 +410,15 @@ static void blur_pass(const uint8_t *src, uint8_t *dst, int width, int height, i
         }
     }
 }
-int compositor_blur(Compositor *c, const Config *cfg, Frame *frame, char *error, size_t n)
+static int image_blur(Frame *frame, int blur_radius, uint32_t tint_color, double tint_opacity,
+                      char *error, size_t n)
 {
     if (!frame || !frame->data || frame->width < 1 || frame->height < 1 ||
         frame->stride < frame->width * 4) {
         return fail(error, n, "blur requires an owned RGBA frame");
     }
-    if (compositor_prepare(c, cfg, error, n)) {
-        return -1;
-    }
-    if (cfg->blur_radius < 1 || cfg->blur_radius > 128 || !isfinite(cfg->blur_opacity) ||
-        cfg->blur_opacity < 0 || cfg->blur_opacity > 1) {
+    if (blur_radius < 1 || blur_radius > 128 || !isfinite(tint_opacity) || tint_opacity < 0 ||
+        tint_opacity > 1) {
         return fail(error, n, "blur radius must be 1..128 and opacity must be 0..1");
     }
     int step = (int)fmax(1, ceil(fmax((double)frame->width / 640, (double)frame->height / 360)));
@@ -443,18 +450,18 @@ int compositor_blur(Compositor *c, const Config *cfg, Frame *frame, char *error,
             pixel[3] = 255;
         }
     }
-    int radius = (int)fmax(1, lround((double)cfg->blur_radius / step));
+    int radius = (int)fmax(1, lround((double)blur_radius / step));
     for (int pass = 0; pass < 3; pass++) {
         blur_pass(first, second, width, height, radius, false);
         blur_pass(second, first, width, height, radius, true);
     }
-    unsigned alpha = (unsigned)lround(cfg->blur_opacity * 255);
+    unsigned alpha = (unsigned)lround(tint_opacity * 255);
     for (int y = 0; y < frame->height; y++) {
         for (int x = 0; x < frame->width; x++) {
             const uint8_t *sample = first + ((size_t)(y / step) * width + x / step) * 4;
             uint8_t *pixel = frame->data + (size_t)y * frame->stride + x * 4;
             for (int ch = 0; ch < 3; ch++) {
-                unsigned tint = (cfg->blur_color >> (16 - ch * 8)) & 255;
+                unsigned tint = (tint_color >> (16 - ch * 8)) & 255;
                 pixel[ch] = (uint8_t)((tint * alpha + sample[ch] * (255 - alpha) + 127) / 255);
             }
             pixel[3] = 255;
@@ -462,6 +469,14 @@ int compositor_blur(Compositor *c, const Config *cfg, Frame *frame, char *error,
     }
     free(first);
     free(second);
+    return 0;
+}
+int compositor_blur(Compositor *c, const Config *cfg, Frame *frame, char *error, size_t n)
+{
+    if (compositor_prepare(c, cfg, error, n) ||
+        image_blur(frame, cfg->blur_radius, cfg->blur_color, cfg->blur_opacity, error, n)) {
+        return -1;
+    }
     return presentation_text_draw(c->presentation, cfg, true, frame, error, n);
 }
 static double camera_aspect(const Config *cfg, int sw, int sh)
@@ -660,6 +675,98 @@ static void camera_blit(Frame *dst, const Frame *src, const Config *cfg, int x, 
         }
     }
 }
+static void camera_static_background(Frame *out, const Config *cfg, int x, int y, int w, int h)
+{
+    if (!strcmp(cfg->camera_background, "solid")) {
+        uint8_t color[4] = {(uint8_t)(cfg->camera_background_color >> 16),
+                            (uint8_t)(cfg->camera_background_color >> 8),
+                            (uint8_t)cfg->camera_background_color, 255};
+        for (int j = 0; j < h; j++) {
+            uint8_t *row = out->data + (size_t)(y + j) * out->stride + x * 4;
+            for (int i = 0; i < w; i++) {
+                memcpy(row + i * 4, color, 4);
+            }
+        }
+        return;
+    }
+    for (int j = 0; j < h; j++) {
+        double v = h > 1 ? (double)j / (h - 1) : .5;
+        for (int i = 0; i < w; i++) {
+            uint8_t *pixel = out->data + (size_t)(y + j) * out->stride + (x + i) * 4;
+            double u = w > 1 ? (double)i / (w - 1) : .5;
+            for (int ch = 0; ch < 3; ch++) {
+                unsigned base = (cfg->camera_background_color >> (16 - ch * 8)) & 255;
+                double glow = ch == 0   ? 16 * (1 - u) * (1 - v)
+                              : ch == 1 ? 12 * (1 - v) + 4 * u * v
+                                        : 18 * (1 - v) + 12 * u * v;
+                pixel[ch] = (uint8_t)lround(clampd(base * (1.1 - .45 * v) + glow, 0, 255));
+            }
+            pixel[3] = 255;
+        }
+    }
+}
+static int camera_background_draw(Compositor *c, const Config *cfg, const Frame *camera, Frame *out,
+                                  int x, int y, int w, int h, char *error, size_t n)
+{
+    bool dynamic = !strcmp(cfg->camera_background, "blurred") && cfg->camera_visible && camera &&
+                   camera->data && camera->width > 0 && camera->height > 0;
+    if (!dynamic) {
+        /* Hidden, disabled or missing cameras never reuse the last webcam backdrop. */
+        frame_free(&c->camera_backdrop);
+        c->camera_backdrop_at = 0;
+        camera_static_background(out, cfg, x, y, w, h);
+        return 0;
+    }
+    int step = (int)fmax(1, ceil(fmax((double)w / 320, (double)h / 180)));
+    int width = (w + step - 1) / step, height = (h + step - 1) / step;
+    bool reuse = camera->ts_ns && camera->ts_ns == c->camera_backdrop_at &&
+                 camera->width == c->camera_backdrop_sw &&
+                 camera->height == c->camera_backdrop_sh && width == c->camera_backdrop.width &&
+                 height == c->camera_backdrop.height && cfg->mirror == c->camera_backdrop_mirror &&
+                 cfg->camera_background_color == c->camera_backdrop_color &&
+                 cfg->camera_background_blur_radius == c->camera_backdrop_radius &&
+                 cfg->camera_background_brightness == c->camera_backdrop_brightness;
+    if (!reuse) {
+        if (frame_alloc(&c->camera_backdrop, width, height)) {
+            return fail(error, n, "cannot allocate bounded camera backdrop");
+        }
+        Transform cover = fit(0, 0, camera->width, camera->height, 0, 0, width, height, true);
+        screen_blit(&c->camera_backdrop, camera, cover);
+        for (int j = 0; j < height; j++) {
+            uint8_t *row = c->camera_backdrop.data + (size_t)j * c->camera_backdrop.stride;
+            if (cfg->mirror) {
+                for (int i = 0; i < width / 2; i++) {
+                    uint8_t swap[4];
+                    memcpy(swap, row + i * 4, 4);
+                    memcpy(row + i * 4, row + (width - 1 - i) * 4, 4);
+                    memcpy(row + (width - 1 - i) * 4, swap, 4);
+                }
+            }
+            for (int i = 0; i < width; i++) {
+                for (int ch = 0; ch < 3; ch++) {
+                    row[i * 4 + ch] =
+                        (uint8_t)lround(row[i * 4 + ch] * cfg->camera_background_brightness);
+                }
+            }
+        }
+        int radius = (int)fmax(1, lround((double)cfg->camera_background_blur_radius / step));
+        if (image_blur(&c->camera_backdrop, radius, cfg->camera_background_color, .25, error, n)) {
+            frame_free(&c->camera_backdrop);
+            c->camera_backdrop_at = 0;
+            return -1;
+        }
+        c->camera_backdrop_at = camera->ts_ns;
+        c->camera_backdrop_sw = camera->width;
+        c->camera_backdrop_sh = camera->height;
+        c->camera_backdrop_mirror = cfg->mirror;
+        c->camera_backdrop_color = cfg->camera_background_color;
+        c->camera_backdrop_radius = cfg->camera_background_blur_radius;
+        c->camera_backdrop_brightness = cfg->camera_background_brightness;
+    }
+    Transform enlarged = fit(0, 0, width, height, x, y, w, h, true);
+    screen_blit(out, &c->camera_backdrop, enlarged);
+    return 0;
+}
 static bool transform_point(Transform t, int x, int y, double *ox, double *oy)
 {
     if (x < t.sx || y < t.sy || x >= t.sx + t.sw || y >= t.sy + t.sh) {
@@ -784,6 +891,15 @@ int compositor_render(Compositor *c, const Config *cfg, const Frame *screen, con
         sw -= split;
         if (!strcmp(cfg->split_side, "left")) {
             sx = split;
+        }
+    }
+    if (!strcmp(cfg->layout, "split") || !strcmp(cfg->layout, "camera")) {
+        int area = !strcmp(cfg->layout, "split") ? split : cfg->width;
+        int ax = !strcmp(cfg->layout, "split") && !strcmp(cfg->split_side, "right")
+                     ? cfg->width - split
+                     : 0;
+        if (camera_background_draw(c, cfg, camera, out, ax, 0, area, cfg->height, err, n)) {
+            return -1;
         }
     }
     if (show_screen && screen && screen->data && screen->width > 0 && screen->height > 0) {

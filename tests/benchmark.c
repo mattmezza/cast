@@ -12,6 +12,57 @@ static int compare_samples(const void *left, const void *right)
     return (a > b) - (a < b);
 }
 
+static int camera_background_benchmark(Config *config, Compositor *compositor, Frame *screen,
+                                       Frame *camera, Frame *output)
+{
+    enum {
+        SAMPLES = 60
+    };
+    char error[CAST_ERR];
+    strcpy(config->aspect, "4:3");
+    for (int layout = 0; layout < 2; layout++) {
+        strcpy(config->layout, layout ? "split" : "camera");
+        for (int cached = 0; cached < 2; cached++) {
+            double baseline = 0;
+            for (int dynamic = 0; dynamic < 2; dynamic++) {
+                strcpy(config->camera_background, dynamic ? "blurred" : "solid");
+                compositor_clear(compositor);
+                camera->ts_ns = cast_now_ns();
+                /* Warm allocation and the same-snapshot processed-background cache. */
+                if (compositor_render(compositor, config, screen, camera, NULL, false, output,
+                                      error, sizeof error)) {
+                    return fprintf(stderr, "background benchmark: %s\n", error), -1;
+                }
+                double samples[SAMPLES];
+                for (int i = 0; i < SAMPLES; i++) {
+                    if (!cached) {
+                        camera->ts_ns++;
+                    }
+                    screen->ts_ns = cast_now_ns();
+                    uint64_t started = screen->ts_ns;
+                    if (compositor_render(compositor, config, screen, camera, NULL, false, output,
+                                          error, sizeof error)) {
+                        return fprintf(stderr, "background benchmark: %s\n", error), -1;
+                    }
+                    samples[i] = (cast_now_ns() - started) / 1e6;
+                }
+                qsort(samples, SAMPLES, sizeof *samples, compare_samples);
+                double median = samples[SAMPLES / 2];
+                if (!dynamic) {
+                    baseline = median;
+                }
+                printf("synthetic RGBA %s 1920x1080 camera%dx%d background=%s snapshot=%s: "
+                       "median=%.2fms p95=%.2fms added_vs_solid=%.2fms "
+                       "render_frame_budget_at30fps=%.1f%%\n",
+                       config->layout, camera->width, camera->height, config->camera_background,
+                       cached ? "unchanged" : "fresh", median, samples[SAMPLES * 95 / 100],
+                       dynamic ? median - baseline : 0, median / (1000.0 / 30) * 100);
+            }
+        }
+    }
+    return 0;
+}
+
 int main(void)
 {
     enum {
@@ -63,6 +114,13 @@ int main(void)
                outputs, SAMPLE_COUNT / elapsed, samples[SAMPLE_COUNT / 2],
                samples[SAMPLE_COUNT * 95 / 100], user_cpu + system_cpu, after.ru_maxrss,
                (user_cpu + system_cpu) / SAMPLE_COUNT * 30 * 100);
+    }
+    if (frame_alloc(&camera, 1920, 1080)) {
+        return fprintf(stderr, "background benchmark: camera allocation failed\n"), 1;
+    }
+    memset(camera.data, 0xc0, (size_t)camera.stride * camera.height);
+    if (camera_background_benchmark(&config, compositor, &screen, &camera, &live)) {
+        return 1;
     }
     frame_free(&screen);
     frame_free(&camera);
