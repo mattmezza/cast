@@ -1,0 +1,333 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-02T10:10:02.073043+00:00",
+  "title": "Design System: cast control panel",
+  "extensions": {
+    "colorMeta": {
+      "background": {
+        "role": "neutral",
+        "displayName": "Background",
+        "tonalRamp": [
+          "oklch(15% 0.0192 252.10)",
+          "oklch(25% 0.0192 252.10)",
+          "oklch(35% 0.0192 252.10)",
+          "oklch(45% 0.0192 252.10)",
+          "oklch(55% 0.0192 252.10)",
+          "oklch(65% 0.0192 252.10)",
+          "oklch(80% 0.0192 252.10)",
+          "oklch(95% 0.0192 252.10)"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Surface",
+        "tonalRamp": [
+          "oklch(15% 0.0238 248.80)",
+          "oklch(25% 0.0238 248.80)",
+          "oklch(35% 0.0238 248.80)",
+          "oklch(45% 0.0238 248.80)",
+          "oklch(55% 0.0238 248.80)",
+          "oklch(65% 0.0238 248.80)",
+          "oklch(80% 0.0238 248.80)",
+          "oklch(95% 0.0238 248.80)"
+        ]
+      },
+      "control": {
+        "role": "neutral",
+        "displayName": "Control",
+        "tonalRamp": [
+          "oklch(15% 0.0293 242.95)",
+          "oklch(25% 0.0293 242.95)",
+          "oklch(35% 0.0293 242.95)",
+          "oklch(45% 0.0293 242.95)",
+          "oklch(55% 0.0293 242.95)",
+          "oklch(65% 0.0293 242.95)",
+          "oklch(80% 0.0293 242.95)",
+          "oklch(95% 0.0293 242.95)"
+        ]
+      },
+      "hovered": {
+        "role": "neutral",
+        "displayName": "Hovered",
+        "tonalRamp": [
+          "oklch(15% 0.0362 241.32)",
+          "oklch(25% 0.0362 241.32)",
+          "oklch(35% 0.0362 241.32)",
+          "oklch(45% 0.0362 241.32)",
+          "oklch(55% 0.0362 241.32)",
+          "oklch(65% 0.0362 241.32)",
+          "oklch(80% 0.0362 241.32)",
+          "oklch(95% 0.0362 241.32)"
+        ]
+      },
+      "foreground": {
+        "role": "neutral",
+        "displayName": "Foreground",
+        "tonalRamp": [
+          "oklch(15% 0.0084 236.56)",
+          "oklch(25% 0.0084 236.56)",
+          "oklch(35% 0.0084 236.56)",
+          "oklch(45% 0.0084 236.56)",
+          "oklch(55% 0.0084 236.56)",
+          "oklch(65% 0.0084 236.56)",
+          "oklch(80% 0.0084 236.56)",
+          "oklch(95% 0.0084 236.56)"
+        ]
+      },
+      "secondary": {
+        "role": "neutral",
+        "displayName": "Secondary",
+        "tonalRamp": [
+          "oklch(15% 0.0261 236.93)",
+          "oklch(25% 0.0261 236.93)",
+          "oklch(35% 0.0261 236.93)",
+          "oklch(45% 0.0261 236.93)",
+          "oklch(55% 0.0261 236.93)",
+          "oklch(65% 0.0261 236.93)",
+          "oklch(80% 0.0261 236.93)",
+          "oklch(95% 0.0261 236.93)"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted",
+        "tonalRamp": [
+          "oklch(15% 0.0309 238.51)",
+          "oklch(25% 0.0309 238.51)",
+          "oklch(35% 0.0309 238.51)",
+          "oklch(45% 0.0309 238.51)",
+          "oklch(55% 0.0309 238.51)",
+          "oklch(65% 0.0309 238.51)",
+          "oklch(80% 0.0309 238.51)",
+          "oklch(95% 0.0309 238.51)"
+        ]
+      },
+      "accent": {
+        "role": "primary",
+        "displayName": "Accent",
+        "tonalRamp": [
+          "oklch(15% 0.1060 241.78)",
+          "oklch(25% 0.1060 241.78)",
+          "oklch(35% 0.1060 241.78)",
+          "oklch(45% 0.1060 241.78)",
+          "oklch(55% 0.1060 241.78)",
+          "oklch(65% 0.1060 241.78)",
+          "oklch(80% 0.1060 241.78)",
+          "oklch(95% 0.1060 241.78)"
+        ]
+      },
+      "danger": {
+        "role": "secondary",
+        "displayName": "Danger",
+        "tonalRamp": [
+          "oklch(15% 0.1268 22.11)",
+          "oklch(25% 0.1268 22.11)",
+          "oklch(35% 0.1268 22.11)",
+          "oklch(45% 0.1268 22.11)",
+          "oklch(55% 0.1268 22.11)",
+          "oklch(65% 0.1268 22.11)",
+          "oklch(80% 0.1268 22.11)",
+          "oklch(95% 0.1268 22.11)"
+        ]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Line",
+        "tonalRamp": [
+          "oklch(15% 0.0343 243.96)",
+          "oklch(25% 0.0343 243.96)",
+          "oklch(35% 0.0343 243.96)",
+          "oklch(45% 0.0343 243.96)",
+          "oklch(55% 0.0343 243.96)",
+          "oklch(65% 0.0343 243.96)",
+          "oklch(80% 0.0343 243.96)",
+          "oklch(95% 0.0343 243.96)"
+        ]
+      },
+      "selected": {
+        "role": "primary",
+        "displayName": "Selected",
+        "tonalRamp": [
+          "oklch(15% 0.0488 241.08)",
+          "oklch(25% 0.0488 241.08)",
+          "oklch(35% 0.0488 241.08)",
+          "oklch(45% 0.0488 241.08)",
+          "oklch(55% 0.0488 241.08)",
+          "oklch(65% 0.0488 241.08)",
+          "oklch(80% 0.0488 241.08)",
+          "oklch(95% 0.0488 241.08)"
+        ]
+      },
+      "selected-border": {
+        "role": "primary",
+        "displayName": "Selected border",
+        "tonalRamp": [
+          "oklch(15% 0.0686 239.91)",
+          "oklch(25% 0.0686 239.91)",
+          "oklch(35% 0.0686 239.91)",
+          "oklch(45% 0.0686 239.91)",
+          "oklch(55% 0.0686 239.91)",
+          "oklch(65% 0.0686 239.91)",
+          "oklch(80% 0.0686 239.91)",
+          "oklch(95% 0.0686 239.91)"
+        ]
+      },
+      "field-active": {
+        "role": "neutral",
+        "displayName": "Field active",
+        "tonalRamp": [
+          "oklch(15% 0.0173 214.73)",
+          "oklch(25% 0.0173 214.73)",
+          "oklch(35% 0.0173 214.73)",
+          "oklch(45% 0.0173 214.73)",
+          "oklch(55% 0.0173 214.73)",
+          "oklch(65% 0.0173 214.73)",
+          "oklch(80% 0.0173 214.73)",
+          "oklch(95% 0.0173 214.73)"
+        ]
+      },
+      "live": {
+        "role": "secondary",
+        "displayName": "Live",
+        "tonalRamp": [
+          "oklch(15% 0.1037 164.50)",
+          "oklch(25% 0.1037 164.50)",
+          "oklch(35% 0.1037 164.50)",
+          "oklch(45% 0.1037 164.50)",
+          "oklch(55% 0.1037 164.50)",
+          "oklch(65% 0.1037 164.50)",
+          "oklch(80% 0.1037 164.50)",
+          "oklch(95% 0.1037 164.50)"
+        ]
+      },
+      "preview": {
+        "role": "neutral",
+        "displayName": "Preview",
+        "tonalRamp": [
+          "oklch(15% 0.0126 254.02)",
+          "oklch(25% 0.0126 254.02)",
+          "oklch(35% 0.0126 254.02)",
+          "oklch(45% 0.0126 254.02)",
+          "oklch(55% 0.0126 254.02)",
+          "oklch(65% 0.0126 254.02)",
+          "oklch(80% 0.0126 254.02)",
+          "oklch(95% 0.0126 254.02)"
+        ]
+      },
+      "text-selection": {
+        "role": "primary",
+        "displayName": "Text selection",
+        "tonalRamp": [
+          "oklch(15% 0.0580 240.93)",
+          "oklch(25% 0.0580 240.93)",
+          "oklch(35% 0.0580 240.93)",
+          "oklch(45% 0.0580 240.93)",
+          "oklch(55% 0.0580 240.93)",
+          "oklch(65% 0.0580 240.93)",
+          "oklch(80% 0.0580 240.93)",
+          "oklch(95% 0.0580 240.93)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "title": {
+        "displayName": "Title",
+        "purpose": "Application name."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Controls, values and output status."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Supporting text and wrapping footer."
+      }
+    },
+    "shadows": [],
+    "motion": [],
+    "breakpoints": [
+      {
+        "name": "compact",
+        "value": "680px"
+      }
+    ],
+    "nativeLayout": {
+      "defaultWindow": "760x900",
+      "minimumWindow": "540x620",
+      "compactWhen": "width < 680",
+      "compactPreviewHeight": "88px",
+      "footer": "Content-height, word-wrapped messages."
+    },
+    "previewNotes": "HTML/CSS samples translate native Clay/SDL treatments; browser typography metrics are approximate. Tonal ramps are synthesized preview aids, not implemented palette tokens."
+  },
+  "components": [
+    {
+      "name": "Button",
+      "kind": "button",
+      "refersTo": "button",
+      "description": "Native action button treatment translated to a static HTML sample.",
+      "html": "<button class=\"ds-button\">Pause live</button>",
+      "css": ".ds-button{font-family:Inter,sans-serif;font-size:15px;height:36px;padding:8px 12px;background:#253440;color:#edf3f7;border:1px solid #253440;border-radius:6px}.ds-button:hover:enabled{background:#2f4352}.ds-button:focus-visible{border-color:#80c9ff;outline:none}.ds-button:disabled{color:#8195a3}"
+    },
+    {
+      "name": "Selected button",
+      "kind": "button",
+      "refersTo": "button-selected",
+      "description": "Selection used by layouts, tabs and preview choice.",
+      "html": "<button class=\"ds-button ds-selected\" aria-pressed=\"true\">Overlay</button>",
+      "css": ".ds-button{font-family:Inter,sans-serif;font-size:15px;height:36px;padding:8px 12px;background:#253440;color:#edf3f7;border:1px solid #253440;border-radius:6px}.ds-button:hover:enabled{background:#2f4352}.ds-button:focus-visible{border-color:#80c9ff;outline:none}.ds-button:disabled{color:#8195a3}.ds-selected,.ds-selected:hover:enabled{background:#233f53;color:#80c9ff;border-color:#3c6886}.ds-selected:focus-visible{border-color:#80c9ff}"
+    },
+    {
+      "name": "Disabled button",
+      "kind": "button",
+      "refersTo": "button-disabled",
+      "description": "Unavailable native action.",
+      "html": "<button class=\"ds-button\" disabled>Pause record</button>",
+      "css": ".ds-button{font-family:Inter,sans-serif;font-size:15px;height:36px;padding:8px 12px;background:#253440;color:#edf3f7;border:1px solid #253440;border-radius:6px}.ds-button:hover:enabled{background:#2f4352}.ds-button:focus-visible{border-color:#80c9ff;outline:none}.ds-button:disabled{color:#8195a3}"
+    },
+    {
+      "name": "Text field",
+      "kind": "input",
+      "refersTo": "field",
+      "description": "Editable native value; browser sample represents its fill and focus treatment.",
+      "html": "<input class=\"ds-field\" aria-label=\"Paused message\" value=\"Paused\">",
+      "css": ".ds-field{font-family:Inter,sans-serif;font-size:15px;height:34px;padding:7px 10px;background:#111820;color:#edf3f7;border:1px solid #354756;border-radius:5px}.ds-field:focus{background:#1f2b2e;border-color:#80c9ff;outline:none}.ds-field::selection{background:#33566f}"
+    },
+    {
+      "name": "Section navigation",
+      "kind": "nav",
+      "description": "Five settings tabs using the shared button treatment.",
+      "html": "<nav class=\"ds-tabs\" aria-label=\"Settings sections\"><button class=\"ds-button ds-selected\">Source</button><button class=\"ds-button\">Camera</button><button class=\"ds-button\">Audio</button><button class=\"ds-button\">Effects</button><button class=\"ds-button\">Settings</button></nav>",
+      "css": ".ds-button{font-family:Inter,sans-serif;font-size:15px;height:36px;padding:8px 12px;background:#253440;color:#edf3f7;border:1px solid #253440;border-radius:6px}.ds-button:hover:enabled{background:#2f4352}.ds-button:focus-visible{border-color:#80c9ff;outline:none}.ds-button:disabled{color:#8195a3}.ds-tabs{display:flex;gap:8px;border-bottom:1px solid #354756}.ds-selected,.ds-selected:hover:enabled{background:#233f53;color:#80c9ff;border-color:#3c6886}.ds-selected:focus-visible{border-color:#80c9ff}"
+    },
+    {
+      "name": "Preview placeholder",
+      "kind": "custom",
+      "refersTo": "preview",
+      "description": "Disconnected preview well; captured imagery is intentionally absent in this sample.",
+      "html": "<div class=\"ds-preview\">Start the daemon with cast</div>",
+      "css": ".ds-preview{display:flex;align-items:center;justify-content:center;height:164px;background:#090d12;color:#adbfcb;border-radius:6px;font:15px Inter,sans-serif}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Restrained dark native control panel",
+    "overview": "The approved direction is a restrained dark native control panel. This is an operating surface: state recognition and accurate controls take priority. Flat surfaces and compact controls keep output state, actions and settings easy to scan.\n\nInter supplies one consistent text voice. Colour identifies selection, keyboard focus and output state; status words carry the meaning alongside it.",
+    "keyCharacteristics": [
+      "Flat dark surfaces with small rounded corners.",
+      "Compact controls and readable labels.",
+      "Colour reserved for state, focus and selection."
+    ],
+    "rules": [],
+    "dos": [
+      "Do pair state colour with explicit status words.",
+      "Do keep output state and primary actions outside the scrolling settings area.",
+      "Do use the existing button and field treatments for new controls.",
+      "Do wrap footer messages and inspect the minimum window size."
+    ],
+    "donts": [
+      "Don't introduce decorative gradients or shadows.",
+      "Don't treat a preview placeholder as captured output.",
+      "Don't describe paused or frozen live output as active live output."
+    ]
+  }
+}
