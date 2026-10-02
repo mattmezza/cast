@@ -15,7 +15,7 @@ CFLAGS = -O2 -g
 WARN = -Wall -Wextra -Wformat=2 -Wstrict-prototypes -Wmissing-prototypes
 BASE_PACKAGES = libavcodec libavformat libavutil libswscale libswresample libpipewire-0.3
 PACKAGES = $(BASE_PACKAGES)
-SOURCES = src/main.c src/commands.c src/config.c src/state.c src/compositor.c src/platform.c src/media.c src/webcam.c src/audio.c src/record.c src/panel_transport.c vendor/inih/ini.c
+SOURCES = src/main.c src/commands.c src/config.c src/state.c src/compositor.c src/platform.c src/media.c src/webcam.c src/audio.c src/record.c src/panel_transport.c src/help_commands.c src/update.c vendor/inih/ini.c
 INI_FLAGS = -DINI_HANDLER_LINENO=1 -DINI_CALL_HANDLER_ON_NEW_SECTION=1 -DINI_ALLOW_MULTILINE=0 -DINI_ALLOW_INLINE_COMMENTS=0 -DINI_STOP_ON_FIRST_ERROR=1 -DINI_MAX_LINE=8192
 CPPFLAGS += -Isrc -Ivendor/inih $(INI_FLAGS) -D_GNU_SOURCE
 LDLIBS += -lm -lpthread
@@ -33,7 +33,8 @@ endif
 PKG_CFLAGS = $(shell $(PKG_CONFIG) --cflags $(PACKAGES))
 PKG_LIBS = $(shell $(PKG_CONFIG) --libs $(PACKAGES))
 BUILD = build/x$(X11)-w$(WAYLAND)
-OBJECTS = $(SOURCES:%.c=$(BUILD)/%.o)
+COMMAND_ASSETS = $(BUILD)/src/command_assets.o
+OBJECTS = $(SOURCES:%.c=$(BUILD)/%.o) $(COMMAND_ASSETS)
 ifeq ($(PANEL),1)
 # Overridable for a locally built SDK; normal builds use system SDL3/SDL3_ttf.
 ifeq ($(origin PANEL_CFLAGS):$(origin PANEL_LIBS),undefined:undefined)
@@ -62,6 +63,9 @@ $(BUILD)/%.o: %.c src/cast.h
 $(BUILD)/src/panel_font.o: src/panel_font.S assets/fonts/Inter.ttf
 	@mkdir -p $(dir $@)
 	$(CC) -c $< -o $@
+$(BUILD)/src/command_assets.o: src/command_assets.S completions/cast.bash completions/_cast completions/cast.fish packaging/install.sh
+	@mkdir -p $(dir $@)
+	$(CC) -c $< -o $@
 -include $(OBJECTS:.o=.d)
 
 $(BUILD)/test_core: tests/test_core.c $(CORE_SOURCES) src/cast.h
@@ -76,16 +80,16 @@ $(BUILD)/test_media: tests/test_media.c $(MEDIA_SOURCES) src/config.c vendor/ini
 $(BUILD)/test_wayland: tests/test_wayland.c src/wayland.c src/compositor.c src/state.c src/cast.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_wayland.c src/compositor.c src/state.c $(PKG_LIBS) $(LDLIBS)
-$(BUILD)/test_commands: tests/test_commands.c $(SOURCES) src/app_internal.h src/cast.h src/media_internal.h src/platform_backend.h
+$(BUILD)/test_commands: tests/test_commands.c $(SOURCES) src/app_internal.h src/cast.h src/media_internal.h src/platform_backend.h $(COMMAND_ASSETS)
 	@mkdir -p $(BUILD)
-	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_commands.c $(filter-out src/main.c src/panel.c,$(SOURCES)) $(PKG_LIBS) $(LDLIBS)
-$(BUILD)/test_panel_transport: tests/test_panel_transport.c $(SOURCES) src/app_internal.h src/panel_transport.h
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_commands.c $(filter-out src/main.c src/panel.c,$(SOURCES)) $(COMMAND_ASSETS) $(PKG_LIBS) $(LDLIBS)
+$(BUILD)/test_panel_transport: tests/test_panel_transport.c $(SOURCES) src/app_internal.h src/panel_transport.h $(COMMAND_ASSETS)
 	@mkdir -p $(BUILD)
-	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_panel_transport.c $(filter-out src/main.c src/panel.c,$(SOURCES)) $(PKG_LIBS) $(LDLIBS)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_panel_transport.c $(filter-out src/main.c src/panel.c,$(SOURCES)) $(COMMAND_ASSETS) $(PKG_LIBS) $(LDLIBS)
 ifeq ($(PANEL),1)
-$(BUILD)/test_panel_routes: tests/test_panel_routes.c $(SOURCES) src/panel_transport.h $(BUILD)/src/panel_font.o
+$(BUILD)/test_panel_routes: tests/test_panel_routes.c $(SOURCES) src/panel_transport.h $(BUILD)/src/panel_font.o $(COMMAND_ASSETS)
 	@mkdir -p $(BUILD)
-	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_panel_routes.c $(filter-out src/main.c src/panel.c,$(SOURCES)) $(BUILD)/src/panel_font.o $(PKG_LIBS) $(LDLIBS)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_panel_routes.c $(filter-out src/main.c src/panel.c,$(SOURCES)) $(BUILD)/src/panel_font.o $(COMMAND_ASSETS) $(PKG_LIBS) $(LDLIBS)
 check-unit: check-panel-routes
 check-panel-routes: $(BUILD)/test_panel_routes
 	$(BUILD)/test_panel_routes
@@ -120,6 +124,8 @@ check-unit: $(BUILD)/test_core $(BUILD)/test_visual $(BUILD)/test_media $(BUILD)
 	python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["record"]["state"] == "stopped" and not s["record"]["finalizing"]; assert s["audio"]["mic"]["source"] == "mic \"quoted\" \\ route\n"; assert s["audio"]["desktop"]["source"] == "desktop café"; assert s["audio"]["virtual"]["name"] == "cast\tvirtual"; assert "\xff" in s["record"]["path"]' $(BUILD)/commands-status.json
 check: cast check-unit
 	python3 tests/test_ipc.py
+	python3 tests/test_help_commands.py
+	python3 tests/test_install.py
 check-loopback: cast
 	@test -n '$(LOOPBACK_DEVICE)' || { echo 'set LOOPBACK_DEVICE to an existing v4l2loopback output device' >&2; exit 1; }
 	python3 tests/test_loopback.py --device '$(LOOPBACK_DEVICE)'
@@ -152,6 +158,9 @@ install: cast
 	install -Dm644 examples/cast.conf $(DESTDIR)$(PREFIX)/share/doc/cast/cast.conf.example
 	install -Dm644 examples/sxhkdrc $(DESTDIR)$(PREFIX)/share/doc/cast/sxhkdrc.example
 	install -Dm644 README.md $(DESTDIR)$(PREFIX)/share/doc/cast/README.md
+	install -Dm644 completions/cast.bash $(DESTDIR)$(PREFIX)/share/bash-completion/completions/cast
+	install -Dm644 completions/_cast $(DESTDIR)$(PREFIX)/share/zsh/site-functions/_cast
+	install -Dm644 completions/cast.fish $(DESTDIR)$(PREFIX)/share/fish/vendor_completions.d/cast.fish
 ifeq ($(PANEL),1)
 	install -Dm644 vendor/clay/LICENSE.md $(DESTDIR)$(PREFIX)/share/licenses/cast/clay-LICENSE
 	install -Dm644 assets/fonts/OFL.txt $(DESTDIR)$(PREFIX)/share/licenses/cast/Inter-OFL
@@ -160,6 +169,7 @@ endif
 	@for doc in docs/*.md; do install -Dm644 "$$doc" "$(DESTDIR)$(PREFIX)/share/doc/cast/$${doc##*/}"; done
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/cast $(DESTDIR)$(PREFIX)/share/man/man1/cast.1
+	rm -f $(DESTDIR)$(PREFIX)/share/bash-completion/completions/cast $(DESTDIR)$(PREFIX)/share/zsh/site-functions/_cast $(DESTDIR)$(PREFIX)/share/fish/vendor_completions.d/cast.fish
 	rm -rf $(DESTDIR)$(PREFIX)/share/doc/cast $(DESTDIR)$(PREFIX)/share/licenses/cast
 package-check:
 	@test '$(VERSION)' = "$$(sed -n 's/^#define CAST_VERSION "\([^"]*\)"/\1/p' src/cast.h)" || { echo 'VERSION must match CAST_VERSION in src/cast.h' >&2; exit 1; }
@@ -169,7 +179,7 @@ package: package-check cast
 	$(MAKE) X11=$(X11) WAYLAND=$(WAYLAND) PANEL=$(PANEL) DESTDIR='$(CURDIR)/dist/stage' PREFIX=/usr install
 	@{ echo 'cast $(VERSION)'; echo 'Source commit: $(SOURCE_COMMIT)'; echo 'Architecture:'; uname -m; echo 'Backend features: X11=$(X11) WAYLAND=$(WAYLAND) PANEL=$(PANEL)'; echo 'Runtime dynamic libraries:'; ldd cast; } > dist/stage/usr/share/doc/cast/build-info.txt
 	tar -C dist/stage -czf dist/cast-$(VERSION)-linux-$$(uname -m).tar.gz .
-	tar --transform='s,^,cast-$(VERSION)/,' -czf dist/cast-$(VERSION)-source.tar.gz Makefile .clang-format cast-build-prompt.md README.md PRODUCT.md DESIGN.md LICENSE licenses src vendor assets tests docs examples packaging
+	tar --transform='s,^,cast-$(VERSION)/,' -czf dist/cast-$(VERSION)-source.tar.gz Makefile .clang-format cast-build-prompt.md README.md PRODUCT.md DESIGN.md LICENSE licenses src vendor assets completions tests docs examples packaging .github
 	cd dist && sha256sum cast-$(VERSION)-linux-$$(uname -m).tar.gz cast-$(VERSION)-source.tar.gz > SHA256SUMS
 release-check:
 	sh packaging/release.sh check '$(VERSION)' '$(RELEASE_NOTES)' '$(X11)' '$(WAYLAND)' '$(RELEASE_TAG)' '$(PANEL)'

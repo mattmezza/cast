@@ -1,4 +1,6 @@
 #include "app_internal.h"
+#include "help_commands.h"
+#include "update.h"
 #ifdef WITH_PANEL
 #include "panel.h"
 #endif
@@ -62,6 +64,8 @@ static const char help[] =
     "  status [--json]; doctor; config check [PATH]; config defaults; config reload\n"
     "  settings SECTION.KEY VALUE [SECTION.KEY VALUE ...] (session only)\n"
     "  panel (optional native control panel)\n"
+    "  setup; completions [bash|zsh|fish]; completions --script bash|zsh|fish\n"
+    "  update [VERSION] [--download-only DIRECTORY] (Arch release package)\n"
     "  reset; quit; --help; --version\n"
     "Live starts privacy-paused. Recording toggle only pauses/resumes an existing file.\n";
 
@@ -829,6 +833,22 @@ int main(int argc, char **argv)
     int first = startup_parse(argc, argv, &startup, e, sizeof e);
     if (first < 0) {
         return fprintf(stderr, "cast: %s\n", e), 1;
+    }
+    if (first < argc) {
+        int result = help_command(argc - first, argv + first, e, sizeof e);
+        if (result >= 0) {
+            if (result) {
+                fprintf(stderr, "cast: %s\n", e);
+            }
+            return result ? 1 : 0;
+        }
+        if (!strcmp(argv[first], "update")) {
+            result = cast_update(argc - first, argv + first, e, sizeof e);
+            if (result) {
+                fprintf(stderr, "cast: %s\n", e);
+            }
+            return result ? 1 : 0;
+        }
     }
     if (first < argc && !strcmp(argv[first], "config") && first + 1 < argc &&
         !strcmp(argv[first + 1], "defaults")) {
