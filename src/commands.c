@@ -272,7 +272,8 @@ static int barrier(App *a, State *candidate, char *e, size_t n)
             result = app_error(e, n, "cannot replace frozen recording frame with neutral content");
         }
     }
-    bool live_silent = candidate->live_paused || candidate->live_frozen || candidate->live_blurred;
+    bool live_silent = !a->config.live_enabled || candidate->live_paused ||
+                       candidate->live_frozen || candidate->live_blurred;
     bool record_silent =
         candidate->record_paused || candidate->record_frozen || candidate->record_blurred;
     if (a->config.live_enabled &&

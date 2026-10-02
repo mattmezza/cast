@@ -132,6 +132,12 @@ static void output_modes(App *app)
     COMMAND(app, true, "camera", "anchor", "top");
     COMMAND(app, true, "camera", "anchor", "left");
     tick(app);
+    app->config.live_enabled = false;
+    COMMAND(app, true, "live", "resume");
+    media_audio_status(app->media, error, sizeof error);
+    assert(strstr(error, "\"virtual_silent\":true"));
+    app->config.live_enabled = true;
+    COMMAND(app, true, "live", "resume");
     COMMAND(app, true, "live", "freeze");
     COMMAND(app, true, "live", "blur", "on");
     assert(app->state.live_frozen && app->state.live_blurred && !app->state.record_frozen &&
