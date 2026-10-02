@@ -92,17 +92,21 @@ ignored. At most 32 animations are retained in memory.
 Keys default off; enabling them defaults to shortcuts mode. That mode displays
 Ctrl/Alt/Super combinations and configured navigation keys. All mode also displays
 printable key symbols and can expose sensitive typing. Translation follows XKB map,
-group and modifier notifications; repeats flagged by XI2 are ignored rather than
-refreshing the label. Combination order is `Ctrl+Alt+Super+Shift+Key`; alphabetic
-labels use uppercase and space is `Space`. `[keys] filter` accepts complete labels
-such as `Super+Shift+Space`, or individual key labels. Configure it for cast's own
-bindings and any other shortcuts that should not be shown.
+group and modifier notifications. Consecutive identical labels collapse into one
+entry: `j`, `jx2`, `jx3`, including held-key repeats. Plain alphabetic symbols retain
+their translated case in all mode; shortcut labels use uppercase alphabetic names.
+Combination order is `Ctrl+Alt+Super+Shift+Key` and space is `Space`. `[keys] filter`
+accepts complete labels such as `Super+Shift+Space`, or individual key labels.
+Configure it for cast's own bindings and any other shortcuts that should not be shown.
 
-The overlay retains only the current bounded label and timestamp, never a raw input
-log. The bundled original bitmap font covers ASCII; other XKB key symbols use their
-symbol names or a `U+...` label. Compose/dead-key sequences and IMEs are not committed
-text observation. All mode is not a faithful transcript of text entered by an app,
-and cast does not inspect password fields.
+A bounded recent-key queue retains independent labels for `[keys] timeout_ms`
+(default 3000 ms). Repeating the newest key refreshes that entry's lifetime; older
+entries expire independently. Entries stack inward from the configured corner,
+with the newest at the anchor. The queue is temporary annotation state, not a raw
+input log. The bundled original bitmap font covers ASCII; other XKB key symbols use
+their symbol names or a `U+...` label. Compose/dead-key sequences and IMEs are not
+committed text observation. All mode is not a faithful transcript of text entered
+by an app, and cast does not inspect password fields.
 
 Privacy/source boundaries synchronize and drain pending Xorg input, clear labels
 and rings, and discard input on the resume boundary. Modifier state notifications
@@ -115,15 +119,17 @@ clears existing annotation memory without changing the enabled switch.
 
 The Xorg preview shows the selected live/record target with a local header containing
 LIVE/PAUSED/FROZEN and recording state. Its header is drawn in its X window after
-composition and is not added to the output frame. The preview is limited to about
-15 updates per second. Painting and its X server synchronization run on a dedicated
-connection/thread with one replaceable pending frame; a busy worker loses preview
-updates instead of delaying the virtual camera or controls. It is a floating,
-unmanaged Xorg window (`override_redirect`), so tiling window managers do not tile
-it or rearrange application windows when it opens. No window-manager rule is needed.
-Its `WM_CLASS` is `cast-preview` / `CastPreview`. Drag its header with the left mouse
-button to move it; use `cast preview off` to hide it and `cast preview on` to show it.
-Window creation, source acquisition and shutdown still depend on a responsive X server.
+composition and is not added to the output frame. Preview submission follows the
+configured output cadence. Painting runs on a dedicated X connection/thread with
+one replaceable pending frame; a busy worker drops preview updates instead of
+building a delay queue or stalling the virtual camera or controls. Conversion uses
+cached image storage and a fast path for common Xorg visuals. The preview is a
+managed utility window with `WM_CLASS` `cast-preview` / `CastPreview`. Window
+managers that float utility windows (including mwm) center it automatically. Other
+window managers can use the class or utility type for a floating rule. Drag its
+header with the left mouse button to move it; use `cast preview off` to hide it and
+`cast preview on` to show it. Window creation, source acquisition and shutdown still
+depend on a responsive X server.
 
 The preview stays mapped during capture and live/record/privacy changes. On a state
 or source boundary, its existing contents are cleared to a neutral background while
@@ -206,3 +212,15 @@ saves no pixels and injects no input. Real conferencing, loopback consumers,
 compositor-specific preview behavior and hardware capture performance remain
 subject to [hardware-acceptance.md](hardware-acceptance.md). No 1080p30 CPU, memory,
 latency or frame-drop measurements are asserted without a usable capture session.
+
+## Recording countdown
+
+A configured `[record] countdown` or startup `--countdown SECONDS` delays only
+recording. The panel shows a numbered film-style guide over its local preview on
+all screens. Without an attached panel, Xorg opens a centered utility guide
+(`cast-countdown` / `CastCountdown`); Escape or closing it cancels the pending start.
+`cast record stop` and `cast pause` also cancel. The guide is hidden before the
+encoder starts and is excluded from Xorg monitor/region capture together with its
+window-manager frame. It is not an output overlay. Neutral masking covers screen
+content underneath the guide while it is visible; application-window capture
+excludes it naturally. Wayland uses the panel guide; it has no standalone guide.

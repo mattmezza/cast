@@ -40,10 +40,24 @@ stays visible while navigating, becomes compact on settings screens and can be
 dragged by its header. Essential navigation, privacy controls and capture warnings
 remain unobscured. Select Live or Recording to inspect that output's composition.
 
+Square buttons pair text with consistent drawn line icons; the Back control uses
+a left arrow and a clear Back label. Icons never replace action names.
+
 Tab and Shift+Tab move focus; Enter applies a field, Enter/Space activates buttons,
 and arrow keys choose dropdown entries. Ctrl+Q closes only the panel. The optional
 `make X11=1 WAYLAND=1 PANEL=1 check-panel` exercises these controls against a
 synthetic daemon on a private display; it requires Xvfb, xdotool and xclip.
+
+## Recording countdown
+
+Set a recording countdown in Settings or use `cast --countdown 3` at startup.
+Starting a recording shows a local numbered film-style guide in the persistent
+preview on every screen. Cancel stops the pending start; `cast pause` also cancels
+it. The guide disappears when recording begins and is never burned into outgoing
+video or the recorded file. On Xorg, a separate centered guide appears for
+CLI starts when the panel is closed, including when the preview is closed. Escape or closing
+that guide cancels the countdown. Wayland has the panel guide; a standalone
+countdown window is not implemented there.
 
 ## Custom paused message
 
@@ -66,7 +80,10 @@ region capture, place the panel outside the source when possible. Overlap is
 covered with the configured neutral colour, including window-manager decorations;
 the underlying obscured screen content cannot be reconstructed. The panel reports
 the exclusion state. A stable `CastPanel` window class permits an optional floating
-rule in a tiling window manager; the panel stays mapped throughout capture.
+rule in a tiling window manager. The panel also declares the Xorg utility window
+type before mapping. Window managers such as mwm that float utility windows
+automatically center it without an extra class rule. The panel stays mapped
+throughout capture.
 
 Wayland support for creating the panel does not imply capture exclusion. The
 compositor/portal controls what is captured; exclusion is reported unsupported.

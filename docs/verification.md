@@ -151,7 +151,7 @@ The output cadence can reuse camera frames; unique camera fps and output fps are
 different measurements. A physical regression also verified that queued frames
 predating a privacy boundary are rejected.
 
-## Final camera, preview and pipeline checks
+## v0.1 camera, preview and pipeline checks
 
 Real V4L2 polling/decoding now runs in a separate worker with a bounded latest-frame
 handoff. Epochs reject in-flight older work; per-buffer queue epochs reject late
@@ -200,7 +200,7 @@ the combined executable remains installed in the checkout. Staged install ran
 configuration example and license files were present; no system install or user
 configuration modification was performed.
 
-## Optional panel and distribution validation
+## v0.2 panel and distribution validation
 
 The combined Xorg/Wayland/panel build passed `-Werror`, the full unit/IPC/mock
 portal suite, and native panel interaction checks on a private Xvfb display.

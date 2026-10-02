@@ -60,7 +60,10 @@ controls key labels; `keys mode shortcuts|all` selects shortcuts/navigation or
 explicit printable events; `keys clear` discards labels. All keys can expose private
 text. Raw observations are never written to an input log. Compose/IME events do
 not universally reproduce committed text; keyboard names/layout translation are
-best effort. Configure keys.filter to exclude every cast-control shortcut you bind.
+best effort. Consecutive identical labels collapse as `j`, `jx2`, `jx3`. A bounded
+queue retains recent labels for `[keys] timeout_ms` (3000 ms by default); repeat
+counts refresh that row, and older rows expire independently.
+Configure keys.filter to exclude every cast-control shortcut you bind.
 `annotations live|record keys|clicks on|off` selects annotation visibility per lane.
 
 `pause` privacy-pauses both applicable outputs, remembers only states it changes,
@@ -79,6 +82,9 @@ video or altering recording state. Pass `""` for no label. Messages are at most
 use `[output] pause_text` for a persistent default.
 
 `record start [PATH]` starts one new file, optionally after configured countdown.
+The panel shows a local numbered countdown. Without an attached panel, Xorg
+shows a utility countdown window; Escape or closing it cancels the pending start.
+The guide disappears before recording and is excluded from screen capture.
 Automatic names are generated in record.directory; existing paths are never
 overwritten. Starting during group pause creates a paused recording; group resume
 does not resume it because it was not a running output changed by that pause.
@@ -115,8 +121,8 @@ a daemon or configuration file.
 Arch x86_64 release package and verifies its SHA-256 checksum. With no version it
 selects the latest release. Installation uses pacman and asks for sudo when needed;
 download-only saves a checked package and its checksum without installation.
-Stop the daemon before updating and restart it afterwards. `cast update v0.2`
-selects the release tag v0.2 and package version 0.2.0.
+Stop the daemon before updating and restart it afterwards. `cast update v0.3`
+selects the release tag v0.3 and package version 0.3.0.
 `panel` opens the optional Clay/SDL3 control panel (`PANEL=1` build). Closing it
 leaves the daemon running. See [panel behavior and exclusion](control-panel.md).
 `settings SECTION.KEY VALUE [SECTION.KEY VALUE ...]` applies an atomic batch of

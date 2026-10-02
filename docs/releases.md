@@ -9,13 +9,13 @@ unit, IPC, mock portal, Xorg and native panel checks must pass before asset uplo
 Only the publishing job gets release write permission. External actions are pinned
 to commits, and the installed Arch package versions are recorded in the build manifest.
 
-For v0.2 (executable/package version 0.2.0):
+For v0.3 (executable/package version 0.3.0):
 
 ```sh
 git push origin main
-git tag -a v0.2 -m 'cast v0.2'
-git push origin refs/tags/v0.2
-make release-ci RELEASE_TAG=v0.2 RELEASE_NOTES=docs/release-notes/0.2.0.md
+git tag -a v0.3 -m 'cast v0.3'
+git push origin refs/tags/v0.3
+make release-ci RELEASE_TAG=v0.3 RELEASE_NOTES=docs/release-notes/0.3.0.md
 gh run list --workflow release-arch.yml
 ```
 
@@ -23,7 +23,7 @@ gh run list --workflow release-arch.yml
 using gh. It delegates the build and upload to Actions. A release page exists while
 the build is running; wait for a successful workflow and inspect its assets before
 announcing it. Existing releases and existing asset names are never overwritten.
-Keep v0.1 unchanged. The tag must be `vVERSION`, or `vMAJOR.MINOR` for a zero patch
+Keep previously published releases unchanged. The tag must be `vVERSION`, or `vMAJOR.MINOR` for a zero patch
 version; both the Makefile and executable version must match.
 
 The six x86_64 assets use the prefix `cast-VERSION-archlinux-x86_64`:
@@ -50,7 +50,7 @@ gh workflow run release-arch.yml --ref main
 
 An empty `release_tag` input tests the selected commit and preserves downloadable
 Actions artifacts for 14 days. To attach missing assets after a build/upload failure,
-dispatch with `-f release_tag=v0.2`; this verifies the existing release and exact
+dispatch with `-f release_tag=v0.3`; this verifies the existing release and exact
 tag before building. Any already-uploaded asset name causes publication to stop;
 inspect partial uploads rather than silently replacing them.
 

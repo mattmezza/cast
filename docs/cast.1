@@ -61,11 +61,14 @@ cursor on|off|toggle controls the separately rendered pointer;
 cursor highlight on|off|toggle changes its highlight. Embedded cursor policy
 needs portal restart; there is no second pointer. Cursor metadata is required for
 follow/highlighting. clicks on|off|toggle controls mouse rings. keys on|off|toggle
-controls key labels; keys mode shortcuts|all selects shortcuts/navigation or
+controls recent key labels; keys mode shortcuts|all selects shortcuts/navigation or
 explicit printable events; keys clear discards labels. All keys can expose private
 text. Raw observations are never written to an input log. Compose/IME events do
 not universally reproduce committed text; keyboard names/layout translation are
-best effort. Configure keys.filter to exclude every cast\-control shortcut you bind.
+best effort. Consecutive identical labels collapse as j, jx2, jx3. A bounded
+queue retains recent labels for keys.timeout_ms (3000 ms by default); repeat
+counts refresh that row, and older rows expire independently.
+Configure keys.filter to exclude every cast\-control shortcut you bind.
 annotations live|record keys|clicks on|off selects annotation visibility per lane.
 .PP
 pause privacy\-pauses both applicable outputs, remembers only states it changes,
@@ -84,6 +87,9 @@ bytes; the pause frame uses a limited bitmap font. Set output.pause_text in conf
 for a persistent default.
 .PP
 record start [PATH] starts one new file, optionally after configured countdown.
+The panel shows a local numbered countdown. Without an attached panel, Xorg
+shows a utility countdown window; Escape or closing it cancels the pending start.
+The guide disappears before recording and is excluded from screen capture.
 Automatic names are generated in record.directory; existing paths are never
 overwritten. Starting during group pause creates a paused recording; group resume
 does not resume it because it was not a running output changed by that pause.
