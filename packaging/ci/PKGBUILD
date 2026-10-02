@@ -30,6 +30,7 @@ check() {
   make X11=1 WAYLAND=1 PANEL=1 CFLAGS="$CFLAGS" check
   make X11=1 WAYLAND=1 PANEL=1 CFLAGS="$CFLAGS" check-xorg
   make X11=1 WAYLAND=1 PANEL=1 CFLAGS="$CFLAGS" check-panel
+  SDL_VIDEO_X11_SCALING_FACTOR=2 make X11=1 WAYLAND=1 PANEL=1 CFLAGS="$CFLAGS" check-panel
 }
 
 package() {

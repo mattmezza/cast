@@ -220,3 +220,12 @@ This local check is not a clean Arch chroot result; the release workflow provide
 the fresh Arch environment. Installer tests use offline stubs and real private
 terminals, checking package integrity, malformed metadata, privilege routing,
 download failures and relocated embedded execution without invoking real sudo.
+
+The revised panel's native checks also pass with real SDL X11 content scaling at
+2×: 16 logical-pixel text rasterizes at 32 pixels, and scaled pointer input reaches
+the same controls. Tests cover all five focused screens, Home/Back/Escape, an
+always-visible actual preview, retained target/drag position, protected controls,
+drafts across navigation, UTF-8 paste, numeric rejection and reconnect. Final live
+synthetic renders at 480×760 and 360×640 were reviewed at both scales. Exclusion
+warnings remain visible on Home and settings screens. This is isolated native UI
+validation, not a claim about every physical display or compositor.
