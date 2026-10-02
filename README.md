@@ -73,6 +73,8 @@ them with `sudo pacman -S --needed sdl3 sdl3_ttf`, build with
 `./cast panel` alongside the daemon. Closing the panel leaves capture running.
 See [panel controls and capture visibility](docs/control-panel.md).
 
+![Compact native control panel showing live synthetic output and focused sections](assets/control-panel.png)
+
 Before live output, create an existing loopback device. These commands are for an
 Arch user running the `linux` kernel to execute; cast does not run them:
 
