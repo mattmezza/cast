@@ -77,10 +77,10 @@ with tempfile.TemporaryDirectory(prefix="cast-help-test-") as directory:
     run(["bash", "-n", str(PROJECT / "completions" / "cast.bash")])
     assert {"setup", "update", "completions", "panel", "--config"} <= bash_complete("cast", "")
     assert bash_complete("cast", "--backend", "") == {"xorg", "wayland", "synthetic"}
-    assert {"pause", "resume", "freeze", "unfreeze", "message"} <= \
+    assert {"pause", "resume", "freeze", "unfreeze", "message", "title", "subtitle", "footer"} <= \
         bash_complete("cast", "--backend", "xorg", "live", "")
     assert {"top", "bottom", "left", "right"} <= bash_complete("cast", "camera", "anchor", "")
-    assert {"cut", "freeze", "unfreeze", "blur"} <= bash_complete("cast", "record", "")
+    assert {"cut", "freeze", "unfreeze", "blur", "title", "subtitle", "footer"} <= bash_complete("cast", "record", "")
     assert bash_complete("cast", "live", "blur", "") == {"on", "off", "toggle"}
     assert bash_complete("cast", "record", "blur", "") == {"on", "off", "toggle"}
     assert bash_complete("cast", "camera", "mirror", "") == {"on", "off", "toggle"}

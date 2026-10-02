@@ -79,7 +79,7 @@ supersede that lane's remembered restoration; freeze/blur/cut are orthogonal.
 `live pause|resume|toggle` selects solid privacy pause; toggle reverses that flag.
 `live freeze|unfreeze` holds/releases the complete screen and camera composition.
 `live blur [on|off|toggle]` applies/removes/toggles a configurable blurred, tinted
-composition with optional title/subtitle. Bare `blur` enables it; `unblur` disables
+composition with optional title/subtitle/footer. Bare `blur` enables it; `unblur` disables
 it. Blur is above freeze, and solid pause overrides both. Blur alone keeps capturing
 moving content. None of these effects resumes solid pause. Freeze and blur silence
 cast virtual audio. Blur can leave information recognizable; use solid pause for privacy.
@@ -93,16 +93,25 @@ cast settings output.pause_title "Back soon" output.pause_subtitle "{date:%A} {t
 cast settings output.pause_background '#20252b' output.pause_foreground '#ffffff'
 cast settings output.blur_title "Break" output.blur_subtitle "{datetime}"
 cast settings output.blur_radius 48 output.blur_opacity 0.6
+cast settings output.blur_footer "Back shortly" output.blur_text_gap 20
+cast live footer "{datetime:%A, %d %B · %H:%M}"
 ```
 
 `output.pause_text` and `output.pause_color` remain aliases. `output.pause_font`
 and `output.blur_font` are config-file-only; edit the file and use `config reload`.
-Both title and subtitle are optional. [Text placeholders](configuration.md#pause-and-blur-text)
+Title, subtitle and footer are optional. `live footer "TEXT"` and
+`record footer "TEXT"` change the same shared solid-pause footer; use
+`settings output.blur_footer "TEXT"` for the blur footer. Their limit is 255 UTF-8
+bytes. `output.pause_text_gap` / `output.blur_text_gap` set title/subtitle distance
+in output pixels (0–512, default 12), independently of the font sizes.
+`output.pause_footer_size` / `output.blur_footer_size` set footer sizes (8–256,
+default 18). [Text placeholders](configuration.md#pause-and-blur-text)
 expand in local time, including custom strftime formats.
 
 `record start [PATH]` starts one new file, optionally after configured countdown.
-The panel shows a local numbered countdown. Without an attached panel, Xorg
-shows a utility countdown window; Escape or closing it cancels the pending action.
+On Xorg, the independent floating preview shows a numbered countdown even when
+the panel is attached and preview was off. Escape or closing it cancels the pending
+action. The panel keeps countdown status and Cancel available.
 The guide disappears before media admission and is excluded from screen capture.
 Automatic names are generated in record.directory; existing paths are never
 overwritten. Starting during group pause creates a solid-paused recording; group

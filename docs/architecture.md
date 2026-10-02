@@ -43,7 +43,7 @@ leaves it cut. Composition reset/presets never change output flags. Runtime
 configuration is never persisted automatically.
 
 Fontconfig resolves the configured system fonts and FreeType renders optional UTF-8
-titles/subtitles. Font changes are file-only and prepared before applying reload.
+titles/subtitles/footers. Font changes are file-only and prepared before applying reload.
 Text templates expand bounded date/time placeholders against one local wall-clock
 snapshot, while recording/cut timing remains monotonic. Blur uses bounded reduced
 images and separable passes so the radius does not multiply full-frame work.
@@ -54,7 +54,9 @@ features report capabilities; global input and interactive selection can be unsu
 The optional panel is a client of the same executable. Clay lays out native SDL3
 controls; SDL3_ttf renders the embedded font. An asynchronous bounded client queue
 and read-only sealed shared memory carry acknowledged state and small actual-output
-frames. The daemon never waits for panel rendering. Xorg validates the peer's panel
+frames in the internal transport; the control-only panel does not request or render
+frames. Preview uses the independent platform presentation window. The daemon never
+waits for panel rendering. Xorg validates the peer's panel
 window identity and neutral-masks its frame in monitor/region captures.
 
 Setup and completion instructions are local commands, independent of configuration

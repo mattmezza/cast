@@ -20,7 +20,7 @@ up-to-date Arch x86_64 system with curl installed:
 
 ```sh
 curl -fsSL --proto '=https' --proto-redir '=https' \
-  https://raw.githubusercontent.com/mattmezza/cast/v0.4/packaging/install.sh | sh -s -- v0.4
+  https://raw.githubusercontent.com/mattmezza/cast/v0.5/packaging/install.sh | sh -s -- v0.5
 cast setup
 ```
 
@@ -34,7 +34,7 @@ Virtual-camera setup is a separate step explained by `cast setup`; the installer
 does not create devices or change your configuration.
 
 ```sh
-cast update v0.4
+cast update v0.5
 cast completions
 ```
 
@@ -104,8 +104,10 @@ cp -n examples/cast.conf ~/.config/cast/cast.conf
 
 The panel and preview are Xorg utility windows (`CastPanel` and `CastPreview`);
 window managers that float utilities, including mwm, center them automatically.
-The panel uses square controls with drawn icons and keeps its preview visible.
-A recording countdown shows a local numbered guide before recording begins.
+The panel uses square controls with drawn icons. Home contains the Live and Recording
+controls; its Preview button toggles a separate floating window, available while
+navigating settings. A recording countdown temporarily uses that preview and closes
+it completely before recording begins.
 
 The virtual camera starts with a neutral **Paused** frame at normal cadence. In another
 terminal, explicitly enable live video and then select `cast` in the conference:
@@ -135,8 +137,9 @@ in the configuration's `[camera]` section.
 
 `./cast live message "Back in five minutes"` changes the solid pause title for
 this session. **Settings → Pause screen** and **Blur screen** edit optional titles,
-subtitles, colours and blur strength. **Outputs** provides independent live and
-recording freeze/blur controls and recording cut/resume. The preview follows a
+subtitles, footers, text spacing, colours and blur strength. **Home** provides
+independent live and recording freeze/blur controls and recording cut/resume. The
+separate preview follows a
 successful Start record or Start live action automatically.
 
 ```sh
@@ -147,10 +150,11 @@ cast live pause                    # solid screen overrides freeze and blur
 cast settings output.pause_title "Back soon" output.pause_subtitle "{date:%A} {time:%H:%M}"
 ```
 
-Persistent styles live in `[output]`: `pause_title`, `pause_subtitle`,
-`pause_background`, `pause_foreground`, and the corresponding `blur_*` settings.
+Persistent styles live in `[output]`: `pause_title`, `pause_subtitle`, `pause_footer`,
+`pause_text_gap` (title/subtitle distance in pixels), `pause_background`,
+`pause_foreground`, and the corresponding `blur_*` settings.
 Choose `pause_font` / `blur_font` only in the config file, then `cast config reload`.
-Noto Sans is the default. Both text fields may be empty. [Date/time placeholders
+Noto Sans is the default. All three text fields may be empty. [Date/time placeholders
 and custom formats](docs/configuration.md#pause-and-blur-text) update while displayed.
 Existing `pause_text` and `pause_color` configurations remain supported.
 

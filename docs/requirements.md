@@ -55,3 +55,13 @@ the user; the application does not load modules or change system configuration.
 | Automatic panel preview follows acknowledged output action | panel.c | Failed/generation-aware command tests and native click tests |
 | Temporary native film preview, fully hidden before admission | x11.c, platform.c, main.c | SHM/fallback capture, fake delayed WM frame, CLI start/resume/cancel and first-frame decode |
 | Per-frame blurred camera-slot backdrop and gradient fallback | compositor.c, config.c, panel.c | Actual slot pixels, fresh/absent/hidden camera, bounded blur buffers and 1080p benchmark |
+
+## v0.5 control-only panel and presentation typography
+
+| Requirement | Implementation | Validation |
+|---|---|---|
+| Independent floating preview controlled from every panel screen | panel.c, commands.c, x11.c | Native panel toggle/target and utility WM tests |
+| Direct Home output controls, explicit Start labels, faster scrolling | panel.c | Native 360/480px interaction at 1×/2× |
+| Optional pause/blur footer and adjustable title/subtitle spacing | config.c, presentation_text.c | UTF-8/template/bounds, exact pixel gaps, bottom margin and small-canvas tests |
+| Config-only font changes apply after reload | config.c, commands.c, presentation_text.c | Real font replacement and transactional reload tests |
+| External countdown with panel attached | commands.c, x11.c | Private Xvfb initial/cut-resume/cancel and first-recorded-frame checks |

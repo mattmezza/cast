@@ -84,12 +84,16 @@ The following table is the supported schema. `examples/cast.conf` includes every
 | output | pause_background | `#20252b` | #RRGGBB; pause_color alias |
 | output | pause_title | `Paused` | Optional UTF-8 template, ≤127 bytes; pause_text alias |
 | output | pause_subtitle | `` | Optional UTF-8 template, ≤255 bytes |
+| output | pause_footer | `` | Optional UTF-8 template, ≤255 bytes; bottom centered |
 | output | pause_font | `Noto Sans` | Fontconfig font name/pattern; config-file-only |
 | output | pause_foreground | `#ffffff` | #RRGGBB |
 | output | pause_title_size | `48` | 8–256 output pixels; scales down to fit |
 | output | pause_subtitle_size | `24` | 8–256 output pixels; scales down to fit |
+| output | pause_footer_size | `18` | 8–256 output pixels; scales down to fit |
+| output | pause_text_gap | `12` | 0–512 output pixels between title and subtitle |
 | output | blur_title | `Blurred` | Optional UTF-8 template, ≤127 bytes |
 | output | blur_subtitle | `` | Optional UTF-8 template, ≤255 bytes |
+| output | blur_footer | `` | Optional UTF-8 template, ≤255 bytes; bottom centered |
 | output | blur_font | `Noto Sans` | Fontconfig font name/pattern; config-file-only |
 | output | blur_color | `#101113` | Tint #RRGGBB |
 | output | blur_foreground | `#ffffff` | Text #RRGGBB |
@@ -97,6 +101,8 @@ The following table is the supported schema. `examples/cast.conf` includes every
 | output | blur_opacity | `0.6` | Tint opacity 0–1; blur still applies at 0 |
 | output | blur_title_size | `48` | 8–256 output pixels; scales down to fit |
 | output | blur_subtitle_size | `24` | 8–256 output pixels; scales down to fit |
+| output | blur_footer_size | `18` | 8–256 output pixels; scales down to fit |
+| output | blur_text_gap | `12` | 0–512 output pixels between title and subtitle |
 | camera | device | `/dev/video0` | Literal string |
 | camera | enabled | `true` | true / false |
 | camera | visible | `true` | true / false |
@@ -188,7 +194,7 @@ Capture kind=window selects the active Xorg window once at startup; interactive 
 ## Pause and blur text
 
 Solid pause and blur share their configured styles across live and recording;
-the output flags remain independent. Set both title and subtitle to empty values
+the output flags remain independent. Set title, subtitle and footer to empty values
 for a screen with no text. `pause_text` aliases `pause_title`, and `pause_color`
 aliases `pause_background`; specifying either spelling twice is a duplicate.
 
@@ -196,11 +202,17 @@ aliases `pause_background`; specifying either spelling twice is a duplicate.
 [output]
 pause_title = Back soon
 pause_subtitle = {date:%A, %d %B} · {time:%H:%M}
+pause_footer = {datetime:%A, %d %B · %H:%M}
+pause_footer_size = 18
+pause_text_gap = 12
 pause_font = Noto Sans
 pause_background = #20252b
 pause_foreground = #ffffff
 blur_title = Taking a break
 blur_subtitle = {datetime}
+blur_footer = Back shortly
+blur_footer_size = 18
+blur_text_gap = 20
 blur_font = Noto Sans
 blur_radius = 48
 blur_opacity = 0.6
@@ -210,15 +222,23 @@ blur_opacity = 0.6
 YYYY-MM-DD HH:MM:SS in the daemon's local timezone. Add a colon and a strftime
 format to any of them: `{time:%H:%M}`, `{date:%A}`, or `{datetime:%Y-%m-%d %H:%M}`.
 `{{` and `}}` emit literal braces. Placeholders update while the screen is shown;
-title/subtitle use the same time snapshot. Unknown placeholders, unmatched braces,
+title/subtitle/footer use the same time snapshot. Unknown placeholders, unmatched braces,
 invalid formats and expansion beyond the bounded text capacity fail validation.
 Other config strings remain literal and never expand shell expressions.
 
 Fontconfig resolves the font pattern through system fonts; use `fc-match 'Noto Sans'`
 to inspect it. FreeType draws the resolved font at the requested output pixel size,
 scaling down to fit the canvas. The Arch package includes noto-fonts as a dependency.
+The footer is centered near the bottom with an adaptive safe margin. Title and
+subtitle remain a centered block; `pause_text_gap` / `blur_text_gap` are independent
+of font size and can be zero. Text and spacing shrink together if needed to fit,
+reserving room for the footer.
+
 Fonts may be chosen only in the config file and applied with `cast config reload`;
 CLI/panel session settings cannot change them. A failed font load rejects the reload.
+For example, set `blur_font = Noto Serif` or `pause_font = Noto Sans:style=Bold`
+under `[output]`, then reload. `fc-list : family` lists installed families.
+
 This renderer supports UTF-8 glyphs provided by the selected face; it does not
 implement complex-script shaping or an input-method editor.
 

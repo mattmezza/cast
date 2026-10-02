@@ -17,6 +17,7 @@ control panel with SDL3_ttf text rendering, launched from the same cast executab
 The user presents screen content with a webcam in conferencing calls and records
 presentations. They use a tiling window manager and sxhkd shortcuts. The panel
 provides visible controls for the same daemon already controlled through the CLI.
+Preview is an independent floating window that can stay beside the panel.
 
 ## Operating context
 
@@ -28,11 +29,11 @@ must remain stable while live, paused or frozen, and closing it leaves cast runn
 
 ## Capabilities and constraints
 
-The panel uses a compact Home screen and reachable Source, Camera, Audio, Effects
-Settings and Outputs screens. Reveal settings progressively instead of displaying the
-whole control surface at once. Actual output preview remains visible on every
-screen, becomes compact while editing, and can be moved out of the way. Output
-state and privacy actions remain easy to reach. Render crisp text at native display
+The panel uses a compact Home screen with direct Live and Recording controls and
+reachable Source, Camera, Audio, Effects and Settings screens. Reveal settings
+progressively instead of displaying the whole control surface at once. A Preview
+button on every screen toggles the independent floating preview. Output state and
+privacy actions remain easy to reach. Render crisp text at native display
 density, with clear contrast and little wasted screen space.
 Camera mirroring defaults on and affects only the webcam. A custom paused message
 must be editable through both CLI and panel. Runtime changes affect the session;
@@ -49,8 +50,8 @@ not be promised without compositor support.
 The build brief is `cast-build-prompt.md`; current implementation and verification
 are documented under `docs/`. The user initially approved an ASCII panel sketch,
 then rejected the implemented all-at-once layout after using it. Their current
-direction is mobile-style focused navigation with an always-visible movable
-preview and crisp typography.
+direction is mobile-style focused navigation with crisp typography, direct output
+controls on Home and an independent floating preview.
 
 ## Product principles
 
