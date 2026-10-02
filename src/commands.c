@@ -148,6 +148,7 @@ static int status(App *a, bool json, char *out, size_t n)
     char mic_source[sizeof c->mic_source * 6 + 3];
     char desktop_source[sizeof c->desktop_source * 6 + 3];
     char virtual_name[sizeof c->virtual_name * 6 + 3];
+    char pause_text[sizeof c->pause_text * 6 + 3];
     int length;
     json_string(path, sizeof path, s->record_path);
     json_string(err, sizeof err, s->last_error);
@@ -156,6 +157,7 @@ static int status(App *a, bool json, char *out, size_t n)
     json_string(mic_source, sizeof mic_source, c->mic_source);
     json_string(desktop_source, sizeof desktop_source, c->desktop_source);
     json_string(virtual_name, sizeof virtual_name, c->virtual_name);
+    json_string(pause_text, sizeof pause_text, c->pause_text);
     media_audio_status(a->media, audio, sizeof audio);
     double seconds = media_record_duration(a->media) / 1e9;
     if (json) {
@@ -164,7 +166,8 @@ static int status(App *a, bool json, char *out, size_t n)
             "{\"version\":\"%s\",\"backend\":%s,\"capabilities\":{\"capture\":%s,\"cursor_"
             "metadata\":%s,\"embedded_cursor\":%s,\"input\":%s,\"region_selection\":%s,"
             "\"window_selection\":%s,\"preview\":%s},\"source\":{\"monitor\":%s,\"kind\":\"%"
-            "s\",\"region\":[%d,%d,%d,%d]},\"live\":{\"enabled\":%s,\"state\":\"%s\"},"
+            "s\",\"region\":[%d,%d,%d,%d]},\"live\":{\"enabled\":%s,\"state\":\"%s\",\"message\":%"
+            "s},"
             "\"record\":{\"state\":\"%s\",\"path\":%s,\"duration\":%.3f,\"countdown\":%s,"
             "\"finalizing\":%s},"
             "\"group_paused\":%s,\"layout\":\"%s\",\"zoom\":%.3f,\"camera_visible\":%s,"
@@ -181,8 +184,9 @@ static int status(App *a, bool json, char *out, size_t n)
             s->live_paused   ? "paused"
             : s->live_frozen ? "frozen"
                              : "live",
-            s->recording ? (s->record_paused ? "paused" : "recording") : "stopped", path, seconds,
-            a->countdown ? "true" : "false", media_record_finalizing(a->media) ? "true" : "false",
+            pause_text, s->recording ? (s->record_paused ? "paused" : "recording") : "stopped",
+            path, seconds, a->countdown ? "true" : "false",
+            media_record_finalizing(a->media) ? "true" : "false",
             s->group_paused ? "true" : "false", c->layout, c->zoom_factor,
             c->camera_visible ? "true" : "false", c->mic ? "true" : "false", mic_source,
             c->mic_gain, c->desktop ? "true" : "false", desktop_source, c->desktop_gain,
@@ -192,7 +196,8 @@ static int status(App *a, bool json, char *out, size_t n)
         length =
             snprintf(out, n,
                      "backend=%s source=%s:%s layout=%s camera=%s zoom=%.2f\nlive=%s recording=%s "
-                     "duration=%.3fs path=%s countdown=%s\naudio=%s\ndropped_frames=%llu error=%s",
+                     "duration=%.3fs path=%s "
+                     "countdown=%s\nlive_message=%s\naudio=%s\ndropped_frames=%llu error=%s",
                      c->backend, c->capture_kind, c->monitor[0] ? c->monitor : "selected",
                      c->layout, c->camera_visible ? "visible" : "hidden", c->zoom_factor,
                      s->live_paused   ? "PAUSED"
@@ -201,8 +206,8 @@ static int status(App *a, bool json, char *out, size_t n)
                      s->recording ? (s->record_paused ? "RECORDING-PAUSED" : "RECORDING")
                      : media_record_finalizing(a->media) ? "finalizing"
                                                          : "stopped",
-                     seconds, s->record_path, a->countdown ? "pending" : "off", audio,
-                     (unsigned long long)s->dropped_frames, s->last_error);
+                     seconds, s->record_path, a->countdown ? "pending" : "off", c->pause_text,
+                     audio, (unsigned long long)s->dropped_frames, s->last_error);
     }
     if (length < 0 || (size_t)length >= n) {
         return app_error(out, n, "status exceeds IPC limit; use shorter paths/source names");
@@ -236,6 +241,7 @@ static int barrier(App *a, State *candidate, char *e, size_t n)
     if (candidate->record_paused) {
         frame_free(&a->record);
     }
+    panel_transport_barrier(a->panel, a, false);
     /* Neutral video is published before recorder barriers wait for in-flight work.
        media_privacy gates live audio before applying the recording transition. */
     media_privacy(a->media, candidate->live_paused, candidate->live_frozen,
@@ -325,6 +331,10 @@ static int apply_candidate(App *a, Config *c, char *e, size_t n)
         return app_error(e, n,
                          "backend has no separate cursor metadata; zoom follow is unsupported");
     }
+    if ((c->cursor != a->config.cursor && !cap.cursor_metadata) ||
+        (c->cursor_highlight != a->config.cursor_highlight && !cap.cursor_metadata)) {
+        return app_error(e, n, "backend does not support changing cursor visibility/highlight");
+    }
     if (c->preview && !cap.preview) {
         return app_error(e, n, "backend preview unsupported");
     }
@@ -351,7 +361,47 @@ static int apply_candidate(App *a, Config *c, char *e, size_t n)
     app_sync_source(a);
     compositor_clear(a->compositor);
     compositor_neutral(c, &a->neutral);
+    panel_transport_barrier(a->panel, a, false);
     return 0;
+}
+
+static int command_message(App *a, const char *value, char *out, size_t n)
+{
+    if (strlen(value) >= sizeof a->config.pause_text) {
+        return app_error(out, n, "paused message must be shorter than %zu bytes",
+                         sizeof a->config.pause_text);
+    }
+    for (const unsigned char *p = (const unsigned char *)value; *p;) {
+        if (*p < 128) {
+            p++;
+        } else {
+            size_t count = utf8_size(p);
+            if (!count) {
+                return app_error(out, n, "paused message must be valid UTF-8");
+            }
+            p += count;
+        }
+    }
+    strcpy(a->config.pause_text, value);
+    compositor_neutral(&a->config, &a->neutral);
+    int result = 0;
+    if (a->state.live_paused && a->config.live_enabled &&
+        media_live(a->media, &a->neutral, true, out, n)) {
+        result = -1;
+    }
+    /* An active freeze keeps its original pixels; changing the label never changes state. */
+    if (platform_capabilities(a->platform).preview &&
+        ((!strcmp(a->config.preview_target, "live") && a->state.live_paused) ||
+         (!strcmp(a->config.preview_target, "record") &&
+          (!a->state.recording || a->state.record_paused))) &&
+        platform_preview(a->platform, &a->neutral, &a->state, &a->config, out, n)) {
+        result = -1;
+    }
+    panel_transport_barrier(a->panel, a, false);
+    if (!result) {
+        snprintf(out, n, "paused message updated for this session");
+    }
+    return result;
 }
 
 #define IS(i, text) (ac > (i) && !strcmp(av[i], text))
@@ -609,6 +659,28 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
             snprintf(out, n, "cast shutting down; live output privacy-paused");
         }
         return result;
+    }
+    if (IS(0, "live") && IS(1, "message")) {
+        ARITY(3);
+        return command_message(a, av[2], out, n);
+    }
+    if (IS(0, "settings")) {
+        if (ac < 3 || !(ac & 1)) {
+            return app_error(out, n, "settings SECTION.KEY VALUE [SECTION.KEY VALUE ...]");
+        }
+        for (int i = 1; i < ac; i += 2) {
+            if (config_set_value(&c, av[i], av[i + 1], out, n)) {
+                return -1;
+            }
+        }
+        if (apply_candidate(a, &c, out, n)) {
+            return -1;
+        }
+        if (c.zoom_factor > 1) {
+            a->zoom_last = c.zoom_factor;
+        }
+        snprintf(out, n, "session settings applied atomically; output states preserved");
+        return 0;
     }
     if (IS(0, "pause") || IS(0, "resume") || IS(0, "live")) {
         if (IS(0, "live")) {

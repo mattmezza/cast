@@ -5,6 +5,16 @@ int cast_cli_entry(int, char **);
 #undef main
 #include <assert.h>
 #include <libavutil/log.h>
+#ifdef WITH_PANEL
+int panel_run(const Config *config, char *error, size_t n)
+{
+    (void)config;
+    (void)error;
+    (void)n;
+    assert(!"command tests must not open a panel");
+    return -1;
+}
+#endif
 
 static char response[CAST_IPC_MAX - 16];
 static void expect_command(App *app, bool success, int argc, const char **args)
@@ -115,6 +125,38 @@ int main(void)
     App *app = new_app(configuration, socket_pathname);
     COMMAND(app, true, "status", "--json");
     assert(strstr(response, "\"state\":\"paused\""));
+    State message_state = app->state;
+    Frame neutral_before = {0};
+    assert(frame_copy(&neutral_before, &app->neutral) == 0);
+    COMMAND(app, true, "live", "message", "Screen sharing paused");
+    assert(!strcmp(app->config.pause_text, "Screen sharing paused"));
+    assert(memcmp(&message_state, &app->state, sizeof message_state) == 0);
+    assert(memcmp(neutral_before.data, app->neutral.data,
+                  (size_t)app->neutral.stride * app->neutral.height));
+    Config message_config = app->config;
+    char too_long[sizeof app->config.pause_text + 1];
+    memset(too_long, 'x', sizeof too_long - 1);
+    too_long[sizeof too_long - 1] = 0;
+    COMMAND(app, false, "live", "message", too_long);
+    COMMAND(app, false, "live", "message", "invalid \xff");
+    COMMAND(app, false, "live", "message", "extra", "argument");
+    assert(memcmp(&message_config, &app->config, sizeof message_config) == 0);
+    COMMAND(app, true, "live", "message", "");
+    assert(!app->config.pause_text[0] && app->state.live_paused);
+    COMMAND(app, true, "live", "message", "café paused");
+    COMMAND(app, true, "status", "--json");
+    assert(strstr(response, "\"message\":\"café paused\""));
+    frame_free(&neutral_before);
+    Config settings_before = app->config;
+    COMMAND(app, false, "settings", "camera.radius", "36", "camera.border_width", "999");
+    assert(memcmp(&settings_before, &app->config, sizeof settings_before) == 0);
+    COMMAND(app, false, "settings", "output.width", "640", "camera.radius", "36");
+    assert(memcmp(&settings_before, &app->config, sizeof settings_before) == 0);
+    COMMAND(app, false, "settings", "keys.enabled", "true", "camera.radius", "36");
+    assert(memcmp(&settings_before, &app->config, sizeof settings_before) == 0);
+    COMMAND(app, true, "settings", "camera.radius", "36", "camera.border_width", "4");
+    assert(app->config.radius == 36 && app->config.border_width == 4);
+    assert(memcmp(&message_state, &app->state, sizeof message_state) == 0);
     COMMAND(app, false, "layout", "screen", "extra");
     COMMAND(app, false, "camera", "size", "95%");
     COMMAND(app, false, "zoom", "set", "nan");
@@ -130,6 +172,13 @@ int main(void)
     tick(app);
     COMMAND(app, true, "live", "freeze");
     assert(app->state.live_frozen && app->frozen.data);
+    Frame freeze_before = {0};
+    assert(frame_copy(&freeze_before, &app->frozen) == 0);
+    COMMAND(app, true, "live", "message", "New paused label");
+    assert(app->state.live_frozen && !app->state.live_paused);
+    assert(!memcmp(freeze_before.data, app->frozen.data,
+                   (size_t)app->frozen.stride * app->frozen.height));
+    frame_free(&freeze_before);
     COMMAND(app, true, "live", "pause");
     COMMAND(app, true, "live", "unfreeze");
     assert(app->state.live_paused);

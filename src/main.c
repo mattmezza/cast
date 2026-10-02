@@ -1,4 +1,7 @@
 #include "app_internal.h"
+#ifdef WITH_PANEL
+#include "panel.h"
+#endif
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -51,12 +54,14 @@ static const char help[] =
     "  cursor on|off|toggle; cursor highlight on|off|toggle\n"
     "  clicks on|off|toggle; keys on|off|toggle; keys mode shortcuts|all; keys clear\n"
     "  annotations live|record keys|clicks on|off\n"
-    "  pause; resume; live pause|resume|toggle|freeze|unfreeze\n"
+    "  pause; resume; live pause|resume|toggle|freeze|unfreeze; live message TEXT\n"
     "  record start [PATH]; record stop|pause|resume|toggle\n"
     "  audio list; audio mic|desktop|virtual on|off|toggle\n"
     "  audio mic|desktop source NAME; audio mic|desktop gain PERCENT%\n"
     "  preset NAME|next; preview on|off|toggle; preview target live|record\n"
     "  status [--json]; doctor; config check [PATH]; config defaults; config reload\n"
+    "  settings SECTION.KEY VALUE [SECTION.KEY VALUE ...] (session only)\n"
+    "  panel (optional native control panel)\n"
     "  reset; quit; --help; --version\n"
     "Live starts privacy-paused. Recording toggle only pauses/resumes an existing file.\n";
 
@@ -316,6 +321,7 @@ void app_sync_source(App *a)
     a->config.zoom_factor = 1;
     platform_events(a->platform, a->compositor, &a->config, true);
     compositor_clear(a->compositor);
+    panel_transport_barrier(a->panel, a, true);
     media_barrier(a->media);
     frame_free(&a->live);
     frame_free(&a->record);
@@ -333,6 +339,7 @@ int app_shutdown_privacy(App *a, char *e, size_t n)
         platform_events(a->platform, a->compositor, &a->config, true);
         compositor_clear(a->compositor);
     }
+    panel_transport_barrier(a->panel, a, true);
     int result = 0;
     if (a->media) {
         /* media_live silences virtual audio without dropping accepted recorder jobs. */
@@ -441,6 +448,7 @@ static void tick(App *a)
             remember_error(a, e);
         }
     }
+    panel_transport_publish(a->panel, a, live, need_record ? record : &a->neutral);
     if (a->config.preview || platform_capabilities(a->platform).preview) {
         const Frame *target = !strcmp(a->config.preview_target, "record")
                                   ? (need_record ? record : &a->neutral)
@@ -455,6 +463,7 @@ static void tick(App *a)
 typedef struct {
     int fd;
     uint64_t deadline;
+    pid_t pid;
 } Peer;
 static int decode_packet(char *packet, ssize_t size, int *argc, char **argv, char *e, size_t n)
 {
@@ -468,7 +477,10 @@ static int decode_packet(char *packet, ssize_t size, int *argc, char **argv, cha
             return app_error(e, n, "too many arguments");
         }
         char *end = memchr(packet + offset, 0, (size_t)size - offset);
-        if (!end || end == packet + offset) {
+        bool empty_value =
+            (*argc == 2 && !strcmp(argv[0], "live") && !strcmp(argv[1], "message")) ||
+            (*argc >= 2 && !(*argc & 1) && !strcmp(argv[0], "settings"));
+        if (!end || (end == packet + offset && !empty_value)) {
             return app_error(e, n, "empty or unterminated command argument");
         }
         argv[(*argc)++] = packet + offset;
@@ -499,14 +511,34 @@ static void drain_peers(App *a, Peer *peers, int *count)
         if (size < 0) {
             snprintf(out, sizeof out, "IPC receive timeout/error");
         } else {
+            if (panel_transport_request(a->panel, a, p->fd, packet, size, getuid(), p->pid)) {
+                memmove(peers, peers + 1, (size_t)(--*count) * sizeof *peers);
+                continue;
+            }
             int argc = 0;
             char *argv[CAST_MAX_ARGS];
-            rc = decode_packet(packet, size, &argc, argv, out, sizeof out);
+            char *command = packet;
+            if (size >= 8 && !memcmp(packet, "CASTG1\0", 8)) {
+                uint64_t generation = 0;
+                if (size >= 16) {
+                    memcpy(&generation, packet + 8, sizeof generation);
+                }
+                panel_transport_check(a->panel, a);
+                if (!panel_transport_authorize(a->panel, generation, p->pid)) {
+                    reply_peer(p->fd, -1, "stale or unauthenticated panel generation");
+                    memmove(peers, peers + 1, (size_t)(--*count) * sizeof *peers);
+                    continue;
+                }
+                command += 16;
+                size -= 16;
+            }
+            rc = decode_packet(command, size, &argc, argv, out, sizeof out);
             if (!rc) {
                 rc = app_command(a, argc, argv, out, sizeof out);
                 if (rc) {
                     remember_error(a, out);
                 }
+                panel_transport_barrier(a->panel, a, false);
             }
         }
         reply_peer(p->fd, rc, out);
@@ -663,9 +695,11 @@ static int run_daemon(Config config, Startup startup)
     fprintf(stderr, "cast: %s backend; live privacy-paused; socket %s\n", config.backend,
             config.socket_path);
     a->source_generation = platform_source_generation(a->platform);
+    a->panel = panel_transport_create();
     uint64_t interval = 1000000000ULL / (unsigned)config.fps, next = cast_now_ns();
     while (!stopping) {
         uint64_t now = cast_now_ns();
+        panel_transport_check(a->panel, a);
         if (now >= next) {
             tick(a);
             next += interval;
@@ -703,8 +737,8 @@ static int run_daemon(Config config, Startup startup)
                     reply_peer(fd, -1, "control queue full; retry command");
                     continue;
                 }
-                peers[count++] =
-                    (Peer){fd, cast_now_ns() + (uint64_t)a->config.ipc_timeout_ms * 1000000ULL};
+                peers[count++] = (Peer){
+                    fd, cast_now_ns() + (uint64_t)a->config.ipc_timeout_ms * 1000000ULL, cred.pid};
             }
         }
         if (stopping) {
@@ -731,6 +765,8 @@ cleanup:
     for (int i = 0; i < count; i++) {
         reply_peer(peers[i].fd, -1, "daemon shutting down");
     }
+    panel_transport_destroy(a->panel, a);
+    a->panel = NULL;
     if (a->media) {
         /* Retry a busy virtual output briefly before releasing the producer. */
         uint64_t deadline = cast_now_ns() + UINT64_C(100000000);
@@ -850,6 +886,20 @@ int main(int argc, char **argv)
         return fprintf(stderr, "cast: %s\n", e), 1;
     }
     if (first < argc) {
+        if (!strcmp(argv[first], "panel")) {
+            if (argc - first != 1) {
+                return fprintf(stderr, "cast: panel takes no arguments\n"), 1;
+            }
+#ifdef WITH_PANEL
+            int rc = panel_run(&config, e, sizeof e);
+            if (rc) {
+                fprintf(stderr, "cast: %s\n", e);
+            }
+            return rc ? 1 : 0;
+#else
+            return fprintf(stderr, "cast: panel support is disabled; rebuild with PANEL=1\n"), 1;
+#endif
+        }
         return client(&config, argc - first, argv + first);
     }
     return run_daemon(config, startup);

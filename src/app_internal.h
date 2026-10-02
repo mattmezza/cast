@@ -1,6 +1,7 @@
 #ifndef APP_INTERNAL_H
 #define APP_INTERNAL_H
 #include "cast.h"
+#include "panel_transport.h"
 
 /* Daemon session storage stays stable while asynchronous selection references it. */
 typedef struct {
@@ -17,7 +18,7 @@ typedef struct {
     const char *values[32];
     bool no_live, no_camera;
 } Startup;
-typedef struct {
+typedef struct App {
     Config config, defaults;
     Startup startup;
     State state;
@@ -33,6 +34,7 @@ typedef struct {
     uint64_t countdown_deadline;
     char countdown_path[PATH_MAX];
     bool record_finalizing;
+    PanelTransport *panel;
 } App;
 int app_error(char *, size_t, const char *, ...) __attribute__((format(printf, 3, 4)));
 int app_copy_string(char *, size_t, const char *, char *, size_t);
