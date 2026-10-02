@@ -8,7 +8,7 @@ url='https://github.com/mattmezza/cast'
 # Source is MIT/BSD; the Inter font is OFL and SDL is Zlib. Arch FFmpeg is GPL-enabled.
 license=('MIT' 'BSD-3-Clause' 'OFL-1.1' 'Zlib' 'GPL-3.0-only')
 depends=('glibc' 'ffmpeg' 'pipewire' 'glib2' 'libx11' 'libxext' 'libxrandr'
-         'libxi' 'libxfixes' 'libxcomposite' 'sdl3' 'sdl3_ttf' 'curl')
+         'libxi' 'libxfixes' 'libxcomposite' 'sdl3' 'sdl3_ttf' 'curl' 'fontconfig' 'freetype2' 'noto-fonts')
 makedepends=('git' 'pkgconf')
 checkdepends=('python' 'dbus')
 optdepends=('v4l2loopback-dkms: virtual camera kernel device'
