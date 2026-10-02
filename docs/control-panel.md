@@ -46,7 +46,7 @@ a left arrow and a clear Back label. Icons never replace action names.
 Tab and Shift+Tab move focus; Enter applies a field, Enter/Space activates buttons,
 and arrow keys choose dropdown entries. Ctrl+Q closes only the panel. The optional
 `make X11=1 WAYLAND=1 PANEL=1 check-panel` exercises these controls against a
-synthetic daemon on a private display; it requires Xvfb, xdotool and xclip.
+synthetic daemon on a private display; it requires Xvfb, xdotool, xprop and xclip.
 
 ## Recording countdown
 
