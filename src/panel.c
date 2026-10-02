@@ -1937,6 +1937,22 @@ static void cleanup(Panel *p, void *clay_memory)
     TTF_Quit();
     SDL_Quit();
 }
+static void json_string(FILE *file, const char *value)
+{
+    fputc('"', file);
+    for (const unsigned char *s = (const unsigned char *)value; *s; s++) {
+        if (*s == '"' || *s == '\\') {
+            fputc('\\', file);
+            fputc(*s, file);
+        } else if (*s < 32) {
+            fprintf(file, "\\u%04x", *s);
+        } else {
+            fputc(*s, file);
+        }
+    }
+    fputc('"', file);
+}
+
 /* Opt-in native test diagnostics report actual layout and decoded preview state. */
 static void write_ui_state(Panel *p, const char *path)
 {
@@ -1977,7 +1993,15 @@ static void write_ui_state(Panel *p, const char *path)
                 i ? "," : "", w->id, key, w->enabled ? "true" : "false", w->box.x, w->box.y,
                 w->box.width, w->box.height);
     }
-    fputs("]}\n", file);
+    fprintf(file, "],\"focus\":%u,\"active_text\":%u,\"edit_text\":", p->focus, p->active_text);
+    int edit_index;
+    FieldEdit *edit = active_edit(p, &edit_index);
+    json_string(file, edit ? edit->value : "");
+    fputs(",\"pause_message\":", file);
+    json_string(file, p->snapshot.config.pause_text);
+    fputs(",\"error\":", file);
+    json_string(file, p->error[0] ? p->error : p->snapshot.error);
+    fputs("}\n", file);
     fclose(file);
 }
 

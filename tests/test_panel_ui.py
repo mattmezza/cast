@@ -38,6 +38,7 @@ def exercise():
         common = ["--config", str(config), "--socket", str(root / "daemon.sock")]
         daemon = None
         panel = None
+        clipboard = None
         log = (root / "native.log").open("w+")
 
         def cli(*args):
@@ -249,13 +250,37 @@ def exercise():
             await_panel_ack(submitted)
             click_widget("output.pause_text")
             xdo("key", "--clearmodifiers", "Tab", "shift+Tab")
-            subprocess.run(["xclip", "-selection", "clipboard", "-loops", "2"], env=env,
-                           input="Private café", text=True, stdout=subprocess.DEVNULL,
-                           stderr=log, check=True, timeout=3)
+            field_id = widget("output.pause_text")["id"]
+            wait_until(lambda: ui()["active_text"] == field_id and ui()["focus"] == field_id,
+                       "Tab/Shift+Tab did not return focus to the pause message")
+            # SDL may probe TARGETS repeatedly when clipboard ownership changes. Keep
+            # the UTF-8 owner alive until paste completes, independent of probe count.
+            clipboard = subprocess.Popen(["xclip", "-selection", "clipboard", "-target",
+                                          "UTF8_STRING", "-loops", "0", "-quiet"], env=env,
+                                         stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                         stderr=log)
+            clipboard.stdin.write("Private café".encode("utf-8"))
+            clipboard.stdin.close()
+
+            def clipboard_ready():
+                assert clipboard.poll() is None, "Clipboard owner exited before paste"
+                result = subprocess.run(["xclip", "-selection", "clipboard", "-target",
+                                         "UTF8_STRING", "-o"], env=env, capture_output=True,
+                                        timeout=3)
+                return result.returncode == 0 and result.stdout == "Private café".encode("utf-8")
+
+            wait_until(clipboard_ready, "UTF-8 clipboard ownership was not established")
             submitted = ui()["command_queued"] + 1
-            xdo("key", "--clearmodifiers", "ctrl+v", "Return")
+            xdo("key", "--clearmodifiers", "ctrl+v")
+            wait_until(lambda: ui()["active_text"] == field_id and ui()["edit_text"] == "Private café",
+                       "UTF-8 clipboard text did not reach the focused draft")
+            assert state()["live"]["message"] == "Private session", "Paste applied an unsubmitted draft"
+            xdo("key", "--clearmodifiers", "Return")
             wait_until(lambda: state()["live"]["message"] == "Private café", "UTF-8 paste or keyboard focus failed")
             await_panel_ack(submitted)
+            clipboard.terminate()
+            clipboard.wait(timeout=3)
+            clipboard = None
             xdo("key", "--clearmodifiers", "Escape")
             wait_until(lambda: ui()["tab"] == -1, "Escape did not return home")
 
@@ -304,9 +329,24 @@ def exercise():
             daemon.wait(timeout=8)
         except Exception:
             log.flush()
-            print((root / "native.log").read_text(), file=sys.stderr)
+            try:
+                diagnostics = json.loads((root / "ui.json").read_text())
+                diagnostics.pop("widgets", None)
+                print("Panel diagnostics:", json.dumps(diagnostics, ensure_ascii=False), file=sys.stderr)
+            except (FileNotFoundError, json.JSONDecodeError) as diagnostic_error:
+                print("Panel diagnostics unavailable:", diagnostic_error, file=sys.stderr)
+            if daemon and daemon.poll() is None:
+                try:
+                    print("Daemon live state:", json.dumps(state()["live"], ensure_ascii=False), file=sys.stderr)
+                except Exception as diagnostic_error:
+                    print("Daemon status unavailable:", diagnostic_error, file=sys.stderr)
+            print("Native log tail:\n" + "\n".join((root / "native.log").read_text().splitlines()[-60:]),
+                  file=sys.stderr)
             raise
         finally:
+            if clipboard and clipboard.poll() is None:
+                clipboard.terminate()
+                clipboard.wait(timeout=3)
             if panel and panel.poll() is None:
                 panel.terminate()
                 panel.wait(timeout=8)
