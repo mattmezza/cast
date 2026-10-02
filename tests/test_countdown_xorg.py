@@ -25,6 +25,12 @@ def guides():
     return result.stdout.split() if result.returncode == 0 else []
 
 
+def panels():
+    result = subprocess.run(['xdotool', 'search', '--onlyvisible', '--class', '^CastPanel$'],
+                            capture_output=True, text=True)
+    return result.stdout.split() if result.returncode == 0 else []
+
+
 def main():
     assert os.environ.get('DISPLAY'), 'run through the private Xvfb check-xorg target'
     with tempfile.TemporaryDirectory(prefix='cast-countdown-') as directory:
@@ -36,6 +42,7 @@ def main():
                                  f'directory={temporary}\n')
         base = [str(ROOT / 'cast'), '--config', str(configuration), '--socket', str(socket)]
         environment = dict(os.environ, XDG_RUNTIME_DIR=directory)
+        panel = None
         with (temporary / 'daemon.log').open('w+') as log:
             daemon = subprocess.Popen(base + ['--backend', 'xorg', '--no-live', '--no-camera',
                                              '--width', '320', '--height', '180'],
@@ -51,6 +58,21 @@ def main():
                     return json.loads(command('status', '--json'))
 
                 wait_until(socket.exists, 'private daemon did not create its socket')
+                if os.environ.get('CAST_COUNTDOWN_WITH_PANEL') == '1':
+                    ui_state = temporary / 'panel-state.json'
+                    panel_environment = dict(environment, SDL_VIDEODRIVER='x11',
+                                             CAST_PANEL_UI_STATE=str(ui_state))
+                    panel = subprocess.Popen(base + ['panel'], env=panel_environment,
+                                             stdout=log, stderr=log)
+
+                    def attached():
+                        try:
+                            snapshot = json.loads(ui_state.read_text())
+                        except (FileNotFoundError, json.JSONDecodeError):
+                            return False
+                        return bool(panels()) and snapshot['live_status'] != 'Disconnected'
+
+                    wait_until(attached, 'native panel did not attach to private daemon')
                 command('record', 'start', str(temporary / 'escape.mkv'))
                 wait_until(lambda: len(guides()) == 1, 'CLI countdown guide did not map')
                 window = guides()[0]
@@ -70,6 +92,8 @@ def main():
                 assert not state()['record']['state'] == 'recording'
                 assert not (temporary / 'escape.mkv').exists()
                 assert not guides(), 'cancelled guide stayed visible'
+                if panel:
+                    assert panels(), 'cancelling the preview closed the separate panel'
 
                 for cancel in [('record', 'stop'), ('pause',)]:
                     path = temporary / ('-'.join(cancel) + '.mkv')
@@ -88,6 +112,8 @@ def main():
                 wait_until(lambda: bool(guides()), 'successful countdown guide did not appear')
                 wait_until(lambda: state()['record']['state'] == 'recording', 'countdown did not start recording')
                 assert not guides(), 'guide remained visible at recording start'
+                if panel:
+                    assert panels(), 'recording admission closed the separate panel'
                 time.sleep(.2)
                 command('record', 'cut')
                 before = state()['record']['duration']
@@ -117,8 +143,8 @@ def main():
                     ['ffmpeg', '-v', 'error', '-i', str(path), '-frames:v', '1',
                      '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'])
                 assert len(first) == 320 * 180 * 3
-                # The centered guide covered this region. The first recording
-                # may use the retained neutral footprint while WM chrome retires;
+                # The centered guide covered this region. A fresh recording
+                # contains the black desktop or the separate panel's neutral mask;
                 # it must never contain the guide's number, ring or background.
                 for y in range(70, 110):
                     for x in range(140, 180):
@@ -135,6 +161,13 @@ def main():
                 print(log.read())
                 raise
             finally:
+                if panel and panel.poll() is None:
+                    panel.terminate()
+                    try:
+                        panel.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        panel.kill()
+                        panel.wait()
                 if daemon.poll() is None:
                     daemon.terminate()
                     try:
