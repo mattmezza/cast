@@ -39,7 +39,8 @@ struct CastAudio {
     struct spa_hook core_listener, registry_listener, metadata_listener;
     struct AudioNode nodes[AUDIO_NODES];
     int count, seq;
-    uint64_t accept_after;
+    uint64_t accept_after, live_accept_after, record_accept_after;
+    uint64_t live_epoch_after, record_epoch_after;
     bool done, server_dead, started, live_silent;
     char default_mic[256], error[CAST_ERR];
     Config cfg;
@@ -224,14 +225,9 @@ static void lane_format(void *data, uint32_t id, const struct spa_pod *param)
 static void put_samples(struct AudioLane *l, uint64_t ns, const float *src, int count)
 {
     uint64_t start = sample_time(ns);
+    uint64_t captured_at = start;
     if (start < l->owner->accept_after) {
-        uint64_t stale = l->owner->accept_after - start;
-        if (stale >= (uint64_t)count) {
-            return;
-        }
-        src += (size_t)stale * 2;
-        start += stale;
-        count -= (int)stale;
+        return;
     }
     if (count > AUDIO_RING) {
         int skip = count - AUDIO_RING;
@@ -244,6 +240,15 @@ static void put_samples(struct AudioLane *l, uint64_t ns, const float *src, int 
     }
     if (l->end && start < l->end && l->end - start < 960) {
         start = l->end;
+    }
+    /* A late callback can deliver a chunk captured before one lane's boundary.
+     * Retire that entire chunk for this lane, while retaining the other mix. */
+    uint64_t end = start + (uint64_t)count;
+    if (captured_at < l->owner->live_epoch_after && end > l->owner->live_accept_after) {
+        l->owner->live_accept_after = end;
+    }
+    if (captured_at < l->owner->record_epoch_after && end > l->owner->record_accept_after) {
+        l->owner->record_accept_after = end;
     }
     if (!l->end || start > l->end || start + (uint64_t)count < l->begin) {
         l->begin = start;
@@ -313,6 +318,12 @@ static void read_live_locked(CastAudio *a, uint64_t ns, float *dst, int count)
         memset(dst, 0, (size_t)count * 2 * sizeof(float));
     } else {
         read_locked(a, ns, dst, count);
+        uint64_t start = sample_time(ns);
+        uint64_t stale = a->live_accept_after > start ? a->live_accept_after - start : 0;
+        if (stale > (uint64_t)count) {
+            stale = (uint64_t)count;
+        }
+        memset(dst, 0, (size_t)stale * 2 * sizeof(float));
     }
 }
 static void virtual_process(void *data)
@@ -698,6 +709,8 @@ void audio_barrier(CastAudio *a, bool silent)
     }
     a->live_silent = silent;
     a->accept_after = sample_time(cast_now_ns());
+    a->live_accept_after = a->record_accept_after = a->accept_after;
+    a->live_epoch_after = a->record_epoch_after = a->accept_after;
     for (int i = 0; i < 2; i++) {
         clear_lane(&a->lane[i]);
         if (a->lane[i].stream) {
@@ -718,12 +731,53 @@ void audio_barrier(CastAudio *a, bool silent)
         pw_thread_loop_unlock(a->loop);
     }
 }
+static uint64_t privacy_after(CastAudio *a, uint64_t after)
+{
+    for (int i = 0; i < 2; i++) {
+        if (a->lane[i].end > after) {
+            after = a->lane[i].end;
+        }
+    }
+    return after;
+}
+void audio_live_privacy(CastAudio *a, bool silent)
+{
+    if (a->started) {
+        pw_thread_loop_lock(a->loop);
+    }
+    a->live_silent = silent;
+    a->live_epoch_after = sample_time(cast_now_ns());
+    a->live_accept_after = privacy_after(a, a->live_epoch_after);
+    if (a->virtual_lane.stream) {
+        pw_stream_flush(a->virtual_lane.stream, false);
+    }
+    if (a->started) {
+        pw_thread_loop_unlock(a->loop);
+    }
+}
+void audio_record_privacy(CastAudio *a)
+{
+    if (a->started) {
+        pw_thread_loop_lock(a->loop);
+    }
+    a->record_epoch_after = sample_time(cast_now_ns());
+    a->record_accept_after = privacy_after(a, a->record_epoch_after);
+    if (a->started) {
+        pw_thread_loop_unlock(a->loop);
+    }
+}
 void audio_read(CastAudio *a, uint64_t ns, float *dst, int count)
 {
     if (a->started) {
         pw_thread_loop_lock(a->loop);
     }
     read_locked(a, ns, dst, count);
+    uint64_t start = sample_time(ns);
+    uint64_t stale = a->record_accept_after > start ? a->record_accept_after - start : 0;
+    if (stale > (uint64_t)count) {
+        stale = (uint64_t)count;
+    }
+    memset(dst, 0, (size_t)stale * 2 * sizeof(float));
     if (a->started) {
         pw_thread_loop_unlock(a->loop);
     }

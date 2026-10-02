@@ -79,8 +79,9 @@ static App *new_app(const char *config_pathname, const char *socket_pathname)
     app->media = media_open(&app->config, error, sizeof error);
     assert(app->compositor && app->platform && app->media);
     assert(frame_alloc(&app->neutral, app->config.width, app->config.height) == 0);
-    compositor_neutral(&app->config, &app->neutral);
-    media_privacy(app->media, true, false, false);
+    assert(compositor_neutral(app->compositor, &app->config, &app->neutral, error, sizeof error) ==
+           0);
+    assert(media_privacy(app->media, true, false, false, error, sizeof error) == 0);
     app->source_generation = platform_source_generation(app->platform);
     tick(app);
     return app;
@@ -96,6 +97,9 @@ static void free_app(App *app)
     frame_free(&app->record);
     frame_free(&app->neutral);
     frame_free(&app->frozen);
+    frame_free(&app->record_frozen);
+    frame_free(&app->live_raw);
+    frame_free(&app->record_raw);
     free(app);
 }
 static void wait_finalization(App *app)
@@ -110,6 +114,90 @@ static void wait_finalization(App *app)
     media_record_error(app->media, error, sizeof error);
     assert(!error[0]);
     tick(app);
+}
+static bool same_pixels(const Frame *left, const Frame *right)
+{
+    return left->data && right->data && left->width == right->width &&
+           left->height == right->height && left->stride == right->stride &&
+           !memcmp(left->data, right->data, (size_t)left->stride * left->height);
+}
+static void output_modes(App *app)
+{
+    char error[CAST_ERR];
+    COMMAND(app, true, "settings", "output.blur_title", "", "output.blur_subtitle", "",
+            "output.blur_radius", "4");
+    COMMAND(app, false, "settings", "output.pause_font", "sans");
+    assert(strstr(response, "config reload"));
+    COMMAND(app, true, "live", "subtitle", "");
+    COMMAND(app, true, "camera", "anchor", "top");
+    COMMAND(app, true, "camera", "anchor", "left");
+    tick(app);
+    COMMAND(app, true, "live", "freeze");
+    COMMAND(app, true, "live", "blur", "on");
+    assert(app->state.live_frozen && app->state.live_blurred && !app->state.record_frozen &&
+           !app->state.record_blurred);
+    Frame snapshot = {0}, expected = {0};
+    assert(frame_copy(&snapshot, &app->frozen) == 0);
+    assert(frame_copy(&expected, &snapshot) == 0);
+    assert(compositor_blur(app->compositor, &app->config, &expected, error, sizeof error) == 0);
+    assert(same_pixels(&expected, &app->live));
+    assert(app_output_frames(app, error, sizeof error) == 0);
+    assert(same_pixels(&expected, &app->live) && same_pixels(&snapshot, &app->frozen));
+    COMMAND(app, true, "record", "freeze");
+    COMMAND(app, true, "record", "blur", "on");
+    assert(app->record_frozen.data != app->frozen.data);
+    assert(frame_copy(&snapshot, &app->record_frozen) == 0);
+    assert(frame_copy(&expected, &snapshot) == 0);
+    assert(compositor_blur(app->compositor, &app->config, &expected, error, sizeof error) == 0);
+    memset(app->screen.data, 0x3f, (size_t)app->screen.stride * app->screen.height);
+    memset(app->camera.data, 0x7f, (size_t)app->camera.stride * app->camera.height);
+    assert(app_output_frames(app, error, sizeof error) == 0);
+    assert(same_pixels(&expected, &app->record) && same_pixels(&snapshot, &app->record_frozen));
+    COMMAND(app, true, "record", "pause");
+    assert(same_pixels(&app->record, &app->neutral));
+    assert(same_pixels(&app->record_frozen, &app->neutral));
+    COMMAND(app, true, "settings", "record.countdown", "1");
+    COMMAND(app, true, "record", "cut");
+    assert(app->state.record_cut && app->state.record_paused && app->state.record_frozen &&
+           app->state.record_blurred && app->state.live_frozen && app->state.live_blurred);
+    char path[PATH_MAX];
+    strcpy(path, app->state.record_path);
+    uint64_t cut_duration = media_record_duration(app->media);
+    COMMAND(app, true, "record", "resume");
+    assert(app->countdown && app->countdown_resume && app->state.record_cut);
+    COMMAND(app, true, "status", "--json");
+    assert(strstr(response, "\"countdown_kind\":\"resume\""));
+    COMMAND(app, true, "record", "cut");
+    assert(!app->countdown && app->state.record_cut && !strcmp(path, app->state.record_path));
+    app->countdown_deadline = 0;
+    tick(app);
+    assert(app->state.record_cut && media_record_duration(app->media) == cut_duration);
+    COMMAND(app, true, "record", "resume");
+    COMMAND(app, true, "record", "pause");
+    assert(!app->countdown && app->state.record_cut);
+    COMMAND(app, true, "record", "toggle");
+    assert(!app->state.record_paused && app->state.record_cut);
+    COMMAND(app, true, "record", "resume");
+    COMMAND(app, true, "record", "toggle");
+    assert(!app->countdown && app->state.record_paused && app->state.record_cut);
+    COMMAND(app, true, "record", "resume");
+    app->countdown_deadline = 0;
+    tick(app);
+    assert(!app->countdown && !app->state.record_cut && app->state.recording &&
+           app->state.record_paused && app->state.record_frozen && app->state.record_blurred &&
+           !strcmp(path, app->state.record_path));
+    COMMAND(app, true, "record", "resume");
+    COMMAND(app, true, "record", "unfreeze");
+    COMMAND(app, true, "record", "blur", "off");
+    COMMAND(app, true, "live", "pause");
+    assert(same_pixels(&app->frozen, &app->neutral));
+    COMMAND(app, true, "live", "unfreeze");
+    COMMAND(app, true, "live", "blur", "off");
+    COMMAND(app, true, "live", "resume");
+    COMMAND(app, true, "settings", "record.countdown", "0");
+    tick(app);
+    frame_free(&snapshot);
+    frame_free(&expected);
 }
 
 int main(void)
@@ -187,6 +275,7 @@ int main(void)
     COMMAND(app, true, "live", "resume");
     COMMAND(app, true, "record", "start", recording_path);
     tick(app);
+    output_modes(app);
     COMMAND(app, true, "pause");
     COMMAND(app, true, "pause");
     assert(app->state.live_paused && app->state.record_paused);
@@ -233,6 +322,9 @@ int main(void)
     assert(!app->state.recording);
     COMMAND(app, true, "record", "start", "/tmp/never-created-by-cancelled-cast-test.mkv");
     COMMAND(app, true, "record", "stop");
+    assert(!app->countdown && !app->state.recording);
+    COMMAND(app, true, "record", "start", "/tmp/never-created-by-cancelled-cast-test.mkv");
+    COMMAND(app, true, "record", "pause");
     assert(!app->countdown && !app->state.recording);
 
     /* Valid UTF-8 remains intact; arbitrary filename bytes remain valid JSON. */

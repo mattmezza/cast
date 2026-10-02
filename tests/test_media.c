@@ -79,6 +79,8 @@ struct Inspection {
     int video_frames, audio_frames, red, green, blue;
     double video_first, video_last, max_video_gap, audio_first, audio_last, audio_power, audio_peak;
     int64_t audio_samples;
+    double window_begin, window_end, window_power;
+    int64_t window_samples;
 };
 static void decoded_frame(struct Inspection *out, AVFrame *frame, AVStream *stream,
                           struct SwsContext **scale, bool audio)
@@ -95,6 +97,11 @@ static void decoded_frame(struct Inspection *out, AVFrame *frame, AVStream *stre
             const float *p = (const float *)frame->data[0];
             for (int i = 0; i < frame->nb_samples; ++i) {
                 out->audio_power += p[i] * p[i];
+                double time = pts + (double)i / frame->sample_rate;
+                if (time >= out->window_begin && time < out->window_end) {
+                    out->window_power += p[i] * p[i];
+                    out->window_samples++;
+                }
                 if (fabsf(p[i]) > out->audio_peak) {
                     out->audio_peak = fabsf(p[i]);
                 }
@@ -131,9 +138,9 @@ static void decoded_frame(struct Inspection *out, AVFrame *frame, AVStream *stre
         out->blue++;
     }
 }
-static struct Inspection inspect(const char *path)
+static struct Inspection inspect_between(const char *path, double begin, double end)
 {
-    struct Inspection out = {0};
+    struct Inspection out = {.window_begin = begin, .window_end = end};
     AVFormatContext *format = NULL;
     assert(avformat_open_input(&format, path, NULL, NULL) == 0);
     assert(avformat_find_stream_info(format, NULL) >= 0);
@@ -180,6 +187,10 @@ static struct Inspection inspect(const char *path)
     av_packet_free(&packet);
     avformat_close_input(&format);
     return out;
+}
+static struct Inspection inspect(const char *path)
+{
+    return inspect_between(path, 0, 0);
 }
 static Media *new_media(Config *cfg)
 {
@@ -288,7 +299,7 @@ static void privacy_test(const char *directory)
     }
     uint64_t before = cast_now_ns();
     audio_test_push(media_test_audio(m), 0, before, sensitive, 480);
-    media_privacy(m, true, false, true);
+    assert(media_privacy(m, true, false, true, error, sizeof error) == 0);
     float silence[960];
     audio_read(media_test_audio(m), before, silence, 480);
     for (int i = 0; i < 960; ++i) {
@@ -296,7 +307,7 @@ static void privacy_test(const char *directory)
     }
     recorder_test_slow(media_test_recorder(m), 0);
     delay_ms(220);
-    media_privacy(m, false, false, false);
+    assert(media_privacy(m, false, false, false, error, sizeof error) == 0);
     /* An old pre-pause frame cannot cross the resume epoch. */
     f.ts_ns = before;
     assert(media_record_frame(m, &f, error, sizeof(error)) == 0);
@@ -314,6 +325,61 @@ static void privacy_test(const char *directory)
     media_close(m);
     printf("privacy barrier: no queued green frames or sensitive audio; %llu drops\n",
            (unsigned long long)dropped);
+}
+static void solid_and_cut_test(const char *directory)
+{
+    Config cfg;
+    Media *m = new_media(&cfg);
+    Frame frame = {0};
+    assert(frame_alloc(&frame, cfg.width, cfg.height) == 0);
+    char path[PATH_MAX], error[CAST_ERR];
+    snprintf(path, sizeof path, "%s/solid-and-cut.mkv", directory);
+    assert(media_record_start(m, &cfg, path, error, sizeof error) == 0);
+    struct Tone tone = {.media = m};
+    pthread_t audio_worker;
+    assert(pthread_create(&audio_worker, NULL, tone_thread, &tone) == 0);
+    uint64_t wall_start = cast_now_ns();
+    feed(m, &frame, 0, 12);
+    double silent_begin = media_record_duration(m) / 1e9;
+    assert(media_record_silence(m, true, error, sizeof error) == 0);
+    feed(m, &frame, 1, 18); /* Styled solid frames remain on the file timeline. */
+    double silent_end = media_record_duration(m) / 1e9;
+    assert(silent_end - silent_begin > 0.5);
+    bool active, cut;
+    uint64_t dropped;
+    media_status(m, &active, &cut, &dropped, error, sizeof error);
+    assert(active && !cut);
+    assert(media_record_pause(m, true, error, sizeof error) == 0);
+    uint64_t duration = media_record_duration(m);
+    delay_ms(200);
+    feed(m, &frame, 2, 3);
+    assert(media_record_duration(m) == duration);
+    assert(media_record_pause(m, false, error, sizeof error) == 0);
+    assert(media_record_silence(m, false, error, sizeof error) == 0);
+    feed(m, &frame, 2, 12);
+    double active_seconds = media_record_duration(m) / 1e9;
+    double wall_seconds = (cast_now_ns() - wall_start) / 1e9;
+    assert(wall_seconds - active_seconds > 0.25);
+    assert(media_record_stop(m, error, sizeof error) == 0);
+    uint64_t deadline = cast_now_ns() + UINT64_C(5000000000);
+    while (media_record_finalizing(m) && cast_now_ns() < deadline) {
+        delay_ms(1);
+    }
+    assert(!media_record_finalizing(m));
+    media_record_error(m, error, sizeof error);
+    assert(!error[0]);
+    atomic_store(&tone.stop, true);
+    pthread_join(audio_worker, NULL);
+    struct Inspection result = inspect_between(path, silent_begin + 0.1, silent_end - 0.1);
+    assert(result.green >= 14 && result.blue >= 9 && result.red >= 9);
+    assert(result.video_frames <= 42 && result.max_video_gap < 0.1);
+    assert(fabs(result.audio_last - active_seconds) < 0.08);
+    assert(result.window_samples > 15000 && result.window_power / result.window_samples < 1e-7);
+    assert(result.audio_power / result.audio_samples > 0.001);
+    frame_free(&frame);
+    media_close(m);
+    printf("solid pause writes video + decoded silence; cut removes %.3fs; same-file AV %.3fs\n",
+           wall_seconds - active_seconds, result.audio_last);
 }
 static void failure_test(const char *directory)
 {
@@ -385,7 +451,7 @@ static void responsiveness_test(const char *directory)
     assert(media_record_stop(m, error, sizeof(error)) == 0);
     assert(media_record_finalizing(m));
     /* Live privacy must not wait on the recording's drain/trailer/fsync. */
-    media_privacy(m, true, false, true);
+    assert(media_privacy(m, true, false, true, error, sizeof error) == 0);
     assert(media_live(m, &f, true, error, sizeof(error)) == 0);
     double control_ms = (cast_now_ns() - before) / 1e6;
     assert(control_ms < 100);
@@ -460,6 +526,40 @@ static void audio_lanes_test(void)
     for (int i = 0; i < 960; ++i) {
         assert(out[i] == 0);
     }
+    audio_live_privacy(audio, false);
+    audio_test_virtual_read(audio, now, out, 1);
+    assert(out[0] == 0);
+    audio_read(audio, now, out, 480);
+    for (int i = 0; i < 960; ++i) {
+        assert(out[i] == 1.0f); /* Live transitions preserve the recording mix. */
+    }
+    audio_test_push(audio, 0, now, samples, 480); /* A late pre-boundary chunk. */
+    audio_test_virtual_read(audio, now + UINT64_C(10000000), out, 480);
+    for (int i = 0; i < 960; ++i) {
+        assert(out[i] == 0);
+    }
+    audio_read(audio, now + UINT64_C(10000000), out, 480);
+    assert(out[0] > 0.7f);
+    now += UINT64_C(20000000);
+    audio_test_push(audio, 0, now, samples, 480);
+    audio_test_push(audio, 1, now, samples, 480);
+    audio_test_virtual_read(audio, now, out, 480);
+    assert(out[0] > 0.7f);
+    audio_record_privacy(audio);
+    audio_read(audio, now, out, 1);
+    assert(out[0] == 0);
+    audio_test_virtual_read(audio, now, out, 480);
+    assert(out[0] > 0.7f); /* Recording transitions preserve the virtual mix. */
+    now += UINT64_C(10000000);
+    audio_test_push(audio, 0, now, samples, 480);
+    audio_live_privacy(audio, true);
+    audio_read(audio, now, out, 1);
+    assert(out[0] > 0.7f);
+    audio_test_virtual_read(audio, now, out, 480);
+    for (int i = 0; i < 960; ++i) {
+        assert(out[i] == 0);
+    }
+    now = cast_now_ns() - UINT64_C(1000000);
     audio_barrier(audio, false);
     audio_test_push(audio, 0, now, samples, 480);
     audio_read(audio, now, out, 1);
@@ -909,6 +1009,7 @@ int main(int argc, char **argv)
     timeline_test(directory, true);
     timeline_test(directory, false);
     privacy_test(directory);
+    solid_and_cut_test(directory);
     failure_test(directory);
     responsiveness_test(directory);
     disk_failure_test(directory);

@@ -15,7 +15,7 @@ struct Media {
     CastOutput *output;
     CastAudio *audio;
     CastRecorder *recorder;
-    bool live_paused, live_frozen, record_paused;
+    bool live_silent, record_silent, record_cut;
     uint64_t live_drops;
     char camera_error[CAST_ERR], live_error[CAST_ERR];
 };
@@ -27,7 +27,7 @@ Media *media_open(const Config *cfg, char *e, size_t n)
         return NULL;
     }
     m->cfg = *cfg;
-    m->live_paused = true;
+    m->live_silent = true;
     m->output = output_open(cfg, e, n);
     if (!m->output) {
         goto fail;
@@ -90,10 +90,9 @@ int media_camera(Media *m, Frame *f, char *e, size_t n)
 }
 int media_live(Media *m, const Frame *f, bool silent, char *e, size_t n)
 {
-    if (silent != (m->live_paused || m->live_frozen)) {
-        audio_barrier(m->audio, silent);
-        m->live_paused = silent;
-        m->live_frozen = false;
+    if (silent != m->live_silent) {
+        audio_live_privacy(m->audio, silent);
+        m->live_silent = silent;
     }
     int rc = output_frame(m->output, f, e, n);
     if (rc != 0) {
@@ -106,10 +105,10 @@ int media_live(Media *m, const Frame *f, bool silent, char *e, size_t n)
 }
 int media_record_start(Media *m, const Config *cfg, const char *path, char *e, size_t n)
 {
-    audio_barrier(m->audio, m->live_paused || m->live_frozen);
+    audio_record_privacy(m->audio);
     int rc = recorder_start(m->recorder, cfg, path, e, n);
     if (!rc) {
-        m->record_paused = false;
+        m->record_cut = m->record_silent = false;
     }
     return rc;
 }
@@ -117,17 +116,18 @@ int media_record_stop(Media *m, char *e, size_t n)
 {
     int rc = recorder_stop(m->recorder, e, n);
     if (!rc) {
-        m->record_paused = false;
+        m->record_cut = m->record_silent = false;
     }
     return rc;
 }
 int media_record_pause(Media *m, bool paused, char *e, size_t n)
 {
-    audio_barrier(m->audio, m->live_paused || m->live_frozen);
+    if (paused != m->record_cut) {
+        audio_record_privacy(m->audio);
+    }
     int rc = recorder_pause(m->recorder, paused, e, n);
     if (!rc) {
-        m->record_paused = paused;
-        audio_barrier(m->audio, m->live_paused || m->live_frozen);
+        m->record_cut = paused;
     }
     return rc;
 }
@@ -136,23 +136,51 @@ int media_record_frame(Media *m, const Frame *f, char *e, size_t n)
     int rc = recorder_frame(m->recorder, f, e, n);
     return rc < 0 ? -1 : 0;
 }
+int media_record_silence(Media *m, bool silent, char *e, size_t n)
+{
+    if (silent != m->record_silent) {
+        audio_record_privacy(m->audio);
+    }
+    int result = recorder_silence(m->recorder, silent, e, n);
+    if (!result) {
+        m->record_silent = silent;
+    }
+    return result;
+}
 void media_barrier(Media *m)
 {
     camera_barrier(m->camera);
-    audio_barrier(m->audio, m->live_paused || m->live_frozen);
+    audio_barrier(m->audio, m->live_silent);
     recorder_barrier(m->recorder);
 }
-void media_privacy(Media *m, bool live_paused, bool live_frozen, bool record_paused)
+void media_record_barrier(Media *m)
 {
-    m->live_paused = live_paused;
-    m->live_frozen = live_frozen;
-    audio_barrier(m->audio, live_paused || live_frozen);
-    if (record_paused != m->record_paused) {
-        char reply[CAST_ERR];
-        recorder_pause(m->recorder, record_paused, reply, sizeof(reply));
-        m->record_paused = record_paused;
+    audio_record_privacy(m->audio);
+    recorder_barrier(m->recorder);
+}
+int media_privacy(Media *m, bool live_silent, bool record_silent, bool record_cut, char *error,
+                  size_t n)
+{
+    if (live_silent != m->live_silent) {
+        audio_live_privacy(m->audio, live_silent);
+        m->live_silent = live_silent;
     }
-    media_barrier(m);
+    bool active, cut;
+    uint64_t dropped;
+    char recorder_error[CAST_ERR];
+    recorder_status(m->recorder, &active, &cut, &dropped, recorder_error, sizeof recorder_error);
+    if (!active) {
+        m->record_silent = false;
+        m->record_cut = false;
+        return 0;
+    }
+    if (record_silent != m->record_silent && media_record_silence(m, record_silent, error, n)) {
+        return -1;
+    }
+    if (record_cut != m->record_cut && media_record_pause(m, record_cut, error, n)) {
+        return -1;
+    }
+    return 0;
 }
 static bool encoding_changed(const Config *a, const Config *b)
 {

@@ -56,8 +56,10 @@ static const char help[] =
     "  cursor on|off|toggle; cursor highlight on|off|toggle\n"
     "  clicks on|off|toggle; keys on|off|toggle; keys mode shortcuts|all; keys clear\n"
     "  annotations live|record keys|clicks on|off\n"
-    "  pause; resume; live pause|resume|toggle|freeze|unfreeze; live message TEXT\n"
-    "  record start [PATH]; record stop|pause|resume|toggle\n"
+    "  pause; resume; live pause|resume|toggle|freeze|unfreeze; live blur on|off|toggle\n"
+    "  live message TEXT; live|record title|subtitle TEXT\n"
+    "  record start [PATH]; record stop|pause|resume|toggle|freeze|unfreeze|cut|cancel\n"
+    "  record blur on|off|toggle; cut resume reuses the file with the configured countdown\n"
     "  audio list; audio mic|desktop|virtual on|off|toggle\n"
     "  audio mic|desktop source NAME; audio mic|desktop gain PERCENT%\n"
     "  preset NAME|next; preview on|off|toggle; preview target live|record\n"
@@ -329,17 +331,77 @@ void app_sync_source(App *a)
     media_barrier(a->media);
     frame_free(&a->live);
     frame_free(&a->record);
+    frame_free(&a->live_raw);
+    frame_free(&a->record_raw);
+    frame_free(&a->frozen);
+    frame_free(&a->record_frozen);
+}
+void app_countdown_cancel(App *a)
+{
+    a->countdown = a->countdown_resume = false;
+    a->countdown_path[0] = 0;
+    if (a->platform) {
+        char error[CAST_ERR] = "";
+        if (app_countdown_guide(a, 0, error, sizeof error)) {
+            remember_error(a, error);
+        }
+    }
+}
+int app_freeze_frame(App *a, bool record, Frame *frame, char *error, size_t n)
+{
+    bool paused = record ? a->state.record_paused || a->state.record_cut : a->state.live_paused;
+    const Frame *raw = record ? &a->record_raw : &a->live_raw;
+    if (paused || !raw->data || (!a->screen.data && strcmp(a->config.layout, "camera"))) {
+        return frame_copy(frame, &a->neutral) ? app_error(error, n, "cannot allocate frozen frame")
+                                              : 0;
+    }
+    /* Freeze screen and camera pixels, without retaining transient input labels. */
+    Config frozen_config = a->config;
+    frozen_config.keys = frozen_config.clicks = false;
+    return compositor_render(a->compositor, &frozen_config, &a->screen,
+                             a->config.camera_enabled && a->camera.data ? &a->camera : NULL,
+                             &a->cursor, record, frame, error, n);
+}
+static int lane_output_frame(App *a, bool record, Frame *out, char *error, size_t n)
+{
+    bool solid = record ? ((!a->state.recording || a->state.record_cut) && !a->countdown) ||
+                              a->state.record_paused
+                        : !a->config.live_enabled || a->state.live_paused;
+    bool frozen = record ? a->state.record_frozen : a->state.live_frozen;
+    bool blurred = record ? a->state.record_blurred : a->state.live_blurred;
+    const Frame *raw = record ? &a->record_raw : &a->live_raw;
+    const Frame *snapshot = record ? &a->record_frozen : &a->frozen;
+    const Frame *source = solid ? &a->neutral : frozen ? snapshot : raw;
+    if (!source->data) {
+        source = &a->neutral;
+    }
+    if (frame_copy(out, source) ||
+        (!solid && blurred && compositor_blur(a->compositor, &a->config, out, error, n))) {
+        frame_free(out);
+        frame_copy(out, &a->neutral);
+        return app_error(error, n, "cannot prepare %s output; emitting neutral content",
+                         record ? "recording" : "live");
+    }
+    out->ts_ns = cast_now_ns();
+    return 0;
+}
+int app_output_frames(App *a, char *error, size_t n)
+{
+    int result = compositor_neutral(a->compositor, &a->config, &a->neutral, error, n);
+    if (lane_output_frame(a, false, &a->live, error, n)) {
+        result = -1;
+    }
+    if (lane_output_frame(a, true, &a->record, error, n)) {
+        result = -1;
+    }
+    return result;
 }
 int app_shutdown_privacy(App *a, char *e, size_t n)
 {
     a->state.live_paused = true;
     a->state.live_frozen = false;
     a->state.group_live_restore = false;
-    a->countdown = false;
-    a->countdown_path[0] = 0;
-    if (a->platform) {
-        app_countdown_guide(a, 0, e, n);
-    }
+    app_countdown_cancel(a);
     frame_free(&a->live);
     frame_free(&a->frozen);
     if (a->platform && a->compositor) {
@@ -379,33 +441,48 @@ static void tick(App *a)
     a->state.dropped_frames = dropped + a->loop_drops;
     if (a->state.recording && !running) {
         a->state.recording = a->state.record_paused = a->state.group_record_restore = false;
+        a->state.record_cut = a->state.record_frozen = a->state.record_blurred = false;
+        if (a->countdown_resume) {
+            app_countdown_cancel(a);
+        }
     }
     remember_error(a, e);
     if (a->countdown) {
         uint64_t remaining = a->countdown_deadline > now ? a->countdown_deadline - now : 1;
         int guide = app_countdown_guide(a, remaining, e, sizeof e);
-        if (guide == 1) {
-            a->countdown = false;
-            a->countdown_path[0] = 0;
+        if (guide != 0) {
+            app_countdown_cancel(a);
             fprintf(stderr, "cast: recording countdown cancelled\n");
-        } else if (guide < 0) {
-            remember_error(a, e);
+            if (guide < 0) {
+                remember_error(a, e);
+            }
         }
     }
     if (!a->countdown || now >= a->countdown_deadline) {
-        app_countdown_guide(a, 0, e, sizeof e);
+        if (app_countdown_guide(a, 0, e, sizeof e)) {
+            app_countdown_cancel(a);
+            remember_error(a, e);
+        }
     }
     if (a->countdown && now >= a->countdown_deadline) {
+        bool resume = a->countdown_resume;
         a->countdown = false;
-        if (app_recording_start(a, a->countdown_path[0] ? a->countdown_path : NULL, e, sizeof e)) {
+        a->countdown_resume = false;
+        frame_free(&a->live_raw);
+        frame_free(&a->record_raw);
+        int result = resume ? app_recording_resume(a, e, sizeof e)
+                            : app_recording_start(
+                                  a, a->countdown_path[0] ? a->countdown_path : NULL, e, sizeof e);
+        if (result) {
             remember_error(a, e);
         } else {
             fprintf(stderr, "cast: recording %s\n", a->state.record_path);
         }
     }
-    bool input_private =
-        (!a->config.live_enabled || a->state.live_paused || a->state.live_frozen) &&
-        (!a->state.recording || a->state.record_paused);
+    bool input_private = (!a->config.live_enabled || a->state.live_paused || a->state.live_frozen ||
+                          a->state.live_blurred) &&
+                         (!a->state.recording || a->state.record_cut || a->state.record_paused ||
+                          a->state.record_frozen || a->state.record_blurred);
     platform_events(a->platform, a->compositor, &a->config, input_private);
     bool capture_ok = platform_capture(a->platform, &a->screen, &a->cursor, e, sizeof e) == 0;
     /* Portal responses can commit a source during capture's event dispatch. */
@@ -416,10 +493,12 @@ static void tick(App *a)
     bool camera_ok = a->config.camera_enabled;
     if (a->config.camera_enabled && media_camera(a->media, &a->camera, e, sizeof e)) {
         camera_ok = false;
+        frame_free(&a->camera);
         remember_error(a, e);
     }
     bool need_live = a->config.live_enabled && !a->state.live_paused && !a->state.live_frozen;
-    bool need_record = a->state.recording && !a->state.record_paused;
+    bool need_record = ((a->state.recording && !a->state.record_cut) || a->countdown) &&
+                       !a->state.record_paused && !a->state.record_frozen;
     bool shared_composition =
         need_live && need_record &&
         (!a->config.keys || a->config.annotations_live_keys == a->config.annotations_record_keys) &&
@@ -429,50 +508,45 @@ static void tick(App *a)
     if ((need_live || need_record) && composition_ok) {
         if (need_live &&
             compositor_render(a->compositor, &a->config, &a->screen, camera_ok ? &a->camera : NULL,
-                              &a->cursor, false, &a->live, e, sizeof e)) {
+                              &a->cursor, false, &a->live_raw, e, sizeof e)) {
             composition_ok = false;
             remember_error(a, e);
         }
         if (need_record && !shared_composition &&
             compositor_render(a->compositor, &a->config, &a->screen, camera_ok ? &a->camera : NULL,
-                              &a->cursor, true, &a->record, e, sizeof e)) {
+                              &a->cursor, true, &a->record_raw, e, sizeof e)) {
             composition_ok = false;
             remember_error(a, e);
         }
     }
-    now = cast_now_ns();
-    a->neutral.ts_ns = now;
-    a->live.ts_ns = now;
-    a->record.ts_ns = now;
-    const Frame *live = &a->neutral, *record = &a->neutral;
-    if (!a->state.live_paused) {
-        if (a->state.live_frozen && a->frozen.data) {
-            live = &a->frozen;
-        } else if (composition_ok && a->live.data) {
-            live = &a->live;
-        }
+    if (!composition_ok) {
+        frame_free(&a->live_raw);
+        frame_free(&a->record_raw);
+    } else if (shared_composition && frame_copy(&a->record_raw, &a->live_raw)) {
+        frame_free(&a->record_raw);
+        remember_error(a, "cannot allocate recording composition");
     }
-    if (composition_ok) {
-        if (shared_composition && a->live.data) {
-            /* Media consumers copy/convert synchronously; this shared frame stays owned by App. */
-            record = &a->live;
-        } else if (a->record.data) {
-            record = &a->record;
-        }
-    }
-    if (a->config.live_enabled &&
-        media_live(a->media, live, a->state.live_paused || a->state.live_frozen, e, sizeof e)) {
+    if (app_output_frames(a, e, sizeof e)) {
         remember_error(a, e);
     }
-    if (need_record) {
+    const Frame *live = a->live.data ? &a->live : &a->neutral;
+    const Frame *record = a->record.data ? &a->record : &a->neutral;
+    if (a->config.live_enabled &&
+        media_live(a->media, live,
+                   a->state.live_paused || a->state.live_frozen || a->state.live_blurred, e,
+                   sizeof e)) {
+        remember_error(a, e);
+    }
+    bool write_record = a->state.recording && !a->state.record_cut;
+    if (write_record) {
         if (media_record_frame(a->media, record, e, sizeof e)) {
             remember_error(a, e);
         }
     }
-    panel_transport_publish(a->panel, a, live, need_record ? record : &a->neutral);
+    panel_transport_publish(a->panel, a, live, write_record ? record : &a->neutral);
     if (a->config.preview || platform_capabilities(a->platform).preview) {
         const Frame *target = !strcmp(a->config.preview_target, "record")
-                                  ? (need_record ? record : &a->neutral)
+                                  ? (write_record ? record : &a->neutral)
                                   : live;
         if (platform_preview(a->platform, target, &a->state, &a->config, e, sizeof e)) {
             remember_error(a, e);
@@ -499,7 +573,9 @@ static int decode_packet(char *packet, ssize_t size, int *argc, char **argv, cha
         }
         char *end = memchr(packet + offset, 0, (size_t)size - offset);
         bool empty_value =
-            (*argc == 2 && !strcmp(argv[0], "live") && !strcmp(argv[1], "message")) ||
+            (*argc == 2 && (!strcmp(argv[0], "live") || !strcmp(argv[0], "record")) &&
+             (!strcmp(argv[1], "message") || !strcmp(argv[1], "title") ||
+              !strcmp(argv[1], "subtitle"))) ||
             (*argc >= 2 && !(*argc & 1) && !strcmp(argv[0], "settings"));
         if (!end || (end == packet + offset && !empty_value)) {
             return app_error(e, n, "empty or unterminated command argument");
@@ -708,8 +784,11 @@ static int run_daemon(Config config, Startup startup)
         snprintf(e, sizeof e, "cannot allocate output canvas");
         goto failed;
     }
-    compositor_neutral(&a->config, &a->neutral);
-    media_privacy(a->media, true, false, false);
+    if (compositor_prepare(a->compositor, &a->config, e, sizeof e) ||
+        compositor_neutral(a->compositor, &a->config, &a->neutral, e, sizeof e) ||
+        media_privacy(a->media, true, false, false, e, sizeof e)) {
+        goto failed;
+    }
     if (config.live_enabled && media_live(a->media, &a->neutral, true, e, sizeof e)) {
         goto failed;
     }
@@ -822,6 +901,9 @@ cleanup:
     frame_free(&a->record);
     frame_free(&a->neutral);
     frame_free(&a->frozen);
+    frame_free(&a->record_frozen);
+    frame_free(&a->live_raw);
+    frame_free(&a->record_raw);
     if (server >= 0) {
         close(server);
     }

@@ -25,12 +25,12 @@ typedef struct App {
     Platform *platform;
     Compositor *compositor;
     Media *media;
-    Frame screen, camera, live, record, neutral, frozen;
+    Frame screen, camera, live, record, neutral, frozen, record_frozen, live_raw, record_raw;
     Cursor cursor;
     double zoom_last;
     uint64_t source_generation, loop_drops;
     char current_preset[64];
-    bool countdown;
+    bool countdown, countdown_resume, countdown_preview;
     uint64_t countdown_deadline;
     char countdown_path[PATH_MAX];
     bool record_finalizing;
@@ -45,6 +45,10 @@ void app_request_stop(void);
 int app_command(App *, int, char **, char *, size_t);
 int app_recording_start(App *, const char *, char *, size_t);
 int app_countdown_guide(App *, uint64_t remaining_ns, char *, size_t);
+void app_countdown_cancel(App *);
+int app_recording_resume(App *, char *, size_t);
+int app_output_frames(App *, char *, size_t);
+int app_freeze_frame(App *, bool record, Frame *, char *, size_t);
 void app_sync_source(App *);
 int app_shutdown_privacy(App *, char *, size_t);
 #endif

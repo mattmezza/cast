@@ -167,9 +167,10 @@ static int status(App *a, bool json, char *out, size_t n)
             "metadata\":%s,\"embedded_cursor\":%s,\"input\":%s,\"region_selection\":%s,"
             "\"window_selection\":%s,\"preview\":%s},\"source\":{\"monitor\":%s,\"kind\":\"%"
             "s\",\"region\":[%d,%d,%d,%d]},\"live\":{\"enabled\":%s,\"state\":\"%s\",\"message\":%"
-            "s},"
+            "s,\"paused\":%s,\"frozen\":%s,\"blurred\":%s},"
             "\"record\":{\"state\":\"%s\",\"path\":%s,\"duration\":%.3f,\"countdown\":%s,"
-            "\"finalizing\":%s},"
+            "\"finalizing\":%s,\"paused\":%s,\"frozen\":%s,\"blurred\":%s,\"cut\":%s,"
+            "\"countdown_kind\":%s},"
             "\"group_paused\":%s,\"layout\":\"%s\",\"zoom\":%.3f,\"camera_visible\":%s,"
             "\"audio\":{\"mic\":{\"enabled\":%s,\"source\":%s,\"gain\":%.3f},"
             "\"desktop\":{\"enabled\":%s,\"source\":%s,\"gain\":%.3f},"
@@ -181,12 +182,25 @@ static int status(App *a, bool json, char *out, size_t n)
             cap.window_selection ? "true" : "false", cap.preview ? "true" : "false", source,
             c->capture_kind, c->region_x, c->region_y, c->region_w, c->region_h,
             c->live_enabled ? "true" : "false",
-            s->live_paused   ? "paused"
-            : s->live_frozen ? "frozen"
-                             : "live",
-            pause_text, s->recording ? (s->record_paused ? "paused" : "recording") : "stopped",
+            s->live_paused    ? "paused"
+            : s->live_blurred ? "blurred"
+            : s->live_frozen  ? "frozen"
+                              : "live",
+            pause_text, s->live_paused ? "true" : "false", s->live_frozen ? "true" : "false",
+            s->live_blurred ? "true" : "false",
+            !s->recording       ? "stopped"
+            : s->record_cut     ? "cut"
+            : s->record_paused  ? "paused"
+            : s->record_blurred ? "blurred"
+            : s->record_frozen  ? "frozen"
+                                : "recording",
             path, seconds, a->countdown ? "true" : "false",
             media_record_finalizing(a->media) ? "true" : "false",
+            s->record_paused ? "true" : "false", s->record_frozen ? "true" : "false",
+            s->record_blurred ? "true" : "false", s->record_cut ? "true" : "false",
+            !a->countdown         ? "null"
+            : a->countdown_resume ? "\"resume\""
+                                  : "\"start\"",
             s->group_paused ? "true" : "false", c->layout, c->zoom_factor,
             c->camera_visible ? "true" : "false", c->mic ? "true" : "false", mic_source,
             c->mic_gain, c->desktop ? "true" : "false", desktop_source, c->desktop_gain,
@@ -200,10 +214,15 @@ static int status(App *a, bool json, char *out, size_t n)
                      "countdown=%s\nlive_message=%s\naudio=%s\ndropped_frames=%llu error=%s",
                      c->backend, c->capture_kind, c->monitor[0] ? c->monitor : "selected",
                      c->layout, c->camera_visible ? "visible" : "hidden", c->zoom_factor,
-                     s->live_paused   ? "PAUSED"
-                     : s->live_frozen ? "FROZEN"
-                                      : "LIVE",
-                     s->recording ? (s->record_paused ? "RECORDING-PAUSED" : "RECORDING")
+                     s->live_paused    ? "PAUSED"
+                     : s->live_blurred ? "BLURRED"
+                     : s->live_frozen  ? "FROZEN"
+                                       : "LIVE",
+                     s->recording                        ? (s->record_cut       ? "CUT"
+                                                            : s->record_paused  ? "RECORDING-PAUSED"
+                                                            : s->record_blurred ? "BLURRED"
+                                                            : s->record_frozen  ? "FROZEN"
+                                                                                : "RECORDING")
                      : media_record_finalizing(a->media) ? "finalizing"
                                                          : "stopped",
                      seconds, s->record_path, a->countdown ? "pending" : "off", c->pause_text,
@@ -217,51 +236,85 @@ static int status(App *a, bool json, char *out, size_t n)
 static int barrier(App *a, State *candidate, char *e, size_t n)
 {
     int result = 0;
-    bool record_transition =
-        a->state.recording && candidate->record_paused != a->state.record_paused;
-    bool was_frozen = a->state.live_frozen;
+    State previous = a->state;
+    if (candidate->live_frozen && !previous.live_frozen &&
+        app_freeze_frame(a, false, &a->frozen, e, n)) {
+        return -1;
+    }
+    if (candidate->record_frozen && !previous.record_frozen &&
+        app_freeze_frame(a, true, &a->record_frozen, e, n)) {
+        return -1;
+    }
     a->state = *candidate;
     platform_events(a->platform, a->compositor, &a->config, true);
     compositor_clear(a->compositor);
-    if (candidate->live_paused) {
-        frame_free(&a->live);
-        frame_free(&a->frozen);
-        if (frame_copy(&a->frozen, &a->neutral)) {
-            result = app_error(e, n,
-                               "cannot allocate neutral freeze frame; live remains privacy-paused");
-        }
-        if (a->config.live_enabled && media_live(a->media, &a->neutral, true, e, n)) {
-            result = -1;
-        }
-    } else if (candidate->live_frozen && !was_frozen) {
-        if (frame_copy(&a->frozen, a->live.data ? &a->live : &a->neutral)) {
-            result = app_error(e, n, "cannot allocate freeze frame");
-        }
+    if (candidate->live_paused || (previous.live_frozen && !candidate->live_frozen) ||
+        (previous.live_blurred && !candidate->live_blurred)) {
+        frame_free(&a->live_raw);
     }
-    if (candidate->record_paused) {
-        frame_free(&a->record);
+    if (candidate->record_paused || candidate->record_cut ||
+        (previous.record_frozen && !candidate->record_frozen) ||
+        (previous.record_blurred && !candidate->record_blurred)) {
+        frame_free(&a->record_raw);
     }
-    panel_transport_barrier(a->panel, a, false);
-    /* Neutral video is published before recorder barriers wait for in-flight work.
-       media_privacy gates live audio before applying the recording transition. */
-    media_privacy(a->media, candidate->live_paused, candidate->live_frozen,
-                  candidate->record_paused);
-    /* Surface a raced encoder failure even though the privacy gate has already applied. */
-    if (record_transition && media_record_pause(a->media, candidate->record_paused, e, n)) {
+    if (app_output_frames(a, e, n)) {
         result = -1;
     }
+    if (candidate->live_paused && !previous.live_paused && candidate->live_frozen) {
+        if (frame_copy(&a->frozen, &a->neutral)) {
+            frame_free(&a->frozen);
+            result = app_error(e, n, "cannot replace frozen live frame with neutral content");
+        }
+    }
+    if (candidate->record_paused && !previous.record_paused && candidate->record_frozen) {
+        if (frame_copy(&a->record_frozen, &a->neutral)) {
+            frame_free(&a->record_frozen);
+            result = app_error(e, n, "cannot replace frozen recording frame with neutral content");
+        }
+    }
+    bool live_silent = candidate->live_paused || candidate->live_frozen || candidate->live_blurred;
+    bool record_silent =
+        candidate->record_paused || candidate->record_frozen || candidate->record_blurred;
+    if (a->config.live_enabled &&
+        media_live(a->media, a->live.data ? &a->live : &a->neutral, live_silent, e, n)) {
+        result = -1;
+    }
+    if (media_privacy(a->media, live_silent, candidate->recording && record_silent,
+                      candidate->recording && candidate->record_cut, e, n)) {
+        result = -1;
+    }
+    if (candidate->recording && (candidate->record_paused != previous.record_paused ||
+                                 candidate->record_frozen != previous.record_frozen ||
+                                 candidate->record_blurred != previous.record_blurred ||
+                                 candidate->record_cut != previous.record_cut)) {
+        media_record_barrier(a->media);
+    }
+    if (candidate->recording) {
+        bool active, cut;
+        uint64_t dropped;
+        char recorder_error[CAST_ERR];
+        media_status(a->media, &active, &cut, &dropped, recorder_error, sizeof recorder_error);
+        if (!active) {
+            a->state.recording = false;
+            a->state.record_cut = false;
+            snprintf(e, n, "%s",
+                     recorder_error[0] ? recorder_error : "recording is no longer active");
+            result = -1;
+        }
+    }
+    if (a->state.recording && !candidate->record_cut &&
+        (candidate->record_paused || (candidate->record_frozen && a->record_frozen.data) ||
+         a->record_raw.data)) {
+        a->record.ts_ns = cast_now_ns();
+        if (media_record_frame(a->media, a->record.data ? &a->record : &a->neutral, e, n)) {
+            result = -1;
+        }
+    }
+    panel_transport_barrier(a->panel, a, false);
     if (platform_capabilities(a->platform).preview) {
-        const Frame *target = &a->neutral;
-        if (!strcmp(a->config.preview_target, "record")) {
-            if (candidate->recording && !candidate->record_paused && a->record.data) {
-                target = &a->record;
-            }
-        } else if (!candidate->live_paused) {
-            if (candidate->live_frozen && a->frozen.data) {
-                target = &a->frozen;
-            } else if (a->live.data) {
-                target = &a->live;
-            }
+        const Frame *target = !strcmp(a->config.preview_target, "record") ? &a->record : &a->live;
+        if (!target->data) {
+            target = &a->neutral;
         }
         if (platform_preview(a->platform, target, candidate, &a->config, e, n)) {
             result = -1;
@@ -271,24 +324,31 @@ static int barrier(App *a, State *candidate, char *e, size_t n)
 }
 int app_recording_start(App *a, const char *path, char *e, size_t n)
 {
+    /* Countdown frames may include its native preview; admit a fresh frame only. */
+    frame_free(&a->record_raw);
     if (media_record_start(a->media, &a->config, path, e, n)) {
         return -1;
     }
     a->state.recording = true;
     a->state.record_paused = false;
+    a->state.record_cut = a->state.record_frozen = a->state.record_blurred = false;
+    frame_free(&a->record_frozen);
     a->state.group_record_restore = false;
     a->state.record_started_ns = cast_now_ns();
     media_record_path(a->media, a->state.record_path, sizeof a->state.record_path);
-    if (a->state.group_paused) {
-        if (media_record_pause(a->media, true, e, n)) {
-            media_record_stop(a->media, e, n);
-            a->state.recording = false;
-            return -1;
-        }
-        a->state.record_paused = true;
+    a->state.record_paused = a->state.group_paused;
+    State candidate = a->state;
+    return barrier(a, &candidate, e, n);
+}
+int app_recording_resume(App *a, char *e, size_t n)
+{
+    if (!a->state.recording || !a->state.record_cut) {
+        return app_error(e, n, "no cut recording to resume");
     }
-    media_privacy(a->media, a->state.live_paused, a->state.live_frozen, a->state.record_paused);
-    return 0;
+    State candidate = a->state;
+    candidate.record_cut = false;
+    frame_free(&a->record_raw);
+    return barrier(a, &candidate, e, n);
 }
 static int restart_reasons(const Config *old, const Config *c, bool recording, char *e, size_t n)
 {
@@ -342,6 +402,9 @@ static int apply_candidate(App *a, Config *c, char *e, size_t n)
     if (restart_reasons(&a->config, c, recording, e, n)) {
         return -1;
     }
+    if (compositor_prepare(a->compositor, c, e, n)) {
+        return -1;
+    }
     /* Stage fallible platform acquisition first. Roll back if media acquisition fails. */
     if (platform_reconfigure(a->platform, c, e, n)) {
         return -1;
@@ -360,7 +423,11 @@ static int apply_candidate(App *a, Config *c, char *e, size_t n)
     a->config = *c;
     app_sync_source(a);
     compositor_clear(a->compositor);
-    compositor_neutral(c, &a->neutral);
+    frame_free(&a->live_raw);
+    frame_free(&a->record_raw);
+    if (app_output_frames(a, e, n)) {
+        return -1;
+    }
     panel_transport_barrier(a->panel, a, false);
     return 0;
 }
@@ -383,7 +450,9 @@ static int command_message(App *a, const char *value, char *out, size_t n)
         }
     }
     strcpy(a->config.pause_text, value);
-    compositor_neutral(&a->config, &a->neutral);
+    if (app_output_frames(a, out, n)) {
+        return -1;
+    }
     int result = 0;
     if (a->state.live_paused && a->config.live_enabled &&
         media_live(a->media, &a->neutral, true, out, n)) {
@@ -487,7 +556,9 @@ static int command_camera(App *a, Config *candidate, int ac, char **av, char *ou
         if (IS(2, "next")) {
             cycle(c.anchor, sizeof c.anchor, c.corner_order);
         } else {
-            ENUM(c.anchor, av[2], "top-left,top-right,bottom-left,bottom-right");
+            ENUM(c.anchor, av[2],
+                 "top-left,top-right,bottom-left,bottom-right,top,bottom,left,right,top-center,"
+                 "bottom-center,center-left,center-right");
         }
     } else if (IS(1, "shape")) {
         ARITY(3);
@@ -643,7 +714,30 @@ int app_countdown_guide(App *a, uint64_t remaining_ns, char *error, size_t n)
     if (remaining_ns && panel_transport_attached(a->panel)) {
         remaining_ns = 0;
     }
-    return platform_countdown(a->platform, remaining_ns, error, n);
+    if (remaining_ns) {
+        if (!a->record_raw.data && a->screen.data &&
+            compositor_render(a->compositor, &a->config, &a->screen,
+                              a->config.camera_enabled && a->camera.data ? &a->camera : NULL,
+                              &a->cursor, true, &a->record_raw, error, n)) {
+            return -1;
+        }
+        if (app_output_frames(a, error, n) ||
+            platform_countdown_frame(a->platform, a->record.data ? &a->record : &a->neutral,
+                                     &a->config, error, n)) {
+            return -1;
+        }
+        if (platform_capabilities(a->platform).preview) {
+            a->countdown_preview = true;
+        }
+    }
+    int result = platform_countdown(a->platform, remaining_ns, error, n);
+    if (!remaining_ns && a->countdown_preview) {
+        a->config.preview = false;
+        if (!result) {
+            a->countdown_preview = false;
+        }
+    }
+    return result;
 }
 int app_command(App *a, int ac, char **av, char *out, size_t n)
 {
@@ -673,11 +767,25 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
         ARITY(3);
         return command_message(a, av[2], out, n);
     }
+    if ((IS(0, "live") || IS(0, "record")) && (IS(1, "title") || IS(1, "subtitle"))) {
+        ARITY(3);
+        const char *key = IS(1, "title") ? "output.pause_title" : "output.pause_subtitle";
+        if (config_set_value(&c, key, av[2], out, n) || apply_candidate(a, &c, out, n)) {
+            return -1;
+        }
+        snprintf(out, n, "shared output %s updated for this session", av[1]);
+        return 0;
+    }
     if (IS(0, "settings")) {
         if (ac < 3 || !(ac & 1)) {
             return app_error(out, n, "settings SECTION.KEY VALUE [SECTION.KEY VALUE ...]");
         }
         for (int i = 1; i < ac; i += 2) {
+            if (!strcmp(av[i], "output.pause_font") || !strcmp(av[i], "output.blur_font") ||
+                !strcmp(av[i], "keys.font")) {
+                return app_error(out, n,
+                                 "font settings require editing cast.conf and cast config reload");
+            }
             if (config_set_value(&c, av[i], av[i + 1], out, n)) {
                 return -1;
             }
@@ -692,26 +800,38 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
         return 0;
     }
     if (IS(0, "pause") || IS(0, "resume") || IS(0, "live")) {
+        const char *action = ac > 1 ? av[1] : "";
         if (IS(0, "live")) {
-            ARITY(2);
+            if (IS(1, "blur") && ac == 3) {
+                if (!oneof(av[2], "on,off,toggle")) {
+                    return app_error(out, n, "live blur on|off|toggle");
+                }
+                action = IS(2, "on") ? "blur" : IS(2, "off") ? "unblur" : "blur-toggle";
+            } else {
+                ARITY(2);
+            }
         } else {
             ARITY(1);
         }
-        if (IS(0, "pause") && a->countdown) {
-            a->countdown = false;
-            a->countdown_path[0] = 0;
-            app_countdown_guide(a, 0, out, n);
+        if (IS(0, "pause")) {
+            app_countdown_cancel(a);
         }
-        if (state_command(&s, av[0], ac > 1 ? av[1] : "", out, n)) {
+        if (state_command(&s, av[0], action, out, n)) {
             return -1;
         }
         result = barrier(a, &s, out, n);
         if (!result) {
             snprintf(out, n, "outputs updated: live %s, record %s",
-                     s.live_paused   ? "paused"
-                     : s.live_frozen ? "frozen"
-                                     : "live",
-                     s.recording ? (s.record_paused ? "paused" : "recording") : "stopped");
+                     s.live_paused    ? "paused"
+                     : s.live_blurred ? "blurred"
+                     : s.live_frozen  ? "frozen"
+                                      : "live",
+                     !s.recording       ? "stopped"
+                     : s.record_cut     ? "cut"
+                     : s.record_paused  ? "paused"
+                     : s.record_blurred ? "blurred"
+                     : s.record_frozen  ? "frozen"
+                                        : "recording");
         }
         return result;
     }
@@ -736,13 +856,16 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
                     a->countdown_path[0] = 0;
                 }
                 a->countdown = true;
+                a->countdown_resume = false;
                 a->countdown_deadline =
                     cast_now_ns() + (uint64_t)c.record_countdown * 1000000000ULL;
-                if (app_countdown_guide(a,
-                                       (uint64_t)c.record_countdown * 1000000000ULL, out, n) < 0) {
-                    a->countdown = false;
-                    a->countdown_path[0] = 0;
-                    app_countdown_guide(a, 0, NULL, 0);
+                int guide =
+                    app_countdown_guide(a, (uint64_t)c.record_countdown * 1000000000ULL, out, n);
+                if (guide != 0) {
+                    app_countdown_cancel(a);
+                    if (guide > 0) {
+                        return app_error(out, n, "recording countdown cancelled");
+                    }
                     return -1;
                 }
                 snprintf(out, n,
@@ -757,14 +880,23 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
                      a->state.record_paused ? " (paused by group pause)" : "");
             return 0;
         }
-        ARITY(2);
+        const char *action = av[1];
+        if (IS(1, "blur") && ac == 3) {
+            if (!oneof(av[2], "on,off,toggle")) {
+                return app_error(out, n, "record blur on|off|toggle");
+            }
+            action = IS(2, "on") ? "blur" : IS(2, "off") ? "unblur" : "blur-toggle";
+        } else {
+            ARITY(2);
+        }
         if (IS(1, "stop")) {
             if (a->countdown) {
-                a->countdown = false;
-                a->countdown_path[0] = 0;
-                app_countdown_guide(a, 0, out, n);
-                snprintf(out, n, "recording countdown cancelled");
-                return 0;
+                bool resume = a->countdown_resume;
+                app_countdown_cancel(a);
+                if (!resume) {
+                    snprintf(out, n, "recording countdown cancelled");
+                    return 0;
+                }
             }
             if (!a->state.recording) {
                 return app_error(out, n, "no recording to stop");
@@ -772,13 +904,60 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
             int rc = media_record_stop(a->media, out, n);
             a->record_finalizing = media_record_finalizing(a->media);
             a->state.recording = a->state.record_paused = a->state.group_record_restore = false;
+            a->state.record_cut = a->state.record_frozen = a->state.record_blurred = false;
+            frame_free(&a->record_frozen);
             if (!out[0]) {
                 snprintf(out, n, "finalized %s", a->state.record_path);
             }
             return rc;
         }
-        if (state_command(&s, "record", av[1], out, n)) {
+        if (IS(1, "cancel")) {
+            if (!a->countdown) {
+                return app_error(out, n, "no recording countdown to cancel");
+            }
+            app_countdown_cancel(a);
+            snprintf(out, n, "recording countdown cancelled");
+            return 0;
+        }
+        if (IS(1, "resume") && s.recording && s.record_cut) {
+            if (a->countdown && a->countdown_resume) {
+                snprintf(out, n, "recording resume countdown already pending");
+                return 0;
+            }
+            if (c.record_countdown) {
+                a->countdown = a->countdown_resume = true;
+                a->countdown_path[0] = 0;
+                a->countdown_deadline =
+                    cast_now_ns() + (uint64_t)c.record_countdown * 1000000000ULL;
+                int guide =
+                    app_countdown_guide(a, (uint64_t)c.record_countdown * 1000000000ULL, out, n);
+                if (guide != 0) {
+                    app_countdown_cancel(a);
+                    if (guide > 0) {
+                        return app_error(
+                            out, n, "recording resume countdown cancelled; recording remains cut");
+                    }
+                    return -1;
+                }
+                snprintf(out, n, "recording resume countdown: %d seconds; same file %s",
+                         c.record_countdown, s.record_path);
+                return 0;
+            }
+            return app_recording_resume(a, out, n);
+        }
+        if (IS(1, "pause") || IS(1, "cut")) {
+            bool initial_countdown = a->countdown && !a->countdown_resume;
+            app_countdown_cancel(a);
+            if (initial_countdown && !s.recording) {
+                snprintf(out, n, "recording countdown cancelled");
+                return 0;
+            }
+        }
+        if (state_command(&s, "record", action, out, n)) {
             return -1;
+        }
+        if (s.record_paused && !a->state.record_paused) {
+            app_countdown_cancel(a);
         }
         return barrier(a, &s, out, n);
     }
@@ -933,7 +1112,9 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
         }
         if (ac == 2 && IS(1, "clear")) {
             compositor_clear(a->compositor);
-            return 0;
+            frame_free(&a->live_raw);
+            frame_free(&a->record_raw);
+            return barrier(a, &s, out, n);
         }
         if (ac == 3 && IS(1, "mode")) {
             ENUM(c.keys_mode, av[2], "shortcuts,all");

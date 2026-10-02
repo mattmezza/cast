@@ -165,6 +165,31 @@ int main(void)
     assert(s.live_paused && s.live_frozen);
     state_command(&s, "live", "unfreeze", e, sizeof e);
     assert(s.live_paused && !s.live_frozen);
+    /* Group controls restore solid flags and preserve every orthogonal mode. */
+    for (unsigned modes = 0; modes < 128; modes++) {
+        State initial = {.recording = true,
+                         .live_paused = modes & 1,
+                         .live_frozen = modes & 2,
+                         .live_blurred = modes & 4,
+                         .record_paused = modes & 8,
+                         .record_frozen = modes & 16,
+                         .record_blurred = modes & 32,
+                         .record_cut = modes & 64};
+        State actual = initial;
+        assert(!state_command(&actual, "pause", "", e, sizeof e));
+        assert(!state_command(&actual, "resume", "", e, sizeof e));
+        assert(!memcmp(&actual, &initial, sizeof initial));
+    }
+    s = (State){.recording = true, .record_cut = true};
+    assert(!state_command(&s, "pause", "", e, sizeof e));
+    assert(!state_command(&s, "live", "blur", e, sizeof e));
+    assert(!state_command(&s, "record", "freeze", e, sizeof e));
+    assert(!state_command(&s, "resume", "", e, sizeof e));
+    assert(!s.live_paused && !s.record_paused && s.live_blurred && s.record_frozen && s.record_cut);
+    assert(!state_command(&s, "record", "toggle", e, sizeof e));
+    assert(s.record_paused && s.record_cut);
+    assert(!state_command(&s, "record", "resume", e, sizeof e));
+    assert(!s.record_cut && s.record_paused && s.record_frozen);
     puts("core configuration and privacy-state tests passed");
     return 0;
 }

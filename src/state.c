@@ -38,6 +38,7 @@ int state_command(State *s, const char *output, const char *action, char *err, s
         return 0;
     }
     if (!strcmp(output, "live")) {
+        bool solid = true;
         if (!strcmp(action, "pause")) {
             s->live_paused = true;
         } else if (!strcmp(action, "resume")) {
@@ -46,13 +47,25 @@ int state_command(State *s, const char *output, const char *action, char *err, s
             s->live_paused = !s->live_paused;
         } else if (!strcmp(action, "freeze")) {
             s->live_frozen = true;
+            solid = false;
         } else if (!strcmp(action, "unfreeze")) {
             s->live_frozen = false;
+            solid = false;
+        } else if (!strcmp(action, "blur")) {
+            s->live_blurred = true;
+            solid = false;
+        } else if (!strcmp(action, "unblur")) {
+            s->live_blurred = false;
+            solid = false;
+        } else if (!strcmp(action, "blur-toggle")) {
+            s->live_blurred = !s->live_blurred;
+            solid = false;
         } else {
             goto invalid;
         }
-        /* Any independent live command supersedes the remembered live state. */
-        s->group_live_restore = false;
+        if (solid) {
+            s->group_live_restore = false;
+        }
         return 0;
     }
     if (!strcmp(output, "record")) {
@@ -60,16 +73,42 @@ int state_command(State *s, const char *output, const char *action, char *err, s
             snprintf(err, n, "no recording exists; use cast record start [PATH]");
             return -1;
         }
+        bool solid = true;
         if (!strcmp(action, "pause")) {
             s->record_paused = true;
         } else if (!strcmp(action, "resume")) {
-            s->record_paused = false;
+            if (s->record_cut) {
+                s->record_cut = false;
+                solid = false;
+            } else {
+                s->record_paused = false;
+            }
         } else if (!strcmp(action, "toggle")) {
             s->record_paused = !s->record_paused;
+        } else if (!strcmp(action, "freeze")) {
+            s->record_frozen = true;
+            solid = false;
+        } else if (!strcmp(action, "unfreeze")) {
+            s->record_frozen = false;
+            solid = false;
+        } else if (!strcmp(action, "blur")) {
+            s->record_blurred = true;
+            solid = false;
+        } else if (!strcmp(action, "unblur")) {
+            s->record_blurred = false;
+            solid = false;
+        } else if (!strcmp(action, "blur-toggle")) {
+            s->record_blurred = !s->record_blurred;
+            solid = false;
+        } else if (!strcmp(action, "cut")) {
+            s->record_cut = true;
+            solid = false;
         } else {
             goto invalid;
         }
-        s->group_record_restore = false;
+        if (solid) {
+            s->group_record_restore = false;
+        }
         return 0;
     }
 invalid:

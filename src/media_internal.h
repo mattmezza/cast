@@ -21,6 +21,8 @@ void audio_close(CastAudio *);
 int audio_validate(CastAudio *, const Config *, char *, size_t);
 int audio_configure(CastAudio *, const Config *, char *, size_t);
 void audio_barrier(CastAudio *, bool);
+void audio_live_privacy(CastAudio *, bool);
+void audio_record_privacy(CastAudio *);
 void audio_read(CastAudio *, uint64_t, float *, int);
 void audio_list(CastAudio *, char *, size_t);
 void audio_status(CastAudio *, char *, size_t);
@@ -31,6 +33,7 @@ int recorder_start(CastRecorder *, const Config *, const char *, char *, size_t)
 int recorder_stop(CastRecorder *, char *, size_t);
 bool recorder_finalizing(CastRecorder *);
 int recorder_pause(CastRecorder *, bool, char *, size_t);
+int recorder_silence(CastRecorder *, bool, char *, size_t);
 int recorder_frame(CastRecorder *, const Frame *, char *, size_t);
 void recorder_barrier(CastRecorder *);
 void recorder_status(CastRecorder *, bool *, bool *, uint64_t *, char *, size_t);

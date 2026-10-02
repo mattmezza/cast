@@ -28,7 +28,7 @@ struct CastRecorder {
     pthread_mutex_t mutex, encoder_mutex;
     pthread_cond_t changed;
     bool worker_started, shutdown, header_written;
-    atomic_bool active, paused, finalizing;
+    atomic_bool active, paused, finalizing, silent;
     atomic_uint_fast64_t drops;
     CastAudio *audio;
     Config cfg;
@@ -318,7 +318,7 @@ static int fill_audio(CastRecorder *r, int64_t goal, uint64_t segment_ns, uint64
             local = 0;
         }
         uint64_t ns = segment_ns + (uint64_t)local * 1000000000 / RATE;
-        if (silence) {
+        if (silence || atomic_load(&r->silent)) {
             memset(mix, 0, (size_t)n * 2 * sizeof(float));
         } else {
             audio_read(r->audio, ns, mix, n);
@@ -749,6 +749,7 @@ int recorder_start(CastRecorder *r, const Config *cfg, const char *path, char *r
     r->segment_ns = r->accept_after_ns = cast_now_ns();
     atomic_store(&r->paused, false);
     atomic_store(&r->active, true);
+    atomic_store(&r->silent, false);
     pthread_cond_broadcast(&r->changed);
     snprintf(reply, n, "recording started: %s", r->path);
     pthread_mutex_unlock(&r->mutex);
@@ -801,6 +802,19 @@ static bool lock_active_encoder(CastRecorder *r)
         nanosleep(&delay, NULL);
     }
     return true;
+}
+int recorder_silence(CastRecorder *r, bool silent, char *reply, size_t n)
+{
+    if (!atomic_load(&r->active)) {
+        snprintf(reply, n, "no recording is active");
+        return -1;
+    }
+    bool previous = atomic_exchange(&r->silent, silent);
+    if (previous != silent) {
+        recorder_barrier(r);
+    }
+    snprintf(reply, n, "recording audio %s", silent ? "silent" : "active");
+    return 0;
 }
 int recorder_pause(CastRecorder *r, bool paused, char *reply, size_t n)
 {
