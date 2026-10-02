@@ -1,0 +1,39 @@
+pkgbase = cast-git
+	pkgdesc = Screen and webcam presentation camera with local recording and a control panel
+	pkgver = 0.1.r8.3427382
+	pkgrel = 1
+	url = https://github.com/mattmezza/cast
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	license = BSD-3-Clause
+	license = OFL-1.1
+	license = Zlib
+	license = GPL-3.0-only
+	checkdepends = python
+	checkdepends = dbus
+	makedepends = git
+	makedepends = pkgconf
+	depends = glibc
+	depends = ffmpeg
+	depends = pipewire
+	depends = glib2
+	depends = libx11
+	depends = libxext
+	depends = libxrandr
+	depends = libxi
+	depends = libxfixes
+	depends = libxcomposite
+	depends = sdl3
+	depends = sdl3_ttf
+	optdepends = v4l2loopback-dkms: virtual camera kernel device
+	optdepends = linux-headers: DKMS headers for the linux kernel; use headers matching your kernel
+	optdepends = xdg-desktop-portal: Wayland screen capture consent
+	optdepends = xdg-desktop-portal-impl: desktop-specific portal implementation
+	optdepends = sxhkd: example Xorg control bindings
+	provides = cast=0.1.r8.3427382
+	conflicts = cast
+	source = cast::git+https://github.com/mattmezza/cast.git#branch=main
+	sha256sums = SKIP
+
+pkgname = cast-git
