@@ -1,0 +1,191 @@
+name: Arch Linux release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Existing published release tag; leave empty to test the selected ref without publishing'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arch-release-${{ github.event.release.tag_name || inputs.release_tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  source:
+    name: Resolve exact source
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+      tag: ${{ steps.source.outputs.tag }}
+      version: ${{ steps.source.outputs.version }}
+      publish: ${{ steps.source.outputs.publish }}
+      release_id: ${{ steps.source.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Resolve release tag or dry run commit
+        id: source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          EVENT_RELEASE_ID: ${{ github.event.release.id }}
+          INPUT_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          tag=$INPUT_TAG
+          if [[ "$EVENT_NAME" == release ]]; then
+            tag=$EVENT_TAG
+          fi
+          publish=false
+          release_id=
+          commit=$(git rev-parse HEAD)
+          if [[ -n "$tag" ]]; then
+            [[ "$tag" =~ ^v[0-9][0-9A-Za-z.-]*$ ]]
+            git check-ref-format "refs/tags/$tag"
+            # The old release predates the Arch recipe and remains immutable.
+            [[ "$tag" != v0.1 ]]
+            release=$(gh api "repos/$GH_REPO/releases/tags/$tag")
+            [[ $(jq -r '.draft' <<< "$release") == false ]]
+            [[ $(jq -r '.tag_name' <<< "$release") == "$tag" ]]
+            release_id=$(jq -r '.id' <<< "$release")
+            [[ "$release_id" =~ ^[0-9]+$ ]]
+            if [[ "$EVENT_NAME" == release ]]; then
+              [[ "$release_id" == "$EVENT_RELEASE_ID" ]]
+            fi
+            object=$(gh api "repos/$GH_REPO/git/ref/tags/$tag" --jq '[.object.type, .object.sha] | @tsv')
+            read -r kind commit <<< "$object"
+            for depth in {1..16}; do
+              [[ "$kind" == tag ]] || break
+              object=$(gh api "repos/$GH_REPO/git/tags/$commit" --jq '[.object.type, .object.sha] | @tsv')
+              read -r kind commit <<< "$object"
+            done
+            [[ "$kind" == commit && "$commit" =~ ^[0-9a-f]{40}$ ]]
+            version=$(gh api "repos/$GH_REPO/contents/src/cast.h?ref=$commit" --jq .content | \
+              base64 --decode | sed -n 's/^#define CAST_VERSION "\([^"]*\)"/\1/p')
+            publish=true
+          else
+            version=$(sed -n 's/^#define CAST_VERSION "\([^"]*\)"/\1/p' src/cast.h)
+            [[ "$version" =~ ^[0-9][0-9A-Za-z.-]*$ ]]
+            tag=v$version
+          fi
+          [[ "$version" =~ ^[0-9][0-9A-Za-z.-]*$ ]]
+          printf 'commit=%s\ntag=%s\nversion=%s\npublish=%s\nrelease_id=%s\n' \
+            "$commit" "$tag" "$version" "$publish" "$release_id" >> "$GITHUB_OUTPUT"
+          printf 'Source: %s at %s; publish=%s\n' "$tag" "$commit" "$publish"
+
+  build:
+    name: Build and test Arch x86_64
+    needs: source
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: archlinux:base-devel
+    env:
+      BUILD_TAG: ${{ needs.source.outputs.tag }}
+      SOURCE_COMMIT: ${{ needs.source.outputs.commit }}
+      PUBLISH: ${{ needs.source.outputs.publish }}
+    steps:
+      - name: Install official Arch packages
+        run: |
+          pacman -Syu --noconfirm --needed \
+            base-devel git ffmpeg pipewire glib2 libx11 libxext libxrandr \
+            libxi libxfixes libxcomposite sdl3 sdl3_ttf python dbus \
+            xorg-server-xvfb xorg-xauth libxtst xdotool xclip
+          useradd --create-home builder
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check source and prepare unprivileged build
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ $(git rev-parse HEAD) == "$SOURCE_COMMIT" ]]
+          if [[ "$PUBLISH" == false ]]; then
+            if git show-ref --verify --quiet "refs/tags/$BUILD_TAG"; then
+              [[ $(git rev-parse "refs/tags/$BUILD_TAG^{commit}") == "$SOURCE_COMMIT" ]]
+            else
+              # Only a local tag for the dispatch validation; never push it.
+              git tag "$BUILD_TAG" "$SOURCE_COMMIT"
+            fi
+          fi
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+      - name: Build package and run unit, Xorg, and panel checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          runuser -u builder -- sh packaging/ci-build-arch.sh \
+            "$BUILD_TAG" "$GITHUB_WORKSPACE/dist/arch"
+      - name: Preserve tested Arch assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cast-archlinux-x86_64
+          path: dist/arch/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Attach assets to existing release
+    needs: [source, build]
+    if: needs.source.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ needs.source.outputs.tag }}
+      SOURCE_COMMIT: ${{ needs.source.outputs.commit }}
+      RELEASE_ID: ${{ needs.source.outputs.release_id }}
+      RELEASE_VERSION: ${{ needs.source.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cast-archlinux-x86_64
+          path: arch-assets
+      - name: Verify provenance, checksums, and unused asset names
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix=cast-$RELEASE_VERSION-archlinux-x86_64
+          cd arch-assets
+          [[ $(cat "$prefix-source-commit.txt") == "$SOURCE_COMMIT" ]]
+          sha256sum -c "$prefix-SHA256SUMS"
+          assets=( "$prefix.pkg.tar.zst" "$prefix.tar.gz" "$prefix-source.tar.gz"
+                   "$prefix-build-info.txt" "$prefix-source-commit.txt" "$prefix-SHA256SUMS" )
+          [[ $(find . -maxdepth 1 -type f | wc -l) == ${#assets[@]} ]]
+          for asset in "${assets[@]}"; do
+            [[ -f "$asset" && ! -L "$asset" ]]
+          done
+          release=$(gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG")
+          [[ $(jq -r '.id' <<< "$release") == "$RELEASE_ID" ]]
+          [[ $(jq -r '.draft' <<< "$release") == false ]]
+          [[ $(jq -r '.tag_name' <<< "$release") == "$RELEASE_TAG" ]]
+          object=$(gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" --jq '[.object.type, .object.sha] | @tsv')
+          read -r kind commit <<< "$object"
+          for depth in {1..16}; do
+            [[ "$kind" == tag ]] || break
+            object=$(gh api "repos/$GH_REPO/git/tags/$commit" --jq '[.object.type, .object.sha] | @tsv')
+            read -r kind commit <<< "$object"
+          done
+          [[ "$kind" == commit && "$commit" == "$SOURCE_COMMIT" ]]
+          for asset in "${assets[@]}"; do
+            # Refuse the whole upload if any name is already published.
+            jq -e --arg name "$asset" 'all(.assets[]; .name != $name)' <<< "$release" >/dev/null
+          done
+          # gh rejects duplicate names; deliberately never use --clobber.
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --repo "$GH_REPO"
