@@ -450,7 +450,12 @@ static int command_message(App *a, const char *value, char *out, size_t n)
             p += count;
         }
     }
-    strcpy(a->config.pause_text, value);
+    Config candidate = a->config;
+    if (config_set_value(&candidate, "output.pause_title", value, out, n) ||
+        compositor_prepare(a->compositor, &candidate, out, n)) {
+        return -1;
+    }
+    a->config = candidate;
     if (app_output_frames(a, out, n)) {
         return -1;
     }

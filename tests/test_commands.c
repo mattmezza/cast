@@ -314,6 +314,9 @@ int main(void)
     too_long[sizeof too_long - 1] = 0;
     COMMAND(app, false, "live", "message", too_long);
     COMMAND(app, false, "live", "message", "invalid \xff");
+    COMMAND(app, false, "live", "message", "{unknown}");
+    COMMAND(app, false, "live", "message", "{time:%999999Y}");
+    COMMAND(app, false, "live", "message", "control\x01");
     COMMAND(app, false, "live", "message", "extra", "argument");
     assert(memcmp(&message_config, &app->config, sizeof message_config) == 0);
     COMMAND(app, true, "live", "message", "");
