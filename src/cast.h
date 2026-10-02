@@ -90,6 +90,8 @@ void config_defaults(Config *);
 int config_load(Config *, const char *, bool, char *, size_t);
 void config_print_defaults(void);
 int config_validate(const Config *, char *, size_t);
+/* Assign one schema value to a candidate; validate the complete batch before applying it. */
+int config_set_value(Config *, const char *, const char *, char *, size_t);
 /* Platform modules keep X11/DBus types private. Platform routines run on daemon thread. */
 Platform *platform_open(const Config *, char *, size_t);
 void platform_close(Platform *);

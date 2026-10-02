@@ -208,6 +208,30 @@ static int assign(void *base, const Setting *s, const char *v, char *err, size_t
     }
     return 0;
 }
+int config_set_value(Config *config, const char *name, const char *value, char *error, size_t size)
+{
+    if (!config || !name || !value) {
+        return fail(error, size, "setting name and value are required");
+    }
+    const char *dot = strchr(name, '.');
+    if (!dot || dot == name || !dot[1]) {
+        return fail(error, size, "setting name must be SECTION.KEY");
+    }
+    size_t section_length = (size_t)(dot - name);
+    for (size_t i = 0; i < NSET; i++) {
+        const Setting *setting = &settings[i];
+        if (strlen(setting->section) == section_length &&
+            !strncmp(name, setting->section, section_length) && !strcmp(dot + 1, setting->key)) {
+            Config candidate = *config;
+            if (assign(&candidate, setting, value, error, size)) {
+                return -1;
+            }
+            *config = candidate;
+            return 0;
+        }
+    }
+    return fail(error, size, "unknown setting %s", name);
+}
 void config_defaults(Config *c)
 {
     memset(c, 0, sizeof *c);

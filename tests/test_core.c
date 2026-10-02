@@ -32,6 +32,16 @@ int main(void)
     config_defaults(&c);
     char e[CAST_ERR];
     assert(!config_validate(&c, e, sizeof e));
+    Config settings = c;
+    assert(!config_set_value(&settings, "camera.radius", "32", e, sizeof e));
+    assert(settings.radius == 32 && c.radius == 24);
+    Config unchanged = settings;
+    assert(config_set_value(&settings, "camera.radius", "bad", e, sizeof e));
+    assert(!memcmp(&settings, &unchanged, sizeof settings));
+    assert(config_set_value(&settings, "camera.unknown", "1", e, sizeof e));
+    assert(!memcmp(&settings, &unchanged, sizeof settings));
+    assert(!config_set_value(&settings, "output.pause_text", "Back in five minutes", e, sizeof e));
+    assert(!strcmp(settings.pause_text, "Back in five minutes"));
     load_test(
         "[camera]\nwidth_percent=25\n[preset.lecture]\nlayout=split\ncamera_width_percent=30\n",
         true, &c);
