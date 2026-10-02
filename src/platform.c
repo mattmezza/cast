@@ -270,11 +270,11 @@ int platform_panel_register(Platform *p, uint64_t window, int peer_pid, char *e,
     (void)window;
     (void)peer_pid;
 #endif
-    if (!window) {
-        snprintf(e, n, "panel attached; exclusion is unsupported by this capture backend");
-        return 0;
-    }
-    return error(e, n, "panel exclusion is unsupported by this capture backend");
+    /* A native ID belongs to the panel display; other capture backends cannot use it. */
+    (void)window;
+    (void)peer_pid;
+    snprintf(e, n, "panel attached; exclusion is unsupported by this capture backend");
+    return 0;
 }
 void platform_panel_unregister(Platform *p)
 {
