@@ -44,6 +44,7 @@ int app_socket_path(Config *, char *, size_t);
 void app_request_stop(void);
 int app_command(App *, int, char **, char *, size_t);
 int app_recording_start(App *, const char *, char *, size_t);
+int app_countdown_guide(App *, uint64_t remaining_ns, char *, size_t);
 void app_sync_source(App *);
 int app_shutdown_privacy(App *, char *, size_t);
 #endif

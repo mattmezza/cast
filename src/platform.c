@@ -216,6 +216,20 @@ void platform_events(Platform *p, Compositor *comp, const Config *cfg, bool priv
     (void)privacy;
 #endif
 }
+int platform_countdown(Platform *p, uint64_t remaining_ns, char *e, size_t n)
+{
+#ifdef WITH_X11
+    if (p && p->backend == XORG) {
+        return x11_countdown(p->impl, remaining_ns, e, n);
+    }
+#endif
+    /* The optional panel renders its own guide on backends without native UI. */
+    (void)p;
+    (void)remaining_ns;
+    (void)e;
+    (void)n;
+    return 0;
+}
 int platform_preview(Platform *p, const Frame *f, const State *s, const Config *cfg, char *e,
                      size_t n)
 {

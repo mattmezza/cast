@@ -337,6 +337,9 @@ int app_shutdown_privacy(App *a, char *e, size_t n)
     a->state.group_live_restore = false;
     a->countdown = false;
     a->countdown_path[0] = 0;
+    if (a->platform) {
+        app_countdown_guide(a, 0, e, n);
+    }
     frame_free(&a->live);
     frame_free(&a->frozen);
     if (a->platform && a->compositor) {
@@ -378,6 +381,20 @@ static void tick(App *a)
         a->state.recording = a->state.record_paused = a->state.group_record_restore = false;
     }
     remember_error(a, e);
+    if (a->countdown) {
+        uint64_t remaining = a->countdown_deadline > now ? a->countdown_deadline - now : 1;
+        int guide = app_countdown_guide(a, remaining, e, sizeof e);
+        if (guide == 1) {
+            a->countdown = false;
+            a->countdown_path[0] = 0;
+            fprintf(stderr, "cast: recording countdown cancelled\n");
+        } else if (guide < 0) {
+            remember_error(a, e);
+        }
+    }
+    if (!a->countdown || now >= a->countdown_deadline) {
+        app_countdown_guide(a, 0, e, sizeof e);
+    }
     if (a->countdown && now >= a->countdown_deadline) {
         a->countdown = false;
         if (app_recording_start(a, a->countdown_path[0] ? a->countdown_path : NULL, e, sizeof e)) {

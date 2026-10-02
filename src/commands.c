@@ -636,6 +636,15 @@ static int command_preset(App *a, Config *candidate, int ac, char **av, char *na
     return 0;
 }
 
+int app_countdown_guide(App *a, uint64_t remaining_ns, char *error, size_t n)
+{
+    /* An attached panel owns the visible guide; a disconnected client falls back
+     * to native presentation UI on the next capture tick. */
+    if (remaining_ns && panel_transport_attached(a->panel)) {
+        remaining_ns = 0;
+    }
+    return platform_countdown(a->platform, remaining_ns, error, n);
+}
 int app_command(App *a, int ac, char **av, char *out, size_t n)
 {
     Config c = a->config;
@@ -691,6 +700,7 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
         if (IS(0, "pause") && a->countdown) {
             a->countdown = false;
             a->countdown_path[0] = 0;
+            app_countdown_guide(a, 0, out, n);
         }
         if (state_command(&s, av[0], ac > 1 ? av[1] : "", out, n)) {
             return -1;
@@ -728,6 +738,13 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
                 a->countdown = true;
                 a->countdown_deadline =
                     cast_now_ns() + (uint64_t)c.record_countdown * 1000000000ULL;
+                if (app_countdown_guide(a,
+                                       (uint64_t)c.record_countdown * 1000000000ULL, out, n) < 0) {
+                    a->countdown = false;
+                    a->countdown_path[0] = 0;
+                    app_countdown_guide(a, 0, NULL, 0);
+                    return -1;
+                }
                 snprintf(out, n,
                          "recording countdown: %d seconds; cast record stop or cast pause cancels",
                          c.record_countdown);
@@ -744,6 +761,8 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
         if (IS(1, "stop")) {
             if (a->countdown) {
                 a->countdown = false;
+                a->countdown_path[0] = 0;
+                app_countdown_guide(a, 0, out, n);
                 snprintf(out, n, "recording countdown cancelled");
                 return 0;
             }

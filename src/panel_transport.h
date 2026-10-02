@@ -39,5 +39,6 @@ void panel_transport_publish(PanelTransport *, struct App *, const Frame *, cons
 /* Refresh state and privacy gates before acknowledging a command. */
 void panel_transport_barrier(PanelTransport *, struct App *, bool invalidate);
 void panel_transport_check(PanelTransport *, struct App *);
+bool panel_transport_attached(const PanelTransport *);
 bool panel_transport_authorize(PanelTransport *, uint64_t generation, pid_t);
 #endif

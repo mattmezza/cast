@@ -113,6 +113,10 @@ void panel_transport_destroy(PanelTransport *t, App *a)
         free(t);
     }
 }
+bool panel_transport_attached(const PanelTransport *t)
+{
+    return t && t->peer >= 0;
+}
 void panel_transport_check(PanelTransport *t, App *a)
 {
     if (!t || t->peer < 0) {
