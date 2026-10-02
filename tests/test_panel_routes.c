@@ -57,6 +57,18 @@ static void camera_geometry(App *app, int *x, int *y, int *w, int *h)
 }
 int main(void)
 {
+    /* A delayed Apply acknowledgement must not discard typing done afterward. */
+    FieldEdit edit = {.dirty = true, .pending = 1, .revision = 2, .submitted_revision = 1};
+    acknowledge_edit(&edit, false);
+    assert(edit.dirty && !edit.pending);
+    edit.pending = 2;
+    edit.submitted_revision = edit.revision;
+    acknowledge_edit(&edit, true);
+    assert(edit.dirty && !edit.pending);
+    edit.pending = 3;
+    acknowledge_edit(&edit, false);
+    assert(!edit.dirty && !edit.pending);
+
     av_log_set_level(AV_LOG_ERROR);
     App *app = calloc(1, sizeof *app);
     Panel *panel = calloc(1, sizeof *panel);

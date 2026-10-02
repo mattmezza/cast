@@ -174,7 +174,7 @@ static const FieldSpec fields[] = {
 typedef struct {
     char value[PATH_MAX];
     bool dirty;
-    uint64_t pending;
+    uint64_t pending, revision, submitted_revision;
 } FieldEdit;
 typedef enum {
     W_BUTTON,
@@ -1397,6 +1397,9 @@ static void apply_setting(Panel *p, int index, const char *value, bool draft)
     if (index < 0 || (size_t)index >= FIELD_COUNT || !writable(p, &fields[index])) {
         return;
     }
+    if (draft && p->edit[index].pending) {
+        return;
+    }
     if (validate_field(&fields[index], value, p->error, sizeof p->error)) {
         return;
     }
@@ -1469,6 +1472,7 @@ static void apply_setting(Panel *p, int index, const char *value, bool draft)
     p->reply[0] = 0;
     if (draft) {
         p->edit[index].pending = p->snapshot.command_queued + 1;
+        p->edit[index].submitted_revision = p->edit[index].revision;
     }
 }
 static void activate(Panel *p, Widget *w)
@@ -1614,6 +1618,7 @@ static void insert_text(Panel *p, const char *text)
     memcpy(edit->value + p->caret, text, added);
     p->caret += added;
     edit->dirty = true;
+    edit->revision++;
     p->error[0] = 0;
 }
 static void key_event(Panel *p, const SDL_KeyboardEvent *event)
@@ -1706,6 +1711,7 @@ static void key_event(Panel *p, const SDL_KeyboardEvent *event)
                 memmove(edit->value + p->caret, edit->value + end, length - end + 1);
             }
             edit->dirty = true;
+            edit->revision++;
         } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
             if (edit->dirty) {
                 apply_setting(p, index, edit->value, true);
@@ -1825,6 +1831,15 @@ static void clear_preview(Panel *p)
     p->preview = NULL;
     frame_free(&p->frame);
 }
+static void acknowledge_edit(FieldEdit *edit, bool failed)
+{
+    /* An acknowledgement belongs to the submitted draft, not later typing. */
+    if (!failed && edit->revision == edit->submitted_revision) {
+        edit->dirty = false;
+    }
+    edit->pending = 0;
+}
+
 static void poll_client(Panel *p)
 {
     PanelSnapshot fresh;
@@ -1847,10 +1862,7 @@ static void poll_client(Panel *p)
             snprintf(p->error, sizeof p->error, "%s", fresh.command_failed ? fresh.last_reply : "");
             for (size_t i = 0; i < FIELD_COUNT; i++) {
                 if (p->edit[i].pending && fresh.command_completed >= p->edit[i].pending) {
-                    if (!fresh.command_failed) {
-                        p->edit[i].dirty = false;
-                    }
-                    p->edit[i].pending = 0;
+                    acknowledge_edit(&p->edit[i], fresh.command_failed);
                 }
             }
         }
@@ -1939,13 +1951,18 @@ static void write_ui_state(Panel *p, const char *path)
     Clay_BoundingBox panel = Clay_GetElementData(CLAY_ID("PreviewPanel")).boundingBox;
     Clay_BoundingBox scroll = Clay_GetElementData(CLAY_ID("SettingsScroll")).boundingBox;
     fprintf(file,
-            "{\"tab\":%d,\"frame\":%llu,\"has_preview\":%s,\"record_preview\":%s,"
+            "{\"tab\":%d,\"frame\":%llu,\"has_preview\":%s,\"record_preview\":%s,\"command_"
+            "pending\":%s,"
+            "\"command_queued\":%llu,\"command_completed\":%llu,"
             "\"density\":%.3f,\"input_scale\":%.3f,\"raster_font_size\":%.3f,"
             "\"preview\":[%.1f,%.1f,%.1f,%.1f],"
             "\"preview_panel\":[%.1f,%.1f,%.1f,%.1f],"
             "\"scroll\":[%.1f,%.1f,%.1f,%.1f],\"widgets\":[",
             p->tab, (unsigned long long)p->draw_frame, p->preview ? "true" : "false",
-            p->record_preview ? "true" : "false", p->density, p->input_scale,
+            p->record_preview ? "true" : "false",
+            p->snapshot.command_queued > p->snapshot.command_completed ? "true" : "false",
+            (unsigned long long)p->snapshot.command_queued,
+            (unsigned long long)p->snapshot.command_completed, p->density, p->input_scale,
             TTF_GetFontSize(p->raster_font[1]), preview.x, preview.y, preview.width, preview.height,
             panel.x, panel.y, panel.width, panel.height, scroll.x, scroll.y, scroll.width,
             scroll.height);
@@ -1983,8 +2000,9 @@ int panel_run(const Config *config, char *error, size_t n)
         cleanup(p, NULL);
         return -1;
     }
-    p->window = SDL_CreateWindow("cast control panel", 480, 760,
-                                 SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    p->window =
+        SDL_CreateWindow("cast control panel", 480, 760,
+                         SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN);
     if (!p->window) {
         snprintf(error, n, "cannot create control panel window: %s", SDL_GetError());
         cleanup(p, NULL);
@@ -2031,6 +2049,16 @@ int panel_run(const Config *config, char *error, size_t n)
     Clay_SetMeasureTextFunction(measure, p);
     p->width = 480;
     p->height = 760;
+    /* Creating the renderer can replace the native X11 window for its GL visual.
+     * Map only the initialized window, then register its final XID with the daemon. */
+    Clay_RenderCommandArray commands = layout(p);
+    render(p, commands);
+    SDL_RenderPresent(p->renderer);
+    if (!SDL_ShowWindow(p->window)) {
+        snprintf(error, n, "cannot show control panel window: %s", SDL_GetError());
+        cleanup(p, clay_memory);
+        return -1;
+    }
     p->client = panel_client_open(config, window_xid(p->window), error, n);
     if (!p->client) {
         cleanup(p, clay_memory);
@@ -2048,9 +2076,6 @@ int panel_run(const Config *config, char *error, size_t n)
         }
     }
     bool captured = false;
-    Clay_RenderCommandArray commands = layout(p);
-    render(p, commands);
-    SDL_RenderPresent(p->renderer);
     while (!p->quit) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) {

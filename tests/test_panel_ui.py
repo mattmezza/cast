@@ -75,8 +75,20 @@ def exercise():
             panel = subprocess.Popen([BINARY, *common, "panel"], env=env, stdout=log, stderr=log)
             windows = []
 
+            def renderer_ready():
+                assert panel.poll() is None, "panel exited before renderer initialization"
+                try:
+                    ready = json.loads((root / "ui.json").read_text())
+                except (FileNotFoundError, json.JSONDecodeError):
+                    return False
+                return ready["frame"] > 0 and ready["has_preview"] and bool(ready["widgets"])
+
+            # SDL_CreateRenderer may replace the initial X11 window for a GL visual.
+            # A real rendered preview proves renderer/font/layout initialization finished.
+            wait_until(renderer_ready, "panel did not render its first daemon preview")
+
             def find_window():
-                result = subprocess.run(["xdotool", "search", "--pid", str(panel.pid),
+                result = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(panel.pid),
                                          "--class", "CastPanel"], env=env, text=True,
                                         capture_output=True, timeout=3)
                 windows[:] = result.stdout.splitlines()
@@ -85,7 +97,6 @@ def exercise():
             wait_until(find_window, "native panel window did not open")
             window = windows[0]
             xdo("windowfocus", "--sync", window)
-            time.sleep(0.7)
 
             def click(x, y):
                 xdo("mousemove", "--window", window, x, y, "click", 1)
@@ -103,7 +114,19 @@ def exercise():
                 return next((w for w in ui()["widgets"]
                              if w["id"] == identifier or w["key"] == identifier), None)
 
+            def await_panel_ack(expected=None):
+                # Verify a new rendered frame after the acknowledged command generation.
+                before = ui()
+                expected = before["command_queued"] if expected is None else expected
+                def acknowledged():
+                    current = ui()
+                    return (current["frame"] > before["frame"] and
+                            current["command_completed"] >= expected and
+                            current["command_queued"] == current["command_completed"])
+                wait_until(acknowledged, "Panel command was not acknowledged in a new frame")
+
             def click_widget(identifier):
+                await_panel_ack()
                 wait_until(lambda: widget(identifier) and widget(identifier)["enabled"],
                            f"Control {identifier} is unavailable")
                 for attempt in range(25):
@@ -220,16 +243,19 @@ def exercise():
             navigate(1)
             navigate(4)
             click_widget("output.pause_text")
+            submitted = ui()["command_queued"] + 1
             xdo("key", "--clearmodifiers", "Return")
             wait_until(lambda: state()["live"]["message"] == "Private session", "Draft did not survive navigation")
-            time.sleep(.2)
+            await_panel_ack(submitted)
             click_widget("output.pause_text")
             xdo("key", "--clearmodifiers", "Tab", "shift+Tab")
             subprocess.run(["xclip", "-selection", "clipboard", "-loops", "2"], env=env,
                            input="Private café", text=True, stdout=subprocess.DEVNULL,
                            stderr=log, check=True, timeout=3)
+            submitted = ui()["command_queued"] + 1
             xdo("key", "--clearmodifiers", "ctrl+v", "Return")
             wait_until(lambda: state()["live"]["message"] == "Private café", "UTF-8 paste or keyboard focus failed")
+            await_panel_ack(submitted)
             xdo("key", "--clearmodifiers", "Escape")
             wait_until(lambda: ui()["tab"] == -1, "Escape did not return home")
 
