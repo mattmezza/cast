@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#define CAST_VERSION "0.3.0"
+#define CAST_VERSION "0.4.0"
 #define CAST_TEXT 256
 #define CAST_ERR 1024
 #define CAST_MAX_PRESETS 24
@@ -74,7 +74,8 @@ typedef struct {
     int preset_count;
 } Config;
 typedef struct {
-    bool live_paused, live_frozen, recording, record_paused, group_paused;
+    bool live_paused, live_frozen, live_blurred;
+    bool recording, record_paused, record_frozen, record_blurred, record_cut, group_paused;
     bool group_live_restore, group_record_restore;
     uint64_t record_started_ns, record_paused_ns, record_pause_total_ns;
     char record_path[PATH_MAX], last_error[CAST_ERR];
@@ -115,6 +116,8 @@ void platform_events(Platform *, Compositor *, const Config *, bool privacy);
 int platform_preview(Platform *, const Frame *, const State *, const Config *, char *, size_t);
 /* Transient local countdown; remaining_ns=0 hides it, return 1 cancels, -1 errors. */
 int platform_countdown(Platform *, uint64_t remaining_ns, char *, size_t);
+/* Stage the recording composition in the temporary native countdown preview. */
+int platform_countdown_frame(Platform *, const Frame *, const Config *, char *, size_t);
 void platform_doctor(const Config *, char *, size_t);
 /* Only the authenticated panel transport may register its own native window. */
 int platform_panel_register(Platform *, uint64_t window, int peer_pid, char *, size_t);
@@ -154,10 +157,12 @@ int media_record_stop(Media *, char *, size_t);
 bool media_record_finalizing(Media *);
 void media_record_error(Media *, char *, size_t);
 int media_record_pause(Media *, bool, char *, size_t);
+int media_record_silence(Media *, bool, char *, size_t);
 int media_record_frame(Media *, const Frame *, char *, size_t);
 int media_reconfigure(Media *, const Config *, bool, char *, size_t);
 void media_barrier(Media *);
-void media_privacy(Media *, bool live_paused, bool live_frozen, bool record_paused);
+void media_record_barrier(Media *);
+int media_privacy(Media *, bool live_silent, bool record_silent, bool record_cut, char *, size_t);
 int media_audio_command(Media *, Config *, int, char **, char *, size_t);
 void media_status(Media *, bool *, bool *, uint64_t *, char *, size_t);
 uint64_t media_record_duration(Media *);
