@@ -64,6 +64,48 @@ Minimization/unmapping and destruction produce neutral output with actionable er
 Monitor availability and region bounds are checked on each acquisition. Interactive
 selection and capture do not change either output's privacy or recording state.
 
+## Stage and screen styling
+
+Stage gives the screen an inset frame, anchored opposite the camera. Screen size
+uses `[screen] width_percent`; the camera retains its normal canvas-width sizing
+and anchor. Both preserve their respective aspect ratios. Opposite placement puts
+smaller sources beside each other and larger sources overlap with camera in front.
+Corners move the screen toward the opposite corner; edge anchors move it across
+that axis while keeping it centered on the other. The screen stays independent of
+camera mirroring, and zoom/pointer/click positions use its actual screen transform.
+
+`screen.radius`, `screen.border_width` and `screen.border_color` style the screen
+layer in stage, overlay, split and screen layouts. Radius and border are output
+pixels. Zero defaults keep the existing square unbordered screen. Screen styling
+does not scale the camera, output labels or branding.
+
+Screen/stage backgrounds have blurred, gradient and solid modes. Blurred mode
+uses the current screen frame by default; `[background] source = camera` selects
+the camera. Processing is reduced to a bounded working size before enlargement,
+with configurable brightness, tint and blur, so the backdrop tracks fresh source
+frames. Camera-slot backgrounds continue to use the camera. Missing sources use
+an available neutral backdrop rather than keeping an old image.
+
+Gradient backgrounds share two endpoints and an optional third middle stop,
+with an angle and a percentage waypoint. Camera gradient backgrounds use the same
+configuration. The configurable background fills the uncovered area beneath the
+inset screen in stage.
+
+## Logo and static text
+
+Logo and static text draw as output composition layers, after the screen and
+camera. They support all four corners and middle edge anchors, independent
+horizontal and vertical edge distances, and opacity. Image sizing preserves
+aspect ratio and its own alpha; a transparent PNG is a suitable logo source.
+Only local image files are accepted. Static UTF-8 text uses Fontconfig/FreeType,
+with a runtime-selected font, output-pixel size and color. It stays literal;
+pause/blur date and time templates remain specific to those effects.
+
+Privacy effects operate on the complete composition: freeze holds branding,
+blur includes it, and solid pause replaces it. Editing presentation settings
+never resumes outputs or changes recording state. Session commands do not write
+configuration files.
+
 ## Zoom and cursor
 
 Zoom changes the screen layer only. The default easing is a 250 ms smoothstep

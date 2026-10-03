@@ -31,7 +31,7 @@ camera size +5%|\-5%|25% adjusts five percentage points or sets 25% of canvas wi
 Anchored resizing fixes that corner, free sizing fixes center, and valid positions
 are clamped within the canvas. Impossible sizes fail. camera move DX DY is relative;
 camera position X Y is absolute output pixels, and both switch to free positioning.
-camera anchor top\-left|top\-right|bottom\-left|bottom\-right|top|bottom|left|right|next
+camera anchor top\-left|top\-right|bottom\-left|bottom\-right|top|bottom|left|right|next|prev
 selects a corner or the middle of an edge. Edge resizing retains the margin and
 centering; next follows camera.corner_order, which may include edge anchors.
 camera shape rectangle|rounded|circle|next|prev cycles rectangle→rounded→circle.
@@ -166,13 +166,10 @@ config check/doctor and daemon startup still strictly validate the selected file
 $XDG_CONFIG_HOME/cast/cast.conf or $HOME/.config/cast/cast.conf
 .PP
 $XDG_RUNTIME_DIR/cast.sock
-.SH SEE ALSO
-sxhkd(1), ffmpeg(1), pw-cli(1)
-
 .SH SCREEN STYLE AND BRANDING
 Stage places an inset screen opposite the camera anchor; both preserve aspect
 ratio and overlap only as their chosen sizes require. screen size PERCENT changes
-stage width, screen radius PIXELS sets rounded corners, and screen border
+stage width, screen margin PIXELS sets its inset, screen radius PIXELS sets rounded corners, and screen border
 width PIXELS or screen border color #RRGGBB sets its border. Styling applies to
 all screen layers. screen background blurred|gradient|solid chooses the backdrop.
 .PP
@@ -190,3 +187,5 @@ freeze and blur include it. Composition commands never resume outputs.
 .PP
 Every next cycle also accepts prev, wrapping backwards through the same configured
 order. These commands change session settings; cast never writes user config.
+.SH SEE ALSO
+sxhkd(1), ffmpeg(1), pw-cli(1)

@@ -188,7 +188,7 @@ config check/doctor and daemon startup still strictly validate the selected file
 `layout stage` places an inset screen opposite the camera anchor. Both keep their
 aspect ratios; chosen sizes determine whether they sit alongside or overlap.
 `screen size +5%|-5%|78%` adjusts the stage's screen width in percentage points.
-`screen radius PIXELS` and `screen border width PIXELS|color #RRGGBB` style screen
+`screen margin PIXELS` sets the stage inset. `screen radius PIXELS` and `screen border width PIXELS|color #RRGGBB` style screen
 content in every layout. `screen background blurred|gradient|solid` selects its
 uncovered area's backdrop; all detailed settings also use `settings`:
 
@@ -201,11 +201,11 @@ cast settings background.gradient_angle 135 background.gradient_via_enabled true
 ```
 
 `logo on|off|toggle`, `logo path PATH`, `logo size PERCENT`, `logo anchor ANCHOR`,
-`logo margin X Y` and `logo opacity 0..1` place a local image with transparency.
+`logo margin X Y` and `logo opacity FRACTION|PERCENT%` place a local image with transparency.
 Size preserves its aspect ratio; opacity multiplies each pixel's alpha.
 `text on|off|toggle`, `text set TEXT`, `text font FONT`, `text size PIXELS`,
 `text color #RRGGBB`, `text anchor ANCHOR`, `text margin X Y` and
-`text opacity 0..1` place static UTF-8 text. Quote shell arguments containing spaces
+`text opacity FRACTION|PERCENT%` place static UTF-8 text. Quote shell arguments containing spaces
 or color values. Margins use output pixels; anchors include corners and edge
 centers (`top`, `bottom`, `left`, `right`). Text is literal, without placeholder
 expansion. These controls never resume outputs, and solid pause covers them.

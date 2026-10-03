@@ -65,3 +65,18 @@ the user; the application does not load modules or change system configuration.
 | Optional pause/blur footer and adjustable title/subtitle spacing | config.c, presentation_text.c | UTF-8/template/bounds, exact pixel gaps, bottom margin and small-canvas tests |
 | Config-only font changes apply after reload | config.c, commands.c, presentation_text.c | Real font replacement and transactional reload tests |
 | External countdown with panel attached | commands.c, x11.c | Private Xvfb initial/cut-resume/cancel and first-recorded-frame checks |
+
+## v0.6 stage and presentation layers
+
+| Requirement | Implementation | Verification |
+|---|---|---|
+| Previous direction for every existing cycle | commands.c, x11.c, completions | Configured-order wraparound and native monitor commands |
+| Stage layout with opposite anchors and size-derived overlap | compositor.c | Synthetic frame geometry and pixel assertions |
+| Screen borders and rounded corners | compositor.c, config.c, panel.c | Screen masks, edge pixels and transformed annotations |
+| Shared configurable two/three-color gradient | compositor.c, config.c | Endpoints, angle and via-waypoint output samples |
+| Transparent anchored logo, local path, size and edge distances | compositor.c, config.c, commands.c, panel.c | Alpha output pixels, source validation and config rollback |
+| Static UTF-8 text with selectable font | presentation_text.c, config.c, commands.c, panel.c | Glyph geometry, clipping, opacity and font changes |
+| Progressive panel controls and reverse cycles | panel.c | Routed commands and bounded native UI inspection |
+
+All composition changes preserve privacy/output and recording state, remain
+session-only, and use shared platform-independent rendering.
