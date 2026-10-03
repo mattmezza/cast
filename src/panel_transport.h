@@ -17,6 +17,7 @@ typedef struct {
     /* Generation changes for a new daemon or a replacement attachment. */
     uint64_t daemon_generation, frame_sequence, privacy_epoch;
     uint64_t duration_ns, countdown_remaining_ns, command_queued, command_completed;
+    char current_preset[64];
     char audio_status[4096], exclusion[256], error[CAST_ERR], last_reply[CAST_ERR];
 } PanelSnapshot;
 typedef struct PanelClient PanelClient;

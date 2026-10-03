@@ -320,6 +320,8 @@ int main(void)
     assert(!shared->snapshot.countdown && shared->snapshot.state.record_cut &&
            shared->pixels[1][0] == 0x20);
     CMD(&config, true, "record", "stop");
+    CMD(&config, true, "preset", "coding");
+    assert(!strcmp(shared->snapshot.current_preset, "coding"));
     CMD(&config, true, "settings", "camera.radius", "37", "camera.border_width", "5");
     assert(shared->snapshot.config.radius == 37 && shared->snapshot.config.border_width == 5);
     CMD(&config, false, "settings", "camera.radius", "90", "output.width", "640");

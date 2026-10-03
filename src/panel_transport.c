@@ -134,6 +134,7 @@ static void snapshot_fill(PanelSnapshot *s, App *a, PanelTransport *t)
     memset(s, 0, sizeof *s);
     s->config = a->config;
     s->state = a->state;
+    snprintf(s->current_preset, sizeof s->current_preset, "%s", a->current_preset);
     media_stream_status(a->media, &s->stream);
     s->capabilities = platform_capabilities(a->platform);
     s->connected = true;
