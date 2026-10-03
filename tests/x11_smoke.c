@@ -755,6 +755,16 @@ static void exercise(Display *d, Platform *p, Config *cfg)
     assert(pixel(&capture, 10, 10) == 0xaa4466); /* Newly mapped backing pixmap. */
     char *monitor[] = {"capture", "monitor"};
     command(p, cfg, 2, monitor);
+    char selected_monitor[sizeof cfg->monitor];
+    char *next[] = {"screen", "next"}, *previous[] = {"screen", "prev"};
+    command(p, cfg, 2, next);
+    snprintf(selected_monitor, sizeof selected_monitor, "%s", cfg->monitor);
+    command(p, cfg, 2, next);
+    command(p, cfg, 2, previous);
+    assert(!strcmp(cfg->monitor, selected_monitor));
+    command(p, cfg, 2, previous);
+    command(p, cfg, 2, next);
+    assert(!strcmp(cfg->monitor, selected_monitor));
     char *region[] = {"capture", "region", "80", "60", "200", "100"};
     command(p, cfg, 6, region);
     assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) == 0);

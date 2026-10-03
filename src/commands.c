@@ -69,24 +69,25 @@ static int toggle(bool *v, const char *s, char *e, size_t n)
     }
     return 0;
 }
-static void cycle(char *value, size_t n, const char *list)
+static void cycle(char *value, size_t n, const char *list, bool previous)
 {
     char buf[512];
     snprintf(buf, sizeof buf, "%s", list);
-    char *save = NULL, *first = strtok_r(buf, ",", &save), *p = first;
-    bool found = false;
-    while (p) {
-        if (found) {
-            snprintf(value, n, "%s", p);
-            return;
-        }
+    char *items[CAST_MAX_PRESETS], *save = NULL;
+    int count = 0, current = -1;
+    for (char *p = strtok_r(buf, ",", &save); p && count < CAST_MAX_PRESETS;
+         p = strtok_r(NULL, ",", &save)) {
+        items[count] = p;
         if (!strcmp(value, p)) {
-            found = true;
+            current = count;
         }
-        p = strtok_r(NULL, ",", &save);
+        count++;
     }
-    if (first) {
-        snprintf(value, n, "%s", first);
+    if (count) {
+        int next = current < 0 ? (previous ? count - 1 : 0)
+                   : previous  ? (current + count - 1) % count
+                               : (current + 1) % count;
+        snprintf(value, n, "%s", items[next]);
     }
 }
 
@@ -559,8 +560,8 @@ static int command_camera(App *a, Config *candidate, int ac, char **av, char *ou
         c.camera_y = y;
     } else if (IS(1, "anchor")) {
         ARITY(3);
-        if (IS(2, "next")) {
-            cycle(c.anchor, sizeof c.anchor, c.corner_order);
+        if (IS(2, "next") || IS(2, "prev")) {
+            cycle(c.anchor, sizeof c.anchor, c.corner_order, IS(2, "prev"));
         } else {
             ENUM(c.anchor, av[2],
                  "top-left,top-right,bottom-left,bottom-right,top,bottom,left,right,top-center,"
@@ -568,14 +569,18 @@ static int command_camera(App *a, Config *candidate, int ac, char **av, char *ou
         }
     } else if (IS(1, "shape")) {
         ARITY(3);
-        if (IS(2, "next")) {
-            cycle(c.shape, sizeof c.shape, "rectangle,rounded,circle");
+        if (IS(2, "next") || IS(2, "prev")) {
+            cycle(c.shape, sizeof c.shape, "rectangle,rounded,circle", IS(2, "prev"));
         } else {
             ENUM(c.shape, av[2], "rectangle,rounded,circle");
         }
     } else if (IS(1, "aspect")) {
         ARITY(3);
-        ENUM(c.aspect, av[2], "native,16:9,4:3,1:1");
+        if (IS(2, "next") || IS(2, "prev")) {
+            cycle(c.aspect, sizeof c.aspect, "native,16:9,4:3,1:1", IS(2, "prev"));
+        } else {
+            ENUM(c.aspect, av[2], "native,16:9,4:3,1:1");
+        }
     } else if (IS(1, "crop")) {
         ARITY(5);
         if (!IS(2, "move")) {
@@ -619,6 +624,94 @@ static int command_camera(App *a, Config *candidate, int ac, char **av, char *ou
     return 0;
 }
 
+static int set_size_percent(const char *value, double *size, char *out, size_t n)
+{
+    double percent;
+    if (number(value, -100, 100, &percent, true, out, n)) {
+        return -1;
+    }
+    if (*value == '+' || *value == '-') {
+        percent += *size;
+    }
+    if (percent < 1 || percent > 100) {
+        return app_error(out, n, "size must be 1..100 percentage points");
+    }
+    *size = percent;
+    return 0;
+}
+static int set_opacity(const char *value, double *opacity, char *out, size_t n)
+{
+    bool percent = strchr(value, '%') != NULL;
+    if (number(value, 0, percent ? 100 : 1, opacity, percent, out, n)) {
+        return -1;
+    }
+    if (percent) {
+        *opacity /= 100;
+    }
+    return 0;
+}
+static int command_screen_style(Config *candidate, int ac, char **av, char *out, size_t n)
+{
+    if (IS(1, "size")) {
+        ARITY(3);
+        return set_size_percent(av[2], &candidate->screen_width_percent, out, n);
+    }
+    const char *key;
+    int value;
+    if (IS(1, "border")) {
+        ARITY(4);
+        if (!IS(2, "width") && !IS(2, "color")) {
+            return app_error(out, n, "screen border width PIXELS|color #RRGGBB");
+        }
+        key = IS(2, "width") ? "screen.border_width" : "screen.border_color";
+        value = 3;
+    } else {
+        ARITY(3);
+        key = IS(1, "margin")   ? "screen.margin"
+              : IS(1, "radius") ? "screen.radius"
+                                : "screen.background";
+        value = 2;
+    }
+    return config_set_value(candidate, key, av[value], out, n);
+}
+static int command_layer(Config *candidate, bool text, int ac, char **av, char *out, size_t n)
+{
+    if (ac < 2) {
+        return app_error(out, n, "%s subcommand required", text ? "text" : "logo");
+    }
+    if (IS(1, "on") || IS(1, "off") || IS(1, "toggle")) {
+        ARITY(2);
+        return toggle(text ? &candidate->text_enabled : &candidate->logo_enabled, av[1], out, n);
+    }
+    if (IS(1, "size") && !text) {
+        ARITY(3);
+        return set_size_percent(av[2], &candidate->logo_width_percent, out, n);
+    }
+    if (IS(1, "opacity")) {
+        ARITY(3);
+        return set_opacity(av[2], text ? &candidate->text_opacity : &candidate->logo_opacity, out,
+                           n);
+    }
+    if (IS(1, "margin")) {
+        ARITY(4);
+        if (config_set_value(candidate, text ? "text.margin_x" : "logo.margin_x", av[2], out, n)) {
+            return -1;
+        }
+        return config_set_value(candidate, text ? "text.margin_y" : "logo.margin_y", av[3], out, n);
+    }
+    ARITY(3);
+    const char *key = IS(1, "anchor")          ? (text ? "text.anchor" : "logo.anchor")
+                      : text && IS(1, "set")   ? "text.content"
+                      : text && IS(1, "font")  ? "text.font"
+                      : text && IS(1, "size")  ? "text.size"
+                      : text && IS(1, "color") ? "text.color"
+                      : !text && IS(1, "path") ? "logo.path"
+                                               : NULL;
+    if (!key) {
+        return app_error(out, n, "unknown %s subcommand", text ? "text" : "logo");
+    }
+    return config_set_value(candidate, key, av[2], out, n);
+}
 static int command_zoom(App *a, Config *candidate, int ac, char **av, char *out, size_t n)
 {
     Config c = *candidate;
@@ -666,9 +759,9 @@ static int command_preset(App *a, Config *candidate, int ac, char **av, char *na
 
     ARITY(2);
     char name[64];
-    if (IS(1, "next")) {
+    if (IS(1, "next") || IS(1, "prev")) {
         snprintf(name, sizeof name, "%s", a->current_preset);
-        cycle(name, sizeof name, c.preset_order);
+        cycle(name, sizeof name, c.preset_order, IS(1, "prev"));
     } else if (app_copy_string(name, sizeof name, av[1], out, n)) {
         return -1;
     }
@@ -1007,6 +1100,42 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
         RESTORE(radius);
         RESTORE(border_width);
         RESTORE(border_color);
+        RESTORE_STR(camera_background);
+        RESTORE(camera_background_color);
+        RESTORE(camera_background_blur_radius);
+        RESTORE(camera_background_brightness);
+        RESTORE(screen_width_percent);
+        RESTORE(screen_margin);
+        RESTORE(screen_radius);
+        RESTORE(screen_border_width);
+        RESTORE(screen_border_color);
+        RESTORE_STR(screen_background);
+        RESTORE(screen_background_color);
+        RESTORE(screen_background_blur_radius);
+        RESTORE(screen_background_brightness);
+        RESTORE_STR(background_source);
+        RESTORE(gradient_from);
+        RESTORE(gradient_via);
+        RESTORE(gradient_to);
+        RESTORE(gradient_via_enabled);
+        RESTORE(gradient_angle);
+        RESTORE(gradient_waypoint);
+        RESTORE(logo_enabled);
+        RESTORE_STR(logo_path);
+        RESTORE_STR(logo_anchor);
+        RESTORE(logo_width_percent);
+        RESTORE(logo_margin_x);
+        RESTORE(logo_margin_y);
+        RESTORE(logo_opacity);
+        RESTORE(text_enabled);
+        RESTORE_STR(text_content);
+        RESTORE_STR(text_font);
+        RESTORE(text_size);
+        RESTORE(text_color);
+        RESTORE_STR(text_anchor);
+        RESTORE(text_margin_x);
+        RESTORE(text_margin_y);
+        RESTORE(text_opacity);
         RESTORE(camera_x);
         RESTORE(camera_y);
         RESTORE(crop_x);
@@ -1035,10 +1164,10 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
     }
     if (IS(0, "layout")) {
         ARITY(2);
-        if (IS(1, "next")) {
-            cycle(c.layout, sizeof c.layout, c.layout_order);
+        if (IS(1, "next") || IS(1, "prev")) {
+            cycle(c.layout, sizeof c.layout, c.layout_order, IS(1, "prev"));
         } else {
-            ENUM(c.layout, av[1], "overlay,split,screen,camera");
+            ENUM(c.layout, av[1], "overlay,stage,split,screen,camera");
         }
         change = true;
     } else if (IS(0, "split")) {
@@ -1055,6 +1184,16 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
         change = true;
     } else if (IS(0, "camera")) {
         if (command_camera(a, &c, ac, av, out, n)) {
+            return -1;
+        }
+        change = true;
+    } else if (IS(0, "logo") || IS(0, "text")) {
+        if (command_layer(&c, IS(0, "text"), ac, av, out, n)) {
+            return -1;
+        }
+        change = true;
+    } else if (IS(0, "screen") && ac >= 2 && oneof(av[1], "size,margin,radius,border,background")) {
+        if (command_screen_style(&c, ac, av, out, n)) {
             return -1;
         }
         change = true;
@@ -1169,7 +1308,7 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
         return app_error(out, n, "unknown command %s; cast --help", av[0]);
     }
     if (change) {
-        if (config_validate(&c, out, n)) {
+        if (config_validate(&c, out, n) || compositor_prepare(a->compositor, &c, out, n)) {
             return -1;
         }
         if (strcmp(c.camera_device, a->config.camera_device) ||

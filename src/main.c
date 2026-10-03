@@ -41,15 +41,22 @@ static const char help[] =
     "  --audio-codec NAME --countdown SECONDS --config PATH --socket PATH\n"
     "Test-only: --backend synthetic --camera-device synthetic --output-device none\n"
     "Commands (append --help for this reference):\n"
-    "  layout overlay|split|screen|camera|next\n"
+    "  layout overlay|stage|split|screen|camera|next|prev\n"
     "  split side left|right; split ratio PERCENT%\n"
     "  camera show|hide|toggle; camera size +5%|-5%|25%\n"
     "  camera move DX DY; camera position X Y\n"
-    "  camera anchor top-left|top-right|bottom-left|bottom-right|next\n"
-    "  camera shape rectangle|rounded|circle|next; camera aspect native|16:9|4:3|1:1\n"
+    "  camera anchor top-left|top-right|bottom-left|bottom-right|top|bottom|left|right|next|prev\n"
+    "  camera shape rectangle|rounded|circle|next|prev; camera aspect "
+    "native|16:9|4:3|1:1|next|prev\n"
     "  camera crop move DX DY; camera mirror on|off|toggle\n"
     "  camera list; camera device PATH\n"
-    "  screen list|next; screen select NAME\n"
+    "  screen list|next|prev; screen select NAME\n"
+    "  screen size PERCENT%; screen margin PX; screen radius PX\n"
+    "  screen border width PX|color #RRGGBB; screen background blurred|gradient|solid\n"
+    "  logo on|off|toggle; logo path PATH; logo size PERCENT%; logo anchor ANCHOR\n"
+    "  logo margin X Y; logo opacity FRACTION|PERCENT%\n"
+    "  text on|off|toggle; text set TEXT; text font FAMILY; text size PX\n"
+    "  text color #RRGGBB; text anchor ANCHOR; text margin X Y; text opacity FRACTION|PERCENT%\n"
     "  capture monitor; capture region select|X Y W H; capture window select|active\n"
     "  capture fit contain|cover\n"
     "  zoom toggle|in|out|reset; zoom set FACTOR; zoom follow on|off\n"
@@ -62,7 +69,7 @@ static const char help[] =
     "  record blur on|off|toggle; cut resume reuses the file with the configured countdown\n"
     "  audio list; audio mic|desktop|virtual on|off|toggle\n"
     "  audio mic|desktop source NAME; audio mic|desktop gain PERCENT%\n"
-    "  preset NAME|next; preview on|off|toggle; preview target live|record\n"
+    "  preset NAME|next|prev; preview on|off|toggle; preview target live|record\n"
     "  status [--json]; doctor; config check [PATH]; config defaults; config reload\n"
     "  settings SECTION.KEY VALUE [SECTION.KEY VALUE ...] (session only)\n"
     "  panel (optional native control panel)\n"
@@ -577,6 +584,9 @@ static int decode_packet(char *packet, ssize_t size, int *argc, char **argv, cha
             (*argc == 2 && (!strcmp(argv[0], "live") || !strcmp(argv[0], "record")) &&
              (!strcmp(argv[1], "message") || !strcmp(argv[1], "title") ||
               !strcmp(argv[1], "subtitle") || !strcmp(argv[1], "footer"))) ||
+            (*argc == 2 && !strcmp(argv[0], "text") &&
+             (!strcmp(argv[1], "set") || !strcmp(argv[1], "font"))) ||
+            (*argc == 2 && !strcmp(argv[0], "logo") && !strcmp(argv[1], "path")) ||
             (*argc >= 2 && !(*argc & 1) && !strcmp(argv[0], "settings"));
         if (!end || (end == packet + offset && !empty_value)) {
             return app_error(e, n, "empty or unterminated command argument");

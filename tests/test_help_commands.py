@@ -75,7 +75,7 @@ with tempfile.TemporaryDirectory(prefix="cast-help-test-") as directory:
                        cwd=root).stdout.splitlines()) - {""}
 
     run(["bash", "-n", str(PROJECT / "completions" / "cast.bash")])
-    assert {"setup", "update", "completions", "panel", "--config"} <= bash_complete("cast", "")
+    assert {"setup", "update", "completions", "panel", "logo", "text", "--config"} <= bash_complete("cast", "")
     assert bash_complete("cast", "--backend", "") == {"xorg", "wayland", "synthetic"}
     assert {"pause", "resume", "freeze", "unfreeze", "message", "title", "subtitle", "footer"} <= \
         bash_complete("cast", "--backend", "xorg", "live", "")
@@ -83,6 +83,19 @@ with tempfile.TemporaryDirectory(prefix="cast-help-test-") as directory:
     assert {"cut", "freeze", "unfreeze", "blur", "title", "subtitle", "footer"} <= bash_complete("cast", "record", "")
     assert bash_complete("cast", "live", "blur", "") == {"on", "off", "toggle"}
     assert bash_complete("cast", "record", "blur", "") == {"on", "off", "toggle"}
+    assert bash_complete("cast", "layout", "") == {"overlay", "stage", "split", "screen", "camera", "next", "prev"}
+    for route in (("camera", "anchor"), ("camera", "shape"), ("camera", "aspect"), ("preset",)):
+        assert {"next", "prev"} <= bash_complete("cast", *route, "")
+    assert {"next", "prev", "size", "border", "background"} <= bash_complete("cast", "screen", "")
+    assert bash_complete("cast", "screen", "border", "") == {"width", "color"}
+    assert bash_complete("cast", "screen", "background", "") == {"blurred", "gradient", "solid"}
+    assert {"on", "off", "toggle", "path", "size", "anchor", "margin", "opacity"} == bash_complete("cast", "logo", "")
+    assert {"on", "off", "toggle", "set", "font", "size", "color", "anchor", "margin", "opacity"} == bash_complete("cast", "text", "")
+    assert "free" not in bash_complete("cast", "logo", "anchor", "")
+    assert {"top", "bottom", "left", "right"} <= bash_complete("cast", "text", "anchor", "")
+    assert bash_complete("cast", "settings", "background.source", "") == {"screen", "camera"}
+    assert bash_complete("cast", "settings", "screen.background", "") == {"blurred", "gradient", "solid"}
+    assert bash_complete("cast", "settings", "text.enabled", "") == {"true", "false"}
     assert bash_complete("cast", "camera", "mirror", "") == {"on", "off", "toggle"}
     assert bash_complete("cast", "camera", "aspect", "4", ":", "") == {"3"}
     assert bash_complete("cast", "annotations", "record", "keys", "") == {"on", "off"}
@@ -90,7 +103,7 @@ with tempfile.TemporaryDirectory(prefix="cast-help-test-") as directory:
     assert bash_complete("cast", "audio", "virtual", "") == {"on", "off", "toggle"}
     assert bash_complete("cast", "completions", "--script", "") == set(SCRIPTS)
     keys = bash_complete("cast", "settings", "")
-    assert {"output.pause_title", "output.pause_subtitle", "output.blur_radius", "camera.border_color", "record.queue"} <= keys
+    assert {"output.pause_title", "output.pause_subtitle", "output.blur_radius", "camera.border_color", "record.queue", "screen.width_percent", "background.gradient_waypoint", "logo.path", "text.font"} <= keys
     assert not any(key.startswith("preset.") for key in keys)
     assert bash_complete("cast", "settings", "camera.mirror", "") == {"true", "false"}
     assert bash_complete("cast", "--width", "") == set()
@@ -98,6 +111,7 @@ with tempfile.TemporaryDirectory(prefix="cast-help-test-") as directory:
     spaced = root / "config with space.conf"
     spaced.write_text("# completion file fixture\n")
     assert str(spaced) in bash_complete("cast", "--config", str(root / "config"))
+    assert str(spaced) in bash_complete("cast", "logo", "path", str(root / "config"))
     downloads = root / "downloads"
     downloads.mkdir()
     assert str(downloads) in bash_complete("cast", "update", "--download-only", str(root / "down"))
@@ -116,7 +130,12 @@ with tempfile.TemporaryDirectory(prefix="cast-help-test-") as directory:
         assert {"setup", "update", "completions"} <= zsh_complete("cast", "")
         assert zsh_complete("cast", "--socket", "/tmp/local.sock", "capture", "fit", "") == \
             {"contain", "cover"}
-        assert zsh_complete("cast", "camera", "aspect", "") == {"native", "16:9", "4:3", "1:1"}
+        assert zsh_complete("cast", "camera", "aspect", "") == {"native", "16:9", "4:3", "1:1", "next", "prev"}
+        assert {"stage", "prev"} <= zsh_complete("cast", "layout", "")
+        assert {"prev", "size", "border"} <= zsh_complete("cast", "screen", "")
+        assert {"path", "anchor", "opacity"} <= zsh_complete("cast", "logo", "")
+        assert {"set", "font", "color"} <= zsh_complete("cast", "text", "")
+        assert zsh_complete("cast", "settings", "background.source", "") == {"screen", "camera"}
         assert zsh_complete("cast", "completions", "--script", "") == set(SCRIPTS)
         init = 'fpath=(' + shlex.quote(str(PROJECT / "completions")) + ' $fpath)\n'
         init += 'autoload -Uz compinit\ncompinit -D -d ' + shlex.quote(str(root / "zcompdump"))
@@ -126,10 +145,18 @@ with tempfile.TemporaryDirectory(prefix="cast-help-test-") as directory:
     if shutil.which("fish"):
         script = PROJECT / "completions" / "cast.fish"
         run(["fish", "--no-execute", str(script)])
-        program = 'source ' + shlex.quote(str(script)) + "; complete -C 'cast camera mirror '"
-        candidates = run(["fish", "--no-config", "-c", program], env=env,
-                         cwd=root).stdout.splitlines()
-        assert {"on", "off", "toggle"} <= {line.split("\t")[0] for line in candidates}
+        def fish_complete(route):
+            program = 'source ' + shlex.quote(str(script)) + "; complete -C " + shlex.quote(route)
+            candidates = run(["fish", "--no-config", "-c", program], env=env,
+                             cwd=root).stdout.splitlines()
+            return {line.split("\t")[0] for line in candidates}
+
+        assert {"on", "off", "toggle"} <= fish_complete("cast camera mirror ")
+        assert {"stage", "prev"} <= fish_complete("cast layout ")
+        assert {"prev", "size", "border"} <= fish_complete("cast screen ")
+        assert {"path", "anchor", "opacity"} <= fish_complete("cast logo ")
+        assert {"set", "font", "color"} <= fish_complete("cast text ")
+        assert {"screen", "camera"} <= fish_complete("cast settings background.source ")
     else:
         print("fish unavailable: syntax and runtime checks skipped")
 

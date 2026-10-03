@@ -1172,7 +1172,7 @@ int x11_command(Platform *platform, Config *cfg, int argc, char **argv, char *e,
         const char *name = NULL;
         if (argc == 3 && !strcmp(argv[1], "select")) {
             name = argv[2];
-        } else if (argc == 2 && !strcmp(argv[1], "next")) {
+        } else if (argc == 2 && (!strcmp(argv[1], "next") || !strcmp(argv[1], "prev"))) {
             if (!count) {
                 return fail(e, n, "no monitors available");
             }
@@ -1182,9 +1182,12 @@ int x11_command(Platform *platform, Config *cfg, int argc, char **argv, char *e,
                     index = i;
                 }
             }
-            name = list[(index + 1) % count].name;
+            int target = !strcmp(argv[1], "prev")
+                             ? (index < 0 ? count - 1 : (index + count - 1) % count)
+                             : (index + 1) % count;
+            name = list[target].name;
         } else {
-            return fail(e, n, "usage: cast screen list|next; cast screen select MONITOR");
+            return fail(e, n, "usage: cast screen list|next|prev; cast screen select MONITOR");
         }
         Monitor m;
         if (find_monitor(p, name, &m) < 0) {

@@ -201,6 +201,191 @@ static void presentation_controls(App *app, const char *configuration)
     write_config(configuration, "[camera]\nwidth_percent=25\n");
     COMMAND(app, true, "config", "reload");
 }
+static void composition_controls(App *app, const char *configuration, const char *directory)
+{
+    char error[CAST_ERR], logo_path[PATH_MAX], bad_path[PATH_MAX];
+    snprintf(logo_path, sizeof logo_path, "%s/logo.png", directory);
+    snprintf(bad_path, sizeof bad_path, "%s/broken.png", directory);
+    static const unsigned char png[] = {
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x08, 0x08, 0x06, 0x00, 0x00, 0x00, 0xc4,
+        0x0f, 0xbe, 0x8b, 0x00, 0x00, 0x00, 0x12, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8,
+        0xcf, 0xc0, 0xd0, 0x80, 0x0f, 0x33, 0x8c, 0x0c, 0x05, 0x00, 0x92, 0x87, 0x5f, 0xc1, 0x49,
+        0x57, 0x44, 0x2d, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82};
+    FILE *image = fopen(logo_path, "wb");
+    assert(image && fwrite(png, 1, sizeof png, image) == sizeof png && fclose(image) == 0);
+    write_config(bad_path, "\x89PNG\r\n\x1a\ntruncated");
+    State initial = app->state;
+    write_config(configuration, "[camera]\nwidth_percent=25\ncorner_order=bottom,left,top\n"
+                                "[composition]\nlayout_order=screen,stage,camera\n"
+                                "preset_order=conversation,coding,demo\n");
+    COMMAND(app, true, "config", "reload");
+    COMMAND(app, true, "layout", "prev"); /* Missing current value wraps from the end. */
+    assert(!strcmp(app->config.layout, "camera"));
+    COMMAND(app, true, "layout", "next");
+    assert(!strcmp(app->config.layout, "screen"));
+    COMMAND(app, true, "layout", "prev");
+    assert(!strcmp(app->config.layout, "camera"));
+    COMMAND(app, true, "layout", "stage");
+    COMMAND(app, true, "layout", "next");
+    assert(!strcmp(app->config.layout, "camera"));
+    COMMAND(app, true, "layout", "prev");
+    assert(!strcmp(app->config.layout, "stage"));
+    COMMAND(app, true, "camera", "anchor", "prev");
+    assert(!strcmp(app->config.anchor, "top"));
+    COMMAND(app, true, "camera", "anchor", "next");
+    assert(!strcmp(app->config.anchor, "bottom"));
+    COMMAND(app, true, "camera", "anchor", "next");
+    assert(!strcmp(app->config.anchor, "left"));
+    COMMAND(app, true, "camera", "anchor", "prev");
+    assert(!strcmp(app->config.anchor, "bottom"));
+    COMMAND(app, true, "camera", "shape", "rectangle");
+    COMMAND(app, true, "camera", "shape", "prev");
+    assert(!strcmp(app->config.shape, "circle"));
+    COMMAND(app, true, "camera", "shape", "next");
+    assert(!strcmp(app->config.shape, "rectangle"));
+    COMMAND(app, true, "camera", "aspect", "native");
+    COMMAND(app, true, "camera", "aspect", "prev");
+    assert(!strcmp(app->config.aspect, "1:1"));
+    COMMAND(app, true, "camera", "aspect", "next");
+    assert(!strcmp(app->config.aspect, "native"));
+    COMMAND(app, true, "preset", "prev");
+    assert(!strcmp(app->current_preset, "demo"));
+    COMMAND(app, true, "preset", "next");
+    assert(!strcmp(app->current_preset, "conversation"));
+    COMMAND(app, true, "preset", "prev");
+    assert(!strcmp(app->current_preset, "demo"));
+    COMMAND(app, true, "preset", "prev");
+    assert(!strcmp(app->current_preset, "coding"));
+    COMMAND(app, true, "screen", "size", "83%");
+    COMMAND(app, true, "screen", "size", "-5%");
+    assert(app->config.screen_width_percent == 78);
+    COMMAND(app, true, "screen", "margin", "20");
+    COMMAND(app, true, "screen", "radius", "18");
+    COMMAND(app, true, "screen", "border", "width", "3");
+    COMMAND(app, true, "screen", "border", "color", "#abcdef");
+    COMMAND(app, true, "screen", "background", "gradient");
+    assert(app->config.screen_margin == 20 && app->config.screen_radius == 18 &&
+           app->config.screen_border_width == 3 && app->config.screen_border_color == 0xabcdef &&
+           !strcmp(app->config.screen_background, "gradient"));
+    COMMAND(app, true, "settings", "background.source", "camera", "background.gradient_from",
+            "#123456", "background.gradient_via", "#654321", "background.gradient_to", "#abcdef",
+            "background.gradient_via_enabled", "false", "background.gradient_angle", "270");
+    COMMAND(app, true, "settings", "background.gradient_waypoint", "25", "screen.background_color",
+            "#332211", "screen.background_blur_radius", "4", "screen.background_brightness", "0.4");
+    COMMAND(app, true, "logo", "path", logo_path);
+    assert(!app->config.logo_enabled && !strcmp(app->config.logo_path, logo_path));
+    COMMAND(app, true, "logo", "on");
+    COMMAND(app, true, "logo", "size", "20%");
+    COMMAND(app, true, "logo", "size", "+5%");
+    COMMAND(app, true, "logo", "anchor", "top");
+    COMMAND(app, true, "logo", "margin", "30", "40");
+    COMMAND(app, true, "logo", "opacity", "40%");
+    assert(app->config.logo_enabled && app->config.logo_width_percent == 25 &&
+           !strcmp(app->config.logo_anchor, "top") && app->config.logo_margin_x == 30 &&
+           app->config.logo_margin_y == 40 && app->config.logo_opacity == .4);
+    COMMAND(app, true, "text", "set", "Static café {literal}\nSecond line");
+    assert(!app->config.text_enabled);
+    COMMAND(app, true, "text", "on");
+    COMMAND(app, true, "text", "size", "32");
+    COMMAND(app, true, "text", "color", "#fedcba");
+    COMMAND(app, true, "text", "anchor", "right");
+    COMMAND(app, true, "text", "margin", "10", "12");
+    COMMAND(app, true, "text", "opacity", "0.6");
+    assert(app->config.text_enabled && app->config.text_size == 32 &&
+           app->config.text_color == 0xfedcba && !strcmp(app->config.text_anchor, "right") &&
+           app->config.text_margin_x == 10 && app->config.text_margin_y == 12 &&
+           app->config.text_opacity == .6);
+    COMMAND(app, true, "text", "font", "monospace");
+    Frame mono = {0}, serif = {0};
+    assert(compositor_render(app->compositor, &app->config, &app->screen, NULL, NULL, true, &mono,
+                             error, sizeof error) == 0);
+    COMMAND(app, true, "text", "font", "serif");
+    assert(!strcmp(app->config.text_font, "serif"));
+    assert(compositor_render(app->compositor, &app->config, &app->screen, NULL, NULL, true, &serif,
+                             error, sizeof error) == 0);
+    assert(!same_pixels(&mono, &serif));
+    Config before = app->config, defaults_before = app->defaults;
+    COMMAND(app, false, "logo", "path", "/tmp/cast-no-such-logo-file-42.png");
+    assert(strstr(response, "logo"));
+    COMMAND(app, false, "logo", "path", bad_path);
+    assert(strstr(response, "decode"));
+    COMMAND(app, false, "text", "font", ":file=/tmp/cast-no-such-font-file-42.ttf");
+    assert(strstr(response, "font"));
+    COMMAND(app, false, "text", "font", "");
+    COMMAND(app, false, "text", "set", "bad \xff");
+    COMMAND(app, false, "text", "set", "control\x01");
+    COMMAND(app, false, "text", "set", "value", "extra");
+    COMMAND(app, false, "text", "margin", "20", "-1");
+    COMMAND(app, false, "logo", "anchor", "free");
+    COMMAND(app, false, "logo", "size", "101%");
+    COMMAND(app, false, "logo", "opacity", "101%");
+    COMMAND(app, false, "text", "opacity", "nan");
+    COMMAND(app, false, "screen", "size", "10");
+    COMMAND(app, false, "screen", "border", "color", "red");
+    COMMAND(app, false, "screen", "margin", "4097");
+    COMMAND(app, false, "layout", "previous");
+    COMMAND(app, false, "camera", "shape", "prev", "extra");
+    assert(!memcmp(&before, &app->config, sizeof before));
+    assert(compositor_render(app->compositor, &app->config, &app->screen, NULL, NULL, true, &mono,
+                             error, sizeof error) == 0);
+    assert(same_pixels(&mono, &serif)); /* Failed font/image changes retain prepared resources. */
+    write_config(configuration, "[text]\nfont=:file=/tmp/cast-no-such-font-file-42.ttf\n");
+    COMMAND(app, false, "config", "reload");
+    assert(!memcmp(&before, &app->config, sizeof before));
+    assert(!memcmp(&defaults_before, &app->defaults, sizeof defaults_before));
+    write_config(configuration, "[logo]\npath=/tmp/cast-no-such-logo-file-42.png\n");
+    COMMAND(app, false, "config", "reload");
+    assert(!memcmp(&before, &app->config, sizeof before));
+    assert(!memcmp(&defaults_before, &app->defaults, sizeof defaults_before));
+    char empty[] = "CAST1\0text\0set\0\0";
+    char injected[] = "CAST1\0text\0set\0first\0second\0";
+    char *argv[CAST_MAX_ARGS];
+    int argc;
+    assert(decode_packet(empty, sizeof empty - 1, &argc, argv, error, sizeof error) == 0);
+    assert(app_command(app, argc, argv, response, sizeof response) == 0);
+    assert(!app->config.text_content[0] && app->config.text_enabled);
+    assert(decode_packet(injected, sizeof injected - 1, &argc, argv, error, sizeof error) == 0);
+    assert(app_command(app, argc, argv, response, sizeof response) < 0);
+    COMMAND(app, true, "logo", "toggle");
+    assert(!app->config.logo_enabled);
+    char clear_logo[] = "CAST1\0logo\0path\0\0";
+    assert(decode_packet(clear_logo, sizeof clear_logo - 1, &argc, argv, error, sizeof error) == 0);
+    assert(app_command(app, argc, argv, response, sizeof response) == 0);
+    assert(!app->config.logo_path[0]);
+    COMMAND(app, false, "logo", "on");
+    COMMAND(app, true, "reset");
+    assert(
+        !app->config.logo_enabled && !app->config.text_enabled && !app->config.logo_path[0] &&
+        !app->config.text_content[0] && !strcmp(app->config.text_font, app->defaults.text_font) &&
+        !strcmp(app->config.background_source, app->defaults.background_source) &&
+        app->config.gradient_from == app->defaults.gradient_from &&
+        app->config.gradient_via == app->defaults.gradient_via &&
+        app->config.gradient_to == app->defaults.gradient_to &&
+        app->config.gradient_via_enabled == app->defaults.gradient_via_enabled &&
+        app->config.gradient_angle == app->defaults.gradient_angle &&
+        app->config.gradient_waypoint == app->defaults.gradient_waypoint &&
+        app->config.screen_margin == app->defaults.screen_margin &&
+        app->config.screen_radius == app->defaults.screen_radius &&
+        app->config.screen_border_width == app->defaults.screen_border_width &&
+        app->config.screen_border_color == app->defaults.screen_border_color &&
+        !strcmp(app->config.screen_background, app->defaults.screen_background) &&
+        app->config.screen_background_blur_radius == app->defaults.screen_background_blur_radius &&
+        app->config.screen_background_brightness == app->defaults.screen_background_brightness &&
+        app->config.logo_width_percent == app->defaults.logo_width_percent &&
+        app->config.logo_opacity == app->defaults.logo_opacity &&
+        app->config.text_size == app->defaults.text_size &&
+        app->config.text_color == app->defaults.text_color &&
+        app->config.text_opacity == app->defaults.text_opacity);
+    assert(!memcmp(&initial, &app->state, sizeof initial));
+    frame_free(&mono);
+    frame_free(&serif);
+    unlink(logo_path);
+    unlink(bad_path);
+    write_config(configuration, "[camera]\nwidth_percent=25\n");
+    COMMAND(app, true, "config", "reload");
+}
+
 static void output_modes(App *app)
 {
     char error[CAST_ERR];
@@ -298,6 +483,7 @@ int main(void)
     write_config(configuration, "[camera]\nwidth_percent=25\n");
     App *app = new_app(configuration, socket_pathname);
     presentation_controls(app, configuration);
+    composition_controls(app, configuration, directory);
     COMMAND(app, true, "status", "--json");
     assert(strstr(response, "\"state\":\"paused\""));
     State message_state = app->state;
