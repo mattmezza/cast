@@ -308,12 +308,19 @@ unbordered screen content. The screen's camera-independent zoom remains availabl
 uses a scaled-up, subdued current frame chosen by `background.source`; camera
 backgrounds keep their existing camera source. Both gradient modes share the
 `background.gradient_*` controls. Disable the via stop for a two-color gradient;
-otherwise `gradient_waypoint` places it between the start and end colors. Colors
+otherwise `gradient_waypoint` places it between the start and end colors. Angle
+0 runs left to right, 90 top to bottom, 180 right to left and 270 bottom to top;
+intermediate values make diagonals. Colors
 are literal `#RRGGBB`, without quotes in the INI file.
 
 Logo and static text are composition overlays, so solid pause replaces them and
 freeze/blur include them. They never change output state. Logos preserve image
-alpha and aspect ratio. Use a local image path, not a URL; file paths are resolved
+alpha and aspect ratio. Supported logo files are PNG, JPEG, WebP and BMP, up to 8 MiB, 4096 pixels
+per edge and 4,194,304 total pixels. Files are decoded locally; animated logo
+playback is not supported. Use a local image path, not a URL; file paths are resolved
 by the daemon and do not expand `~` or environment variables. Static text is
 literal (its braces are not pause/blur placeholders). Unlike pause/blur fonts,
-`text.font` is runtime editable. Runtime updates remain session-only.
+`text.font` is runtime editable. Use an installed family such as `Noto Serif`, or
+a Fontconfig pattern such as `:file=/absolute/path/font.ttf`. Fontconfig may choose
+a fallback for an unavailable family; an explicit unreadable font file is rejected.
+Runtime updates remain session-only.

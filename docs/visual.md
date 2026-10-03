@@ -97,7 +97,8 @@ Logo and static text draw as output composition layers, after the screen and
 camera. They support all four corners and middle edge anchors, independent
 horizontal and vertical edge distances, and opacity. Image sizing preserves
 aspect ratio and its own alpha; a transparent PNG is a suitable logo source.
-Only local image files are accepted. Static UTF-8 text uses Fontconfig/FreeType,
+Local PNG, JPEG, WebP and BMP files are supported, bounded to 8 MiB,
+4096 pixels per edge and 4,194,304 total pixels. Static UTF-8 text uses Fontconfig/FreeType,
 with a runtime-selected font, output-pixel size and color. It stays literal;
 pause/blur date and time templates remain specific to those effects.
 
@@ -247,7 +248,9 @@ Xorg-only smoke test directly:
 cc -Isrc -D_GNU_SOURCE -DWITH_X11 -O2 -g -Wall -Wextra \
   -Wformat=2 -Wstrict-prototypes -Wmissing-prototypes -std=gnu11 \
   tests/x11_smoke.c src/x11.c src/platform.c src/compositor.c \
-  $(pkg-config --cflags --libs x11 xext xrandr xi xfixes xcomposite xtst) \
+  src/composition_assets.c src/presentation_text.c \
+  $(pkg-config --cflags --libs x11 xext xrandr xi xfixes xcomposite xtst \
+    fontconfig freetype2 libavcodec libavutil libswscale) \
   -lm -lpthread -o /tmp/cast-x11-smoke
 xvfb-run -a -s '-screen 0 1024x768x24' /tmp/cast-x11-smoke --exercise
 ```

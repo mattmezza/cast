@@ -44,6 +44,12 @@ configuration is never persisted automatically.
 
 Fontconfig resolves the configured system fonts and FreeType renders optional UTF-8
 titles/subtitles/footers. Font changes are file-only and prepared before applying reload.
+The separate static composition text permits runtime font selection and caches its
+transparent glyph frame until content/font/style changes. Local PNG/JPEG/WebP/BMP
+logos are decoded through libavcodec into bounded RGBA frames in composition_assets;
+no image protocols, shell or per-frame file reads are used. Candidate image/font
+resources are prepared before configuration changes are committed.
+
 Text templates expand bounded date/time placeholders against one local wall-clock
 snapshot, while recording/cut timing remains monotonic. Blur uses bounded reduced
 images and separable passes so the radius does not multiply full-frame work.
@@ -64,3 +70,8 @@ and daemon availability. Completion scripts and the Arch installer are embedded 
 relocated binaries retain those tools. The updater launches the fixed embedded
 installer with validated argv through fork/exec; user arguments are never interpolated
 into shell code. It verifies the selected GitHub package checksum before pacman.
+
+Stage geometry places the screen opposite the camera anchor and allows overlap
+based on their aspect-preserving sizes. Shared gradient stops and reduced blurred
+backdrops fill uncovered regions. Screen masks also clip its pointer/click layers;
+logo and text alpha-blend above source layers before lane pause/freeze/blur selection.

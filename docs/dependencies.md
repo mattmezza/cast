@@ -10,9 +10,9 @@ licenses of the dynamically linked libraries below.
 | Dependency | Purpose | License/source |
 |---|---|---|
 | inih r60 | INI parsing with source-line callbacks | BSD-3-Clause, bundled LICENSE.txt |
-| FFmpeg libavcodec/libavformat/libavutil/libswscale/libswresample | MJPEG decode, conversion, software encoding, audio resampling and muxing | LGPL-2.1-or-later baseline; GPL build options can change the effective license |
+| FFmpeg libavcodec/libavformat/libavutil/libswscale/libswresample | MJPEG/local logo decode, conversion, software encoding, audio resampling and muxing | LGPL-2.1-or-later baseline; GPL build options can change the effective license |
 | Fontconfig | Resolve configured system font patterns and fallback glyphs | Distribution COPYING (MIT/permissive notices), installed with cast |
-| FreeType | Rasterize pause/blur titles and subtitles | FreeType License (FTL), BSD-style credit clause, compatible with GPLv3 |
+| FreeType | Rasterize pause/blur text and cached static overlays | FreeType License (FTL), BSD-style credit clause, compatible with GPLv3 |
 | PipeWire | Audio capture/mix source and optional portal video | MIT for library core; distribution package carries notices for its other components |
 | Xlib, Xext, RandR, Xi, Xfixes, XComposite | Optional Xorg capture/input/presentation | MIT/X11 family licenses from the distribution packages |
 | GLib/GIO/GObject | Optional Wayland async D-Bus portal and FD passing | LGPL-2.1-or-later |

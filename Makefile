@@ -50,7 +50,7 @@ LDLIBS += $(PANEL_LIBS)
 BUILD = build/x$(X11)-w$(WAYLAND)-p1
 OBJECTS += $(BUILD)/src/panel_font.o
 endif
-CORE_SOURCES = src/presentation_text.c src/config.c src/state.c vendor/inih/ini.c
+CORE_SOURCES = src/compositor.c src/composition_assets.c src/presentation_text.c src/config.c src/state.c vendor/inih/ini.c
 MEDIA_SOURCES = src/media.c src/webcam.c src/audio.c src/record.c src/compositor.c src/composition_assets.c src/presentation_text.c
 
 all: cast
@@ -94,7 +94,7 @@ check-unit: check-panel-routes
 check-panel-routes: $(BUILD)/test_panel_routes
 	$(BUILD)/test_panel_routes
 endif
-$(BUILD)/benchmark: tests/benchmark.c src/compositor.c src/composition_assets.c $(CORE_SOURCES) src/cast.h
+$(BUILD)/benchmark: tests/benchmark.c $(CORE_SOURCES) src/cast.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ $(filter %.c,$^) $(PKG_LIBS) $(LDLIBS)
 benchmark: $(BUILD)/benchmark
