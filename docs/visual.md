@@ -18,7 +18,7 @@ coordinates, so cast does not apply a second rotation to Xorg pixels.
 At the platform boundary, cursor and click coordinates become source-local pixels
 by subtracting the source's desktop origin. Composition crops a zoom viewport from
 that source, then fits it to the screen's output rectangle. `contain` preserves all
-viewport content with neutral-colored letterboxes; `cover` centers a crop that fills
+viewport content with background-filled letterboxes; `cover` centers a crop that fills
 the rectangle. A source point `(x,y)` maps to
 `(dx + (x-sx)*dw/sw, dy + (y-sy)*dh/sh)` for the final source/output rectangles.
 Cursor highlighting and click centers use that same transform; points outside the

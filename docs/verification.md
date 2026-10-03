@@ -317,3 +317,51 @@ initial start, cancellation and same-file cut-resume leave CastPanel open, fully
 hide CastPreview before media admission, and decode first-frame pixels to reject
 the cinematic guide. These are synthetic/private-display checks, not a claim of
 remote-conference or physical-camera coverage.
+
+## v0.6 stage and presentation layers
+
+The combined X11/Wayland/panel build passed `-Werror` with `make check check-xorg`.
+This includes core configuration, output privacy, media, production commands,
+sealed panel transport, mock portal, socket IPC, actual decoded output, helper
+commands, installer checks and Xorg SHM/fallback/native countdown tests. The
+Wayland-only panel build also passed its complete `make check` suite; source and
+ELF checks confirm no Xorg source or direct Xorg/XCB dependency in that build.
+
+New visual pixel tests cover all eight stage anchors and free placement,
+size-derived overlap, preserved aspect and zoom, shared gradient endpoints,
+angle and via waypoint, background cache refresh/replacement, rounded screen
+masks, clipped cursor/clicks, transparent logos, text anchors and font changes.
+The optimized mask spans are compared against the scalar rounded-mask formula
+on odd canvases and fractional contain rectangles. Prepared image/font failures
+retain previous resources. Core and visual ASan/UBSan checks pass with leak
+scanning; controller ASan/UBSan passes with leak scanning disabled because this
+host's PipeWire module loader retains 3,525 bytes in 34 allocations during test
+initialization, outside the new composition resources.
+
+`test_presentation_layers.py` starts a private synthetic daemon and decodes its
+actual FFV1 Matroska file: stage gradient, transparent PNG and literal static
+text survive encoding; invalid image replacements retain the old logo; solid
+pause covers all source/branding pixels; session commands leave config untouched.
+No real desktop, webcam, loopback device or conference is used by these checks.
+
+The native panel passed the focused forms at 480/360 logical widths and 1×/2×
+scales in private Xvfb/mwm sessions. Actual acknowledgements validate reverse
+configured cycles, stage sizing, screen appearance, shared gradients, image path,
+alpha controls and text/font changes. Utility centering, independent floating
+preview and legacy privacy/countdown behavior remain verified. One batched visual
+inspection and one copy-only confirmation completed; the mechanical detector
+reported no findings. Home's screenshot remains unchanged.
+
+At synthetic RGBA 1920×1080, radius 24 and border 2, the optimized stage measured:
+
+| Background | Median without overlays | Median with cached logo/text | p95 with overlays |
+|---|---:|---:|---:|
+| Solid | 7.29 ms | 7.44 ms | 8.09 ms |
+| Cached gradient | 8.39 ms | 8.54 ms | 9.39 ms |
+| Fresh blurred frame | 13.20 ms | 13.38 ms | 14.18 ms |
+
+The earlier scalar per-pixel rounded mask measured 25.30 ms with fresh blur and
+branding. Scanline spans remove that full-frame mask overhead without changing
+pixels. The logo is decoded/scaled and static text rasterized during preparation;
+steady-state compositing reuses them. These measurements exclude capture, codec,
+audio, preview and device I/O and do not establish end-to-end hardware latency or FPS.
