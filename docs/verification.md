@@ -51,13 +51,13 @@ checks plus Wayland CPU tests. Address/undefined sanitizers passed those indepen
 checks with `ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1`; leak detection
 cannot run under this environment's ptrace restrictions and is not claimed.
 
-The media suite decodes real libx264/AAC Matroska files. Live+record and record-only
+The media suite decodes real libx264/AAC Matroska files. Virtual camera+record and record-only
 active timelines were approximately 1.06 seconds after repeated interruptions, with
 AAC ends within about 20 ms; longest video intervals were 34–67 ms under test load.
 Queue privacy contained zero queued green test frames and no sensitive test tone;
-injected slow encoder work dropped bounded frames while status/live/stop/privacy
+injected slow encoder work dropped bounded frames while status/virtual/stop/privacy
 operations completed in under 1 ms. Injected ENOSPC preserved partial files and kept
-live operational; subsequent recordings decoded successfully. These tests use
+virtual operational; subsequent recordings decoded successfully. These tests use
 synthetic audio/frames and the explicit `none` test output, not a kernel consumer.
 
 ## Composition microbenchmark
@@ -72,7 +72,7 @@ a 640x480 synthetic camera, and 90 iterations per case.
 | One composition | 6.70 ms | 7.33 ms | 147.34/s | 19,792 KiB | 20.1% of one CPU |
 | Two compositions, differing annotation paths | 13.53 ms | 18.88 ms | 68.77/s | 27,984 KiB | 43.2% of one CPU |
 
-Equal effective annotations reuse one composed frame for live+record. The CPU budget
+Equal effective annotations reuse one composed frame for virtual+record. The CPU budget
 is an extrapolation from measured render CPU time; it is not a full-pipeline CPU
 measurement. No glass-to-glass latency, sustained device FPS, consumer drops or actual
 hardware conferencing performance is asserted. The hardware acceptance checklist
@@ -119,7 +119,7 @@ encoders and PipeWire sources. Baseline: Intel Core Ultra 5 235U, Arch Linux
 - A separate physical Xorg/webcam/PipeWire run opened the MJPEG camera, selected
   the named microphone and created a temporary virtual source. A pw-cat consumer
   received 24,000 stereo float frames for each privacy check; sample peaks were
-  exactly zero during startup pause, live freeze and group pause. Both mic and
+  exactly zero during startup pause, virtual freeze and group pause. Both mic and
   virtual routes reported ready. FFmpeg decoded real H.264 video and 48 kHz AAC
   audio after independent and group pauses. Temporary user media was removed.
 
@@ -182,9 +182,9 @@ intervals, so their durations are slightly longer. No user media was retained.
 
 | Mode | Consumer fps | Decoded recording fps | CPU (% of one core) | RSS start/end (KiB) | Drops during sample | Deprecated-format warnings |
 |---|---:|---:|---:|---:|---:|---:|
-| Live only | 30.00 (450 frames) | — | 117.80 | 111,536 / 128,456 | 0 | 0 |
+| Virtual camera only | 30.00 (450 frames) | — | 117.80 | 111,536 / 128,456 | 0 | 0 |
 | Recording only | — | 29.93 (456 frames / 15.234 s) | 188.93 | 155,796 / 188,700 | 0 | 0 |
-| Live and recording | 29.47 (442 frames) | 29.43 (448 frames / 15.220 s) | 219.20 | 167,344 / 194,748 | 7 | 0 |
+| Virtual camera and recording | 29.47 (442 frames) | 29.43 (448 frames / 15.220 s) | 219.20 | 167,344 / 194,748 | 7 | 0 |
 
 The samples demonstrate near-target operation after removing synchronous webcam work;
 they do not establish ten-minute endurance, physical AV drift or glass-to-glass latency.
@@ -225,7 +225,7 @@ The revised panel's native checks also pass with real SDL X11 content scaling at
 2×: 16 logical-pixel text rasterizes at 32 pixels, and scaled pointer input reaches
 the same controls. Tests cover all five focused screens, Home/Back/Escape, an
 always-visible actual preview, retained target/drag position, protected controls,
-drafts across navigation, UTF-8 paste, numeric rejection and reconnect. Final live
+drafts across navigation, UTF-8 paste, numeric rejection and reconnect. Final virtual
 synthetic renders at 480×760 and 360×640 were reviewed at both scales. Exclusion
 warnings remain visible on Home and settings screens. This is isolated native UI
 validation, not a claim about every physical display or compositor.
@@ -238,7 +238,7 @@ at 1x and 2x, including square icon controls, Back, persistent movable preview,
 countdown on every section, cancellation, privacy controls, drafts and reconnect.
 A private Xvfb instance of the installed mwm verifies the panel's pre-map utility
 type, truthful class, floating state and centered position. No user WM files or
-live desktop were changed. Final synthetic UI captures update the README image.
+user desktop were changed. Final synthetic UI captures update the README image.
 
 Xorg checks pass with MIT-SHM and the XGetImage fallback. They exercise managed
 preview/frame exclusion, latest-frame updates, old in-flight epoch rejection,
@@ -295,7 +295,7 @@ real Wayland compositor compatibility.
 
 The panel no longer fetches or renders actual-output frames. Route tests poison
 frame-fetch calls so reintroducing the old embedded preview fails the build. Home
-contains independent Live and Recording controls; the five configuration screens
+contains independent Virtual camera and Recording controls; the five configuration screens
 retain preview-window toggling and target selection. Native tests exercise utility
 window placement, faster wheel movement and reversal, drafts, footer/gap controls,
 preview target acknowledgement and the separate Xorg preview window at minimum and
@@ -365,3 +365,112 @@ branding. Scanline spans remove that full-frame mask overhead without changing
 pixels. The logo is decoded/scaled and static text rasterized during preparation;
 steady-state compositing reuses them. These measurements exclude capture, codec,
 audio, preview and device I/O and do not establish end-to-end hardware latency or FPS.
+
+## v0.7 Operate/Compose and streaming
+
+All new protocol automation runs against synthetic media and private local listeners;
+no actual stream key, service account, user desktop or physical camera is involved.
+The combined Xorg/Wayland/panel build uses `-Werror`. Isolated Wayland-only panel and
+headless builds pass unit and decoded three-output tests without direct forbidden
+Xorg/SDL dependencies. Distribution FFmpeg can still pull Xorg transitively.
+
+Native panel checks cover paused start and explicit reveal, recording start/cut/resume/
+finish/cancel, staged enums/booleans/text/numbers, Apply/Revert, invalid drafts, UTF-8
+clipboard input, local streaming setup/connect/retry/stop, independent blur and group
+restore, panel-close independence, disconnect/reconnect, keyboard navigation and
+360/440/520/800 logical widths at 1×/2×. A SIGSTOP-held daemon makes Pending observable
+while renderer frames continue; SIGCONT produces acknowledgement. No panel frame fetch
+is permitted by route tests. One batched visual inspection plus one confirmation pass
+covered the supplied hierarchy and native adaptation; there is no repeated polish loop.
+
+Contrast checks apply the WCAG relative-luminance formula to production text colors
+and actual default/hover/disabled/selected fills, requiring at least 4.5:1. Disabled
+selected actions use the normal control fill; hovered chip metadata uses secondary
+rather than muted. Native preview uses the same bundled Inter family via FreeType.
+Xorg SHM/fallback tests exercise three target pills, local status, Cancel/Escape and
+small-to-large countdown resizing; first-frame decode rejects countdown contamination.
+
+The decoded private RTMP test checks H.264/AAC headers, cadence, continuous timestamps,
+active audio and zero paused energy on the same TCP session. One representative short
+run decoded 113 video/173 audio frames with a 34 ms largest video gap and 21 ms AV-end
+difference. Pause/stop calls were below 1 ms; these are local fixture timings.
+
+Fault tests retire queued and already-converted but unsubmitted sensitive pixels,
+clear delayed audio and verify fresh headers/keyframes after reconnect. Actual receiver
+SIGSTOP induces blocked writes; controls remain below 1 ms, queues remain bounded,
+and a write deadline retires the worker. Killing an ingest mid-write reconnects with
+zero retired red frames in the decoded new session. Finite exhaustion and stop during
+backoff are covered. The TLS fixture accepts a trusted localhost certificate and
+rejects untrusted/wrong-host certificates before application traffic. Stalled TLS and
+a truly blocked `getaddrinfo` (test-only preload) remain cancellable and reaped. A
+publish-denial fixture injects a random secret in an FFmpeg-originated diagnostic;
+public error is sanitized and authentication rejection does not retry.
+
+Official Twitch/YouTube settings were checked on 2026-10-04 and are linked in
+[streaming.md](streaming.md). Local RTMP/RTMPS success does not establish acceptance
+by a real account or end-to-end hardware latency. Those checks remain in
+[hardware-acceptance.md](hardware-acceptance.md).
+
+### Sustained streaming and sanitizer checks
+
+On 2026-10-04, the fixture run by `make X11=0 check-stream-sustained` exercised a 65-second
+synthetic moving 1280×720/30 stream at 4000 kbps H.264 CBR with stereo 48 kHz
+AAC, including 55 seconds of simultaneous software recording and a final
+five-second stream privacy pause. The host was Intel Core Ultra 5 235U with
+FFmpeg n9.0.2 and an optimized GCC build. A private loopback FFmpeg listener
+received the stream; no service account, physical input or public broadcast was used.
+
+The decoded stream contained 1,943 video frames through 64.767 seconds, with
+22 ms audio/video end difference and a 66 ms maximum video interval when a
+privacy epoch retired one unsubmitted frame. Late active audio RMS was 0.2048;
+paused audio RMS was exactly zero. The simultaneous recording decoded 1,650
+frames and retained active audio during the stream's privacy pause. Nine pending
+stream frames were retired by the bounded queue/privacy policy; the connection
+did not reconnect during the run.
+
+| Measured mode | Sample duration | CPU (% of one core) | Peak summed parent/worker RSS |
+|---|---:|---:|---:|
+| Synthetic streaming | 9.94 s | 13.98% | 51.67 MiB |
+| Streaming plus software recording | 54.85 s | 70.32% | 85.84 MiB |
+
+CPU and RSS include the synthetic producer, raw frame copies, selected-mix ring
+reader, stream encoder and, in the second row, recording encoder. The private
+receiver and subsequent artifact decoding are excluded. Summed RSS counts
+shared mailbox pages in both processes. This profile stayed within a local
+one-core/128 MiB summed-RSS comparison budget, with less than 1% frame retirement
+and less than 100 ms A/V end difference. These are measured bounds for this
+synthetic profile, not a runtime memory cap or a hardware/capture/composition,
+service delivery, glass-to-glass latency or long-duration endurance claim.
+
+The sustained exercise exposed a supervisor deadline race: a worker can publish
+a newer phase timestamp after the supervisor samples its clock. Subtracting
+that timestamp from the older unsigned clock falsely expired a healthy write.
+The deadline now requires the observed clock to be later before subtracting.
+A deterministic test recreates this clock ordering while encoder work is held
+and verifies that the session remains connected. Direct FLV packet scheduling
+also accounts for AAC's initial encoder delay, preserving ordered submissions
+without retaining media in an interleaver across privacy epochs.
+
+The final C and network fixtures passed AddressSanitizer and UndefinedBehaviorSanitizer
+with LeakSanitizer enabled; no synthetic test-parent leaks were reported. Stop/fault
+paths deliberately terminate isolated workers, so dependency cleanup inside those
+terminated processes is not established by leak scanning. The tests include converted-but-unsubmitted
+privacy, decoded silence, fresh reconnect headers/keyframes, actual stopped-reader
+backpressure, finite retry exhaustion, stop during backoff, TLS trust/hostname,
+permanent publish rejection and real blocked DNS cancellation. Representative
+privacy/stop calls were 0.108/0.127 ms; stopped-reader privacy was 0.103 ms.
+The test-only audio constructor uses the production ring readers and privacy
+logic with a PipeWire thread loop, but opens no server connection or input
+modules. This avoids the previously documented external module-loader allocations;
+dependency-wide PipeWire leak freedom is still not claimed. Reproduce with:
+
+```sh
+make X11=0 check-stream check-stream-sustained
+make X11=0 BUILD=/tmp/cast-stream-asan \
+  CFLAGS='-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer' \
+  /tmp/cast-stream-asan/test_stream
+ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+  /tmp/cast-stream-asan/test_stream
+ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+  python3 tests/test_stream_network.py --binary /tmp/cast-stream-asan/test_stream
+```
