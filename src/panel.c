@@ -86,6 +86,32 @@ static const FieldSpec fields[] = {
        REQUIRE_CURSOR),
     FN("zoom.smoothing", "Pointer smoothing", zoom_smoothing, .001, 1, TAB_SOURCE, 2,
        REQUIRE_CURSOR),
+    FN("screen.width_percent", "Screen width (%)", screen_width_percent, 1, 100, TAB_SOURCE, 3, 0),
+    FN("camera.width_percent", "Camera width (%)", camera_width_percent, 1, 100, TAB_SOURCE, 3, 0),
+    FI("screen.margin", "Screen margin (px)", screen_margin, 0, 4096, TAB_SOURCE, 4, 0),
+    FI("screen.radius", "Screen corner radius (px)", screen_radius, 0, 2048, TAB_SOURCE, 4, 0),
+    FI("screen.border_width", "Screen border width (px)", screen_border_width, 0, 256, TAB_SOURCE,
+       4, 0),
+    FC("screen.border_color", "Screen border color", screen_border_color, TAB_SOURCE, 4, 0),
+    FE("screen.background", "Screen background", screen_background, "blurred,gradient,solid",
+       TAB_SOURCE, 4, 0),
+    FC("screen.background_color", "Screen background color", screen_background_color, TAB_SOURCE, 4,
+       0),
+    FI("screen.background_blur_radius", "Screen background blur (px)",
+       screen_background_blur_radius, 1, 128, TAB_SOURCE, 4, 0),
+    FN("screen.background_brightness", "Screen background brightness", screen_background_brightness,
+       0, 1, TAB_SOURCE, 4, 0),
+    FE("background.source", "Blurred backdrop source", background_source, "screen,camera",
+       TAB_SOURCE, 5, 0),
+    FC("background.gradient_from", "Gradient start color", gradient_from, TAB_SOURCE, 5, 0),
+    FB("background.gradient_via_enabled", "Middle gradient stop", gradient_via_enabled, TAB_SOURCE,
+       5, 0),
+    FC("background.gradient_via", "Gradient middle color", gradient_via, TAB_SOURCE, 5, 0),
+    FC("background.gradient_to", "Gradient end color", gradient_to, TAB_SOURCE, 5, 0),
+    FN("background.gradient_angle", "Gradient angle (degrees)", gradient_angle, 0, 360, TAB_SOURCE,
+       5, 0),
+    FN("background.gradient_waypoint", "Middle stop position (%)", gradient_waypoint, 1, 99,
+       TAB_SOURCE, 5, 0),
     FB("camera.enabled", "Camera enabled", camera_enabled, TAB_CAMERA, 0, 0),
     FB("camera.visible", "Visible in composition", camera_visible, TAB_CAMERA, 0, 0),
     FT("camera.device", "Camera device", camera_device, TAB_CAMERA, 3, 0),
@@ -154,6 +180,24 @@ static const FieldSpec fields[] = {
     FC("keys.background", "Keystroke background", keys_background, TAB_EFFECTS, 3, REQUIRE_INPUT),
     FT("keys.filter", "Hidden shortcuts", keys_filter, TAB_EFFECTS, 3, REQUIRE_INPUT),
     FT("keys.navigation", "Navigation keys", keys_navigation, TAB_EFFECTS, 3, REQUIRE_INPUT),
+    FB("logo.enabled", "Logo enabled", logo_enabled, TAB_EFFECTS, 4, 0),
+    FT("logo.path", "Logo image path", logo_path, TAB_EFFECTS, 4, 0),
+    FE("logo.anchor", "Logo anchor", logo_anchor,
+       "top-left,top,top-right,left,right,bottom-left,bottom,bottom-right", TAB_EFFECTS, 4, 0),
+    FN("logo.width_percent", "Logo width (%)", logo_width_percent, 1, 100, TAB_EFFECTS, 4, 0),
+    FI("logo.margin_x", "Logo X inset (px)", logo_margin_x, 0, 7680, TAB_EFFECTS, 4, 0),
+    FI("logo.margin_y", "Logo Y inset (px)", logo_margin_y, 0, 4320, TAB_EFFECTS, 4, 0),
+    FN("logo.opacity", "Logo opacity (0–1)", logo_opacity, 0, 1, TAB_EFFECTS, 4, 0),
+    FB("text.enabled", "Text enabled", text_enabled, TAB_EFFECTS, 5, 0),
+    FT("text.content", "Text content", text_content, TAB_EFFECTS, 5, 0),
+    FT("text.font", "Text font", text_font, TAB_EFFECTS, 5, 0),
+    FI("text.size", "Text size (px)", text_size, 8, 256, TAB_EFFECTS, 5, 0),
+    FC("text.color", "Text color", text_color, TAB_EFFECTS, 5, 0),
+    FE("text.anchor", "Text anchor", text_anchor,
+       "top-left,top,top-right,left,right,bottom-left,bottom,bottom-right", TAB_EFFECTS, 5, 0),
+    FI("text.margin_x", "Text X inset (px)", text_margin_x, 0, 7680, TAB_EFFECTS, 5, 0),
+    FI("text.margin_y", "Text Y inset (px)", text_margin_y, 0, 4320, TAB_EFFECTS, 5, 0),
+    FN("text.opacity", "Text opacity (0–1)", text_opacity, 0, 1, TAB_EFFECTS, 5, 0),
     FT("output.pause_text", "Pause title", pause_text, TAB_SETTINGS, 4, 0),
     FT("output.pause_subtitle", "Pause subtitle", pause_subtitle, TAB_SETTINGS, 4, 0),
     FT("output.pause_footer", "Pause footer", pause_footer, TAB_SETTINGS, 4, 0),
@@ -364,7 +408,7 @@ static void icon_slot(Icon icon, bool enabled, bool selected)
 }
 static Icon button_icon(const Panel *p, uint32_t id, Action action)
 {
-    if (id == 99) {
+    if (id == 99 || id == 90 || id == 92 || id == 93 || id == 94 || id == 96 || id == 87) {
         return ICON_BACK;
     }
     if (id == 22) {
@@ -397,7 +441,7 @@ static Icon button_icon(const Panel *p, uint32_t id, Action action)
     if (id == 39) {
         return ICON_CUT;
     }
-    if (id == 41 || id == 74) {
+    if (id == 41 || id == 74 || id == 91 || id == 95 || id == 97 || id == 88) {
         return ICON_FORWARD;
     }
     if (id == 42 || id == 78) {
@@ -847,13 +891,16 @@ static void home_navigation(Panel *p)
 static void selection_row(Panel *p)
 {
     label("Composition", 2, foreground);
-    static const char *const layouts[] = {"overlay", "split", "screen", "camera"};
-    static const char *const names[] = {"Overlay", "Split", "Screen", "Camera"};
-    for (int row = 0; row < 2; row++) {
+    static const char *const layouts[] = {"overlay", "split", "screen", "camera", "stage"};
+    static const char *const names[] = {"Overlay", "Split", "Screen", "Camera", "Stage"};
+    for (int row = 0; row < 3; row++) {
         CLAY({.layout = {.childGap = 8}})
         {
             for (int col = 0; col < 2; col++) {
                 int i = row * 2 + col;
+                if (i >= 5) {
+                    break;
+                }
                 button(p, 50 + (uint32_t)i, names[i], p->snapshot.connected,
                        !strcmp(p->snapshot.config.layout, layouts[i]), A_COMMAND, 0);
                 Widget *w = &p->widgets[p->widget_count - 1];
@@ -865,12 +912,18 @@ static void selection_row(Panel *p)
     }
     CLAY({.layout = {.childGap = 8}})
     {
+        command_button(p, 90, "Previous layout", p->snapshot.connected, "layout", "prev", NULL);
+        command_button(p, 91, "Next layout", p->snapshot.connected, "layout", "next", NULL);
+    }
+    CLAY({.layout = {.childGap = 8}})
+    {
         button(p, 40, "Preset", p->snapshot.connected && p->snapshot.config.preset_count > 0, false,
                A_DROPDOWN, -1);
         p->widgets[p->widget_count - 1].type = W_SELECT;
+        command_button(p, 92, "Previous", p->snapshot.connected, "preset", "prev", NULL);
         command_button(p, 41, "Next", p->snapshot.connected, "preset", "next", NULL);
-        command_button(p, 42, "Reset", p->snapshot.connected, "reset", NULL, NULL);
     }
+    command_button(p, 42, "Reset composition", p->snapshot.connected, "reset", NULL, NULL);
 }
 static void source_actions(Panel *p)
 {
@@ -891,7 +944,12 @@ static void source_actions(Panel *p)
     CLAY({.layout = {.childGap = 8}})
     {
         command_button(p, 73, "List monitors", native, "screen", "list", NULL);
-        command_button(p, 74, "Next monitor", native, "screen", "next", NULL);
+    }
+    label("Monitor cycle", 0, secondary);
+    CLAY({.layout = {.childGap = 8}})
+    {
+        command_button(p, 93, "Previous", native, "screen", "prev", NULL);
+        command_button(p, 74, "Next", native, "screen", "next", NULL);
     }
     CLAY({.layout = {.childGap = 8}})
     {
@@ -962,10 +1020,11 @@ static void tab_actions(Panel *p)
     }
 }
 static const char *const group_names[TAB_COUNT][GROUP_COUNT] = {
-    {"", "Region geometry", "Zoom behavior", ""},
+    {"", "Region geometry", "Zoom behavior", "Stage size", "Screen appearance",
+     "Background gradient"},
     {"", "Position and crop", "Appearance", "Device"},
     {"", "Virtual microphone", "", ""},
-    {"", "Output annotations", "Cursor and clicks", "Keystroke style"},
+    {"", "Output annotations", "Cursor and clicks", "Keystroke style", "Logo", "Text overlay"},
     {"", "Recording format", "Cycle order", "Output and connection", "Pause screen",
      "Blur screen"}};
 static void settings_area(Panel *p)
@@ -981,6 +1040,22 @@ static void settings_area(Panel *p)
         for (size_t i = 0; i < FIELD_COUNT; i++) {
             if (fields[i].tab == p->tab && !fields[i].group) {
                 field_row(p, i);
+                if (!strcmp(fields[i].key, "camera.shape") ||
+                    !strcmp(fields[i].key, "camera.anchor") ||
+                    !strcmp(fields[i].key, "camera.aspect")) {
+                    bool shape = !strcmp(fields[i].key, "camera.shape");
+                    bool anchor = !strcmp(fields[i].key, "camera.anchor");
+                    const char *kind = shape ? "shape" : anchor ? "anchor" : "aspect";
+                    uint32_t previous = shape ? 94 : anchor ? 96 : 87;
+                    uint32_t next = shape ? 95 : anchor ? 97 : 88;
+                    CLAY({.layout = {.childGap = 8}})
+                    {
+                        command_button(p, previous, "Previous", p->snapshot.connected, "camera",
+                                       kind, "prev");
+                        command_button(p, next, "Next", p->snapshot.connected, "camera", kind,
+                                       "next");
+                    }
+                }
             }
         }
         for (int group = 1; group < GROUP_COUNT; group++) {
@@ -1002,6 +1077,23 @@ static void settings_area(Panel *p)
                           group_names[p->tab][group]),
                    true, false, A_GROUP, group);
             if (p->groups[p->tab][group]) {
+                if (p->tab == TAB_SOURCE && group == 3) {
+                    text_wrapped("Stage places the screen beside the camera. Adjust each layer's "
+                                 "width independently.",
+                                 secondary);
+                } else if (p->tab == TAB_SOURCE && group == 5) {
+                    text_wrapped("Shared gradient for Screen and Camera backgrounds. Turn the "
+                                 "middle stop off for a two-color gradient.",
+                                 secondary);
+                } else if (p->tab == TAB_EFFECTS && group == 4) {
+                    text_wrapped("Load a logo image from a local path. Image transparency is "
+                                 "preserved. Position uses insets from the selected anchor.",
+                                 secondary);
+                } else if (p->tab == TAB_EFFECTS && group == 5) {
+                    text_wrapped("Static text appears in the composition. Choose an installed font "
+                                 "family or font file path. Position uses anchor insets.",
+                                 secondary);
+                }
                 if (p->tab == TAB_SETTINGS && group >= 4) {
                     text_wrapped(
                         "Leave a title, subtitle or footer blank to hide it. Templates: {date}, "
@@ -1634,7 +1726,7 @@ static Widget *find_widget(Panel *p, uint32_t id)
 }
 static bool widget_in_scroll(const Panel *p, const Widget *w)
 {
-    return w->id >= 1000 || (w->id >= 200 && w->id < 300) || (w->id >= 40 && w->id < 90) ||
+    return w->id >= 1000 || (w->id >= 200 && w->id < 300) || (w->id >= 40 && w->id < 99) ||
            (w->id >= 100 && w->id < 100 + TAB_COUNT) ||
            (p->tab < 0 && (w->id == 31 || w->id == 33 || (w->id >= 36 && w->id <= 39)));
 }
@@ -2265,9 +2357,15 @@ static void write_ui_state(Panel *p, const char *path)
                               : "";
         fprintf(file,
                 "%s{\"id\":%u,\"key\":\"%s\",\"enabled\":%s,"
-                "\"box\":[%.1f,%.1f,%.1f,%.1f]}",
+                "\"box\":[%.1f,%.1f,%.1f,%.1f],\"value\":",
                 i ? "," : "", w->id, key, w->enabled ? "true" : "false", w->box.x, w->box.y,
                 w->box.width, w->box.height);
+        char value[PATH_MAX] = "";
+        if (key[0]) {
+            field_value(&fields[w->index], &p->snapshot.config, value, sizeof value);
+        }
+        json_string(file, value);
+        fputc('}', file);
     }
     fprintf(file,
             "],\"countdown\":%s,\"countdown_seconds\":%u,"

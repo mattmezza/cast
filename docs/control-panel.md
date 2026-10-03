@@ -96,6 +96,25 @@ an enlarged, heavily blurred and dimmed camera frame behind uncovered camera-slo
 pixels; Gradient is the subdued fallback, and Solid restores a uniform backdrop.
 These controls leave screen-layer letterboxing and the foreground camera unchanged.
 
+## Stage, backgrounds and overlays
+
+Source includes **Stage** alongside Overlay, Split, Screen and Camera. Expand
+**Stage size** to set independent screen/camera widths, **Screen appearance**
+for screen margins, corners, borders and backdrop treatment, or **Background
+gradient** for shared two- or three-stop colors, angle and middle-stop position.
+The blurred backdrop uses the screen by default; Camera is also selectable.
+
+Previous/Next controls cycle layouts, presets, monitors and camera shape, anchor
+and aspect. Layout, anchor and preset cycles follow their configured orders.
+
+In Effects, expand **Logo** for a local image path, width, opacity and anchored
+X/Y insets. Images preserve their alpha transparency. Expand **Text overlay** for
+literal text, a runtime editable font family/file, size, color, opacity and anchored
+insets. Set the image path or text before enabling it. Apply or Enter submits edits
+through the same daemon settings commands as the CLI; settings do not rewrite
+your configuration file. These composition overlays remain separate from the
+pause/blur screen titles, subtitles and footers in Settings.
+
 ## Capture visibility
 
 On Xorg, selected-application capture excludes the separate panel. For monitor or

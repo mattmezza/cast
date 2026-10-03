@@ -194,6 +194,66 @@ int main(void)
     assert(!app->config.blur_subtitle[0] && app->config.blur_radius == 24);
     assert(app->config.blur_opacity == .75);
 
+    /* New compositing fields remain ordinary daemon settings and preserve state. */
+    edit_field(panel, app, "screen.width_percent", "71.5");
+    edit_field(panel, app, "screen.margin", "27");
+    edit_field(panel, app, "screen.radius", "22");
+    edit_field(panel, app, "screen.border_width", "3");
+    edit_field(panel, app, "screen.border_color", "#80c9ff");
+    edit_field(panel, app, "screen.background", "gradient");
+    edit_field(panel, app, "screen.background_color", "#20252b");
+    edit_field(panel, app, "screen.background_blur_radius", "90");
+    edit_field(panel, app, "screen.background_brightness", "0.3");
+    edit_field(panel, app, "background.source", "camera");
+    edit_field(panel, app, "background.gradient_from", "#101827");
+    edit_field(panel, app, "background.gradient_via", "#26354a");
+    edit_field(panel, app, "background.gradient_to", "#080b12");
+    edit_field(panel, app, "background.gradient_via_enabled", "false");
+    edit_field(panel, app, "background.gradient_angle", "42.5");
+    edit_field(panel, app, "background.gradient_waypoint", "62.5");
+    assert(app->config.screen_width_percent == 71.5 && app->config.screen_margin == 27);
+    assert(app->config.screen_radius == 22 && app->config.screen_border_width == 3);
+    assert(app->config.screen_border_color == 0x80c9ff);
+    assert(!strcmp(app->config.screen_background, "gradient"));
+    assert(app->config.screen_background_blur_radius == 90 &&
+           app->config.screen_background_brightness == .3);
+    assert(!strcmp(app->config.background_source, "camera"));
+    assert(!app->config.gradient_via_enabled && app->config.gradient_angle == 42.5 &&
+           app->config.gradient_waypoint == 62.5);
+    edit_field(panel, app, "logo.enabled", "false");
+    edit_field(panel, app, "logo.path", "");
+    edit_field(panel, app, "logo.anchor", "top");
+    edit_field(panel, app, "logo.width_percent", "15");
+    edit_field(panel, app, "logo.margin_x", "20");
+    edit_field(panel, app, "logo.margin_y", "30");
+    edit_field(panel, app, "logo.opacity", "0.4");
+    assert(!app->config.logo_enabled && !app->config.logo_path[0]);
+    assert(!strcmp(app->config.logo_anchor, "top") && app->config.logo_width_percent == 15);
+    assert(app->config.logo_margin_x == 20 && app->config.logo_margin_y == 30 &&
+           app->config.logo_opacity == .4);
+    edit_field(panel, app, "text.content", "Static café {date}");
+    edit_field(panel, app, "text.font", "Noto Sans");
+    edit_field(panel, app, "text.size", "31");
+    edit_field(panel, app, "text.color", "#80c9ff");
+    edit_field(panel, app, "text.anchor", "bottom");
+    edit_field(panel, app, "text.margin_x", "25");
+    edit_field(panel, app, "text.margin_y", "35");
+    edit_field(panel, app, "text.opacity", "0.6");
+    edit_field(panel, app, "text.enabled", "true");
+    assert(!strcmp(app->config.text_content, "Static café {date}") && app->config.text_enabled);
+    assert(app->config.text_size == 31 && app->config.text_color == 0x80c9ff);
+    assert(!strcmp(app->config.text_anchor, "bottom") && app->config.text_margin_x == 25);
+    assert(app->config.text_margin_y == 35 && app->config.text_opacity == .6);
+    Config before_invalid = app->config;
+    for (size_t i = 0; i < FIELD_COUNT; i++) {
+        if (!strcmp(fields[i].key, "background.gradient_waypoint")) {
+            apply_setting(panel, (int)i, "100", false);
+            assert(panel->error[0]);
+        }
+    }
+    assert(!memcmp(&before_invalid, &app->config, sizeof before_invalid));
+    panel->error[0] = 0;
+
     edit_field(panel, app, "zoom.factor", "3.25");
     assert(app->config.zoom_factor == 3.25 && app->zoom_last == 3.25);
     const char *toggle[] = {"zoom", "toggle"};
