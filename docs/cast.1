@@ -1,4 +1,4 @@
-.TH CAST 1 "October 2026" "cast 0.5.0" "User Commands"
+.TH CAST 1 "October 2026" "cast 0.6.0" "User Commands"
 .SH NAME
 cast \- presentation camera and recorder
 .SH SYNOPSIS
@@ -22,7 +22,7 @@ Selecting an audio source does not enable its lane: configure or explicitly enab
 Build features decide backend availability. synthetic backend/camera and none output
 are explicitly test\-only options; they do not represent working desktop/device access.
 .PP
-layout overlay|split|screen|camera selects composition; layout next follows
+layout overlay|stage|split|screen|camera selects composition; layout next|prev follows
 composition.layout_order. split side left|right chooses camera side; split ratio 25%
 sets its share. Camera hidden state and geometry persist when changing layouts.
 .PP
@@ -34,8 +34,8 @@ camera position X Y is absolute output pixels, and both switch to free positioni
 camera anchor top\-left|top\-right|bottom\-left|bottom\-right|top|bottom|left|right|next
 selects a corner or the middle of an edge. Edge resizing retains the margin and
 centering; next follows camera.corner_order, which may include edge anchors.
-camera shape rectangle|rounded|circle|next cycles rectangle→rounded→circle.
-camera aspect native|16:9|4:3|1:1 controls centered crop independently of mask;
+camera shape rectangle|rounded|circle|next|prev cycles rectangle→rounded→circle.
+camera aspect native|16:9|4:3|1:1|next|prev controls centered crop independently of mask;
 circle forces square crop. camera crop move DX DY adjusts source\-pixel crop offsets.
 camera mirror on|off|toggle affects camera content only and defaults to on; the screen
 stays unmirrored. Use cast camera mirror off to disable it for the session, or set
@@ -43,7 +43,7 @@ mirror = false in [camera] for a persistent default. camera list enumerates
 camera formats/devices. camera device PATH acquires the candidate before replacing
 current camera; permissions/format errors are actionable.
 .PP
-screen list, screen select NAME and screen next discover/select/cycle Xorg
+screen list, screen select NAME and screen next|prev discover/select/cycle Xorg
 RandR monitors. capture monitor selects the current monitor; on Wayland it opens
 portal consent again. capture region X Y WIDTH HEIGHT uses selected\-monitor pixels.
 capture region select starts an interactive drag; capture window select starts a
@@ -131,7 +131,7 @@ Live pause/freeze/blur silences cast's optional virtual microphone. A physical m
 directly by a conference app needs the app's own mute control. cast creates no
 physical\-speaker playback route; video and audio devices are selected separately.
 .PP
-preset NAME|next applies composition\-only named settings and configured cycle.
+preset NAME|next|prev applies composition\-only named settings and configured cycle.
 preview on|off|toggle controls local preview; preview target live|record chooses
 its lane. Local LIVE/PAUSED/FROZEN/RECORDING labels stay out of exported frames.
 status [\-\-json] reports capabilities, source, layout, camera visibility, zoom,
@@ -168,3 +168,25 @@ $XDG_CONFIG_HOME/cast/cast.conf or $HOME/.config/cast/cast.conf
 $XDG_RUNTIME_DIR/cast.sock
 .SH SEE ALSO
 sxhkd(1), ffmpeg(1), pw-cli(1)
+
+.SH SCREEN STYLE AND BRANDING
+Stage places an inset screen opposite the camera anchor; both preserve aspect
+ratio and overlap only as their chosen sizes require. screen size PERCENT changes
+stage width, screen radius PIXELS sets rounded corners, and screen border
+width PIXELS or screen border color #RRGGBB sets its border. Styling applies to
+all screen layers. screen background blurred|gradient|solid chooses the backdrop.
+.PP
+settings background.source screen|camera chooses the blurred screen/stage source.
+The shared background.gradient_from/via/to colors, gradient_via_enabled boolean,
+gradient_angle (0..360 degrees) and gradient_waypoint (1..99 percent) configure
+screen and camera gradient modes. The via stop is optional.
+.PP
+logo on|off|toggle, path PATH, size PERCENT, anchor ANCHOR, margin X Y and opacity
+0..1 place a transparent local image. text on|off|toggle, set TEXT, font FONT,
+size PIXELS, color #RRGGBB, anchor ANCHOR, margin X Y and opacity 0..1 place
+static UTF-8 text. Corners and edge centers are supported. Margins use output
+pixels. Static text does not expand placeholders. Solid pause replaces branding;
+freeze and blur include it. Composition commands never resume outputs.
+.PP
+Every next cycle also accepts prev, wrapping backwards through the same configured
+order. These commands change session settings; cast never writes user config.

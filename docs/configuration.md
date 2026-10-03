@@ -124,12 +124,44 @@ The following table is the supported schema. `examples/cast.conf` includes every
 | camera | background_blur_radius | `96` | 1–128 output pixels |
 | camera | background_brightness | `0.25` | 0–1 brightness multiplier |
 | camera | corner_order | `bottom-right,bottom-left,top-left,top-right` | Literal string |
-| composition | layout | `overlay` | overlay,split,screen,camera |
-| composition | layout_order | `overlay,split,screen,camera` | Literal string |
+| composition | layout | `overlay` | overlay,stage,split,screen,camera |
+| composition | layout_order | `overlay,stage,split,screen,camera` | Unique comma-separated layout names |
 | composition | split_side | `left` | left,right |
 | composition | split_ratio | `25` | 5–95 |
 | composition | fit | `contain` | contain,cover |
 | composition | preset_order | `coding,demo,conversation` | Literal string |
+| screen | width_percent | `78` | 1–100% of canvas width; stage only |
+| screen | margin | `32` | 0–4096 output pixels; stage inset |
+| screen | radius | `0` | 0–2048 output pixels; all screen layers |
+| screen | border_width | `0` | 0–256 output pixels |
+| screen | border_color | `#ffffff` | #RRGGBB |
+| screen | background | `blurred` | blurred,gradient,solid |
+| screen | background_color | `#20252b` | Solid fill or blurred tint |
+| screen | background_blur_radius | `96` | 1–128 output pixels |
+| screen | background_brightness | `0.25` | 0–1 brightness multiplier |
+| background | source | `screen` | screen,camera for the screen/stage blurred backdrop |
+| background | gradient_from | `#101827` | Start color, #RRGGBB |
+| background | gradient_via | `#26354a` | Optional middle color, #RRGGBB |
+| background | gradient_to | `#080b12` | End color, #RRGGBB |
+| background | gradient_via_enabled | `true` | false selects a two-color gradient |
+| background | gradient_angle | `135` | 0–360 degrees |
+| background | gradient_waypoint | `50` | 1–99% middle-stop position |
+| logo | enabled | `false` | true / false |
+| logo | path | `` | Local image file; PNG transparency supported |
+| logo | anchor | `bottom-right` | Corners or top,bottom,left,right edge centers |
+| logo | width_percent | `12` | 1–100% canvas width, aspect preserved |
+| logo | margin_x | `24` | 0–7680 output pixels from horizontal edge |
+| logo | margin_y | `24` | 0–4320 output pixels from vertical edge |
+| logo | opacity | `1` | 0–1, multiplied by image alpha |
+| text | enabled | `false` | true / false |
+| text | content | `` | Static UTF-8 text, up to 255 bytes |
+| text | font | `Noto Sans` | Fontconfig font name/pattern, runtime editable |
+| text | size | `28` | 8–256 output pixels |
+| text | color | `#ffffff` | #RRGGBB |
+| text | anchor | `bottom-left` | Corners or top,bottom,left,right edge centers |
+| text | margin_x | `24` | 0–7680 output pixels from horizontal edge |
+| text | margin_y | `24` | 0–4320 output pixels from vertical edge |
+| text | opacity | `1` | 0–1 |
 | capture | monitor | `` | Literal string |
 | capture | kind | `monitor` | monitor,region,window |
 | capture | x | `0` | 0–16384 (integer) |
@@ -262,3 +294,26 @@ cast settings camera.background_blur_radius 96 camera.background_color '#20252b'
 ```
 
 These session controls are available in **Camera → Camera appearance** too.
+
+## Stage, backgrounds and branding
+
+`composition.layout = stage` uses `screen.width_percent` and camera width to
+position two aspect-preserving sources. Camera anchoring moves the screen to the
+opposite side. A small screen and camera can fit alongside each other; increasing
+sizes naturally produces overlap with camera in front. Screen border and radius
+also apply in overlay, split and screen layouts; zero defaults preserve square
+unbordered screen content. The screen's camera-independent zoom remains available.
+
+`screen.background` controls the uncovered screen/stage area. Its blurred mode
+uses a scaled-up, subdued current frame chosen by `background.source`; camera
+backgrounds keep their existing camera source. Both gradient modes share the
+`background.gradient_*` controls. Disable the via stop for a two-color gradient;
+otherwise `gradient_waypoint` places it between the start and end colors. Colors
+are literal `#RRGGBB`, without quotes in the INI file.
+
+Logo and static text are composition overlays, so solid pause replaces them and
+freeze/blur include them. They never change output state. Logos preserve image
+alpha and aspect ratio. Use a local image path, not a URL; file paths are resolved
+by the daemon and do not expand `~` or environment variables. Static text is
+literal (its braces are not pause/blur placeholders). Unlike pause/blur fonts,
+`text.font` is runtime editable. Runtime updates remain session-only.

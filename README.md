@@ -20,7 +20,7 @@ up-to-date Arch x86_64 system with curl installed:
 
 ```sh
 curl -fsSL --proto '=https' --proto-redir '=https' \
-  https://raw.githubusercontent.com/mattmezza/cast/v0.5/packaging/install.sh | sh -s -- v0.5
+  https://raw.githubusercontent.com/mattmezza/cast/v0.6/packaging/install.sh | sh -s -- v0.6
 cast setup
 ```
 
@@ -34,7 +34,7 @@ Virtual-camera setup is a separate step explained by `cast setup`; the installer
 does not create devices or change your configuration.
 
 ```sh
-cast update v0.5
+cast update v0.6
 cast completions
 ```
 
@@ -130,6 +130,28 @@ The daemon runs in the terminal and opens no window by default. Use `./cast prev
 for a local view of the actual output. The physical camera LED can turn on during
 startup privacy pause: cast opens the input device, while transmitted video stays
 neutral until explicit live resume.
+
+The `stage` layout places an inset screen opposite the camera anchor. Resize either
+source while keeping its aspect ratio; they overlap when their sizes need it. Screen
+borders and rounded corners are configurable. Source in the panel includes screen
+appearance and a shared background with blurred screen/camera, solid fill, or a
+custom two/three-color gradient. Effects includes transparent logo and static text
+placement, with independent edge distances and font selection.
+
+```sh
+cast layout stage
+cast screen size 78%
+cast screen radius 24
+cast screen border width 2
+cast screen border color '#ffffff'
+cast camera anchor bottom-right
+cast layout prev                     # every next cycle also accepts prev
+cast logo path /absolute/path/logo.png
+cast logo on
+cast text set 'Matteo · Live demo'
+cast text font 'Noto Sans'
+cast text on
+```
 
 Camera content is mirrored by default; the screen stays unmirrored. Use
 `./cast camera mirror off` to disable it for the session, or set `mirror = false`

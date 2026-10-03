@@ -17,6 +17,9 @@ control panel with SDL3_ttf text rendering, launched from the same cast executab
 The user presents screen content with a webcam in conferencing calls and records
 presentations. They use a tiling window manager and sxhkd shortcuts. The panel
 provides visible controls for the same daemon already controlled through the CLI.
+Composition includes a stage layout, screen styling, shared gradient backgrounds,
+transparent anchored logos and font-selected static text. Advanced disclosures
+keep these presentation controls out of the basic output flow.
 Preview is an independent floating window that can stay beside the panel.
 
 ## Operating context

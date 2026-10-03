@@ -17,8 +17,8 @@ Selecting an audio source does not enable its lane: configure or explicitly enab
 Build features decide backend availability. `synthetic` backend/camera and `none` output
 are explicitly test-only options; they do not represent working desktop/device access.
 
-`layout overlay|split|screen|camera` selects composition; `layout next` follows
-composition.layout_order. `split side left|right` chooses camera side; `split ratio 25%`
+`layout overlay|stage|split|screen|camera` selects composition; `layout next|prev`
+follows composition.layout_order in either direction. `split side left|right` chooses camera side; `split ratio 25%`
 sets its share. Camera hidden state and geometry persist when changing layouts.
 
 `camera show|hide|toggle` sets visibility; toggle reverses only visibility.
@@ -26,12 +26,12 @@ sets its share. Camera hidden state and geometry persist when changing layouts.
 Anchored resizing fixes that corner, free sizing fixes center, and valid positions
 are clamped within the canvas. Impossible sizes fail. `camera move DX DY` is relative;
 `camera position X Y` is absolute output pixels, and both switch to free positioning.
-`camera anchor top-left|top-right|bottom-left|bottom-right|top|bottom|left|right|next`
+`camera anchor top-left|top-right|bottom-left|bottom-right|top|bottom|left|right|next|prev`
 selects a corner or the middle of an edge. Edge anchors keep the corresponding
-margin and remain centered on the other axis while resizing. `next` follows
+margin and remain centered on the other axis while resizing. `next` / `prev` follow
 camera.corner_order; that list may include edge anchors.
-`camera shape rectangle|rounded|circle|next` cycles rectangle→rounded→circle.
-`camera aspect native|16:9|4:3|1:1` controls centered crop independently of mask;
+`camera shape rectangle|rounded|circle|next|prev` cycles rectangle→rounded→circle.
+`camera aspect native|16:9|4:3|1:1|next|prev` controls centered crop independently of mask;
 circle forces square crop. `camera crop move DX DY` adjusts source-pixel crop offsets.
 `camera mirror on|off|toggle` affects camera content only and defaults to on; the screen
 stays unmirrored. Use `cast camera mirror off` to disable it for the session, or set
@@ -39,7 +39,7 @@ stays unmirrored. Use `cast camera mirror off` to disable it for the session, or
 camera formats/devices. `camera device PATH` acquires the candidate before replacing
 current camera; permissions/format errors are actionable.
 
-`screen list`, `screen select NAME` and `screen next` discover/select/cycle Xorg
+`screen list`, `screen select NAME` and `screen next|prev` discover/select/cycle Xorg
 RandR monitors. `capture monitor` selects the current monitor; on Wayland it opens
 portal consent again. `capture region X Y WIDTH HEIGHT` uses selected-monitor pixels.
 `capture region select` starts an interactive drag; `capture window select` starts a
@@ -147,7 +147,7 @@ Live pause/freeze/blur silences cast's optional virtual microphone. A physical m
 directly by a conference app needs the app's own mute control. cast creates no
 physical-speaker playback route; video and audio devices are selected separately.
 
-`preset NAME|next` applies composition-only named settings and configured cycle.
+`preset NAME|next|prev` applies composition-only named settings and configured cycle.
 `preview on|off|toggle` controls local preview; `preview target live|record` chooses
 its lane. Local LIVE/PAUSED/FROZEN/BLURRED/CUT/RECORDING labels stay out of exported frames.
 `status [--json]` reports capabilities, source, layout, camera visibility, zoom,
@@ -182,3 +182,34 @@ by the foreground daemon. A successful unrelated command does not erase evidence
 When an edited configuration is invalid, explicit `--socket PATH` runtime commands
 use that routing directly, so status and config reload remain reachable. Local
 config check/doctor and daemon startup still strictly validate the selected file.
+
+## Screen presentation, logo and text
+
+`layout stage` places an inset screen opposite the camera anchor. Both keep their
+aspect ratios; chosen sizes determine whether they sit alongside or overlap.
+`screen size +5%|-5%|78%` adjusts the stage's screen width in percentage points.
+`screen radius PIXELS` and `screen border width PIXELS|color #RRGGBB` style screen
+content in every layout. `screen background blurred|gradient|solid` selects its
+uncovered area's backdrop; all detailed settings also use `settings`:
+
+```sh
+cast settings screen.margin 32 screen.radius 24 screen.border_width 2
+cast settings background.source screen
+cast settings background.gradient_from '#0f172a' background.gradient_to '#312e81'
+cast settings background.gradient_via '#0e7490' background.gradient_waypoint 40
+cast settings background.gradient_angle 135 background.gradient_via_enabled true
+```
+
+`logo on|off|toggle`, `logo path PATH`, `logo size PERCENT`, `logo anchor ANCHOR`,
+`logo margin X Y` and `logo opacity 0..1` place a local image with transparency.
+Size preserves its aspect ratio; opacity multiplies each pixel's alpha.
+`text on|off|toggle`, `text set TEXT`, `text font FONT`, `text size PIXELS`,
+`text color #RRGGBB`, `text anchor ANCHOR`, `text margin X Y` and
+`text opacity 0..1` place static UTF-8 text. Quote shell arguments containing spaces
+or color values. Margins use output pixels; anchors include corners and edge
+centers (`top`, `bottom`, `left`, `right`). Text is literal, without placeholder
+expansion. These controls never resume outputs, and solid pause covers them.
+
+Every existing cycle accepts `prev` as well as `next`. Previous wraps backwards
+through the configured order for layouts, presets and camera anchors, or through
+the fixed shape/aspect order; monitor cycling follows the Xorg monitor list.
