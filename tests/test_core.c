@@ -112,6 +112,11 @@ static void test_stream_configuration_and_restore(void)
     load_test("[stream]\nserver_url=rtmp://user:password@example.invalid/app\n", false, &config);
     load_test("[stream]\nkey_file=relative-file\n", false, &config);
     load_test("[stream]\nreconnect_initial_ms=5000\nreconnect_max_ms=1000\n", false, &config);
+    load_test("[stream]\nserver_url=rtmp://ingest.example.invalid/app\nqueue_frames=120\n", false,
+              &config);
+    load_test("[output]\nwidth=640\nheight=360\n[stream]\n"
+              "server_url=rtmp://ingest.example.invalid/app\nqueue_frames=120\n",
+              true, &config);
     load_test("[annotations]\nlive_keys=true\n", false, &config);
     load_test("[annotations]\nlive_clicks=true\n", false, &config);
     load_test("[preview]\ntarget=live\n", false, &config);

@@ -534,6 +534,15 @@ int config_validate(const Config *c, char *err, size_t n)
     if (stream_config_validate(&c->stream, err, n)) {
         return -1;
     }
+    /* Keep configured queues within the worker's 512 MiB shared allocation
+     * bound, reserving 1 MiB for configuration, audio and synchronization. */
+    uint64_t stream_pixels = (uint64_t)c->width * (uint64_t)c->height * 4;
+    if (c->stream.server_url[0] &&
+        stream_pixels * (uint64_t)(c->stream.queue_frames + 1) > 511ULL * 1024 * 1024) {
+        return fail(err, n,
+                    "streaming raw queue exceeds the shared memory safety bound; reduce "
+                    "stream.queue_frames or output resolution");
+    }
     if (!c->output_device[0] || !c->camera_device[0] || !c->record_dir[0] || !c->video_codec[0] ||
         !c->audio_codec[0] || !c->record_container[0]) {
         return fail(err, n,
