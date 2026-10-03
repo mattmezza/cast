@@ -615,6 +615,24 @@ static void countdown_tests(Display *d, Platform *p, Config *cfg, Compositor *co
     pump(d, p, cfg, comp, false);
     assert(platform_countdown(p, 1, error, sizeof error) == 1);
     assert(platform_countdown(p, 0, error, sizeof error) == 1);
+    /* The visible Cancel control also wins at the final deadline poll. */
+    assert(platform_countdown(p, 1000000000ULL, error, sizeof error) == 0);
+    XSync(d, false);
+    window = named_window(d, "cast output preview");
+    assert(XGetWindowAttributes(d, window, &attr));
+    memset(&cancel, 0, sizeof cancel);
+    cancel.xbutton.type = ButtonPress;
+    cancel.xbutton.window = window;
+    cancel.xbutton.button = Button1;
+    cancel.xbutton.x = attr.width - 40;
+    cancel.xbutton.y = 16;
+    assert(XSendEvent(d, window, False, ButtonPressMask, &cancel));
+    XSync(d, false);
+    assert(platform_countdown(p, 1, error, sizeof error) == 1);
+    assert(platform_countdown(p, 0, error, sizeof error) == 1);
+    memset(&cancel, 0, sizeof cancel);
+    cancel.xkey.type = KeyPress;
+    cancel.xkey.keycode = XKeysymToKeycode(d, XK_Escape);
     /* A panel attachment hides directly: queued cancellation must still win. */
     assert(platform_countdown(p, 1000000000ULL, error, sizeof error) == 0);
     XSync(d, false);

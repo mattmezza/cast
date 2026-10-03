@@ -1,6 +1,6 @@
 /* Xlib-only platform implementation. All desktop coordinates stop at this boundary. */
 #include "platform_backend.h"
-#include "presentation_text.h"
+#include "preview_text.h"
 #include "stream.h"
 #define Cursor X11Cursor
 #include <X11/XKBlib.h>
@@ -40,7 +40,8 @@ typedef struct {
     bool stop, pending;
     Frame frame;
     Window window;
-    int width, height, target;
+    int width, height, target, chrome_height;
+    double density;
     char label[256], error[CAST_ERR];
     unsigned long color;
     uint64_t epoch, ready_epoch;
@@ -62,12 +63,13 @@ typedef struct {
     uint64_t countdown_painted;
     Config countdown_config;
     Frame countdown_frame, countdown_canvas;
-    PresentationText *countdown_text;
+    PreviewText *countdown_text;
     XImage *countdown_image;
     int panel_pid;
     Atom wm_delete, wm_state, active_window;
     int screen, xi_opcode, randr_base, xkb_base;
-    int preview_target_pending;
+    int preview_target_pending, preview_chrome_height;
+    double preview_density;
     bool xi, shm, composite, xkb, redirected, shm_attached, privacy, preview_disabled;
     bool window_unmapped;
     XImage *image;
@@ -493,6 +495,8 @@ Platform *x11_open(const Config *cfg, char *e, size_t n)
         return NULL;
     }
     p->preview_target_pending = -1;
+    p->preview_density = 1;
+    p->preview_chrome_height = PREVIEW_CHROME_HEIGHT;
     p->segment.shmid = -1;
     p->d = XOpenDisplay(NULL);
     if (!p->d) {
@@ -500,6 +504,15 @@ Platform *x11_open(const Config *cfg, char *e, size_t n)
         fail(e, n,
              "cannot open DISPLAY; run cast in your Xorg session and check DISPLAY/XAUTHORITY");
         return NULL;
+    }
+    const char *dpi_string = XGetDefault(p->d, "Xft", "dpi");
+    if (dpi_string) {
+        char *end = NULL;
+        double dpi = strtod(dpi_string, &end);
+        if (end && !*end && isfinite(dpi) && dpi >= 96 && dpi <= 288) {
+            p->preview_density = dpi / 96;
+            p->preview_chrome_height = (int)lround(PREVIEW_CHROME_HEIGHT * p->preview_density);
+        }
     }
     XSetErrorHandler(on_error);
     p->screen = DefaultScreen(p->d);
@@ -598,7 +611,7 @@ void x11_close(Platform *platform)
     }
     frame_free(&p->countdown_frame);
     frame_free(&p->countdown_canvas);
-    presentation_text_destroy(p->countdown_text);
+    preview_text_destroy(p->countdown_text);
     free(p);
 }
 Capabilities x11_capabilities(Platform *platform)
@@ -1561,8 +1574,9 @@ void x11_events(Platform *platform, Compositor *comp, const Config *cfg, bool pr
             continue;
         }
         if (ev.type == ButtonPress && ev.xbutton.window == p->preview &&
-            ev.xbutton.button == Button1 && ev.xbutton.y >= p->preview_h - PREVIEW_CHROME_HEIGHT &&
-            ev.xbutton.y < p->preview_h - 32) {
+            ev.xbutton.button == Button1 &&
+            ev.xbutton.y >= p->preview_h - p->preview_chrome_height &&
+            ev.xbutton.y < p->preview_h - p->preview_chrome_height / 2) {
             int target = ev.xbutton.x * 3 / (p->preview_w > 0 ? p->preview_w : 1);
             p->preview_target_pending = target < 0 ? 0 : target > 2 ? 2 : target;
             p->preview_epoch++;
@@ -1617,10 +1631,10 @@ static void preview_neutral(Xorg *p)
 }
 static void preview_create(Xorg *p, const Config *cfg)
 {
-    int w = 640, h = cfg->height * 640 / cfg->width + PREVIEW_CHROME_HEIGHT;
+    int w = 640, h = cfg->height * 640 / cfg->width + p->preview_chrome_height;
     if (h > 600) {
         h = 600;
-        w = cfg->width * (h - PREVIEW_CHROME_HEIGHT) / cfg->height;
+        w = cfg->width * (h - p->preview_chrome_height) / cfg->height;
     }
     if (w < 160) {
         w = 160;
@@ -1684,6 +1698,12 @@ typedef struct {
     Xorg image;
     GC gc;
     unsigned long channel[3][256];
+    PreviewText *text;
+    Frame chrome;
+    char label[256];
+    int target, chrome_height;
+    unsigned long color;
+    double density;
 } PreviewPainter;
 
 static bool preview_image(PreviewPainter *p, int w, int h)
@@ -1709,15 +1729,65 @@ static bool preview_image(PreviewPainter *p, int w, int h)
     return true;
 }
 
+static void ui_rectangle(Frame *frame, int x, int y, int width, int height, uint32_t color)
+{
+    for (int row = y < 0 ? 0 : y; row < y + height && row < frame->height; row++) {
+        for (int column = x < 0 ? 0 : x; column < x + width && column < frame->width; column++) {
+            uint8_t *pixel = frame->data + (size_t)row * frame->stride + column * 4;
+            pixel[0] = color >> 16;
+            pixel[1] = color >> 8;
+            pixel[2] = color;
+            pixel[3] = 255;
+        }
+    }
+}
+static bool preview_chrome(PreviewPainter *p, int width, const char *label, unsigned long color,
+                           int target)
+{
+    if (p->chrome.data && p->chrome.width == width && p->target == target && p->color == color &&
+        !strcmp(p->label, label)) {
+        return true;
+    }
+    if (!p->text) {
+        p->text = preview_text_create();
+    }
+    if (!p->text || frame_alloc(&p->chrome, width, p->chrome_height)) {
+        return false;
+    }
+    ui_rectangle(&p->chrome, 0, 0, width, p->chrome_height, 0x111111);
+    const char *targets[] = {"Virtual camera", "Recording", "Streaming"};
+    int padding = (int)lround(3 * p->density);
+    int font_size = (int)lround(13 * p->density);
+    int baseline = (int)lround(21 * p->density);
+    for (int lane = 0; lane < 3; lane++) {
+        int x = lane * width / 3, lane_width = (lane + 1) * width / 3 - x;
+        ui_rectangle(&p->chrome, x + padding, padding, lane_width - 2 * padding,
+                     p->chrome_height / 2 - 2 * padding, lane == target ? 0x243c39 : 0x20242a);
+        if (preview_text_draw(p->text, &p->chrome, targets[lane], font_size,
+                              x + (int)lround(10 * p->density), baseline,
+                              lane == target ? 0xb7e7dd : 0xc7ccd3) < 0) {
+            return false;
+        }
+    }
+    if (preview_text_draw(p->text, &p->chrome, label, font_size, (int)lround(10 * p->density),
+                          (int)lround(51 * p->density), (uint32_t)color) < 0) {
+        return false;
+    }
+    p->target = target;
+    p->color = color;
+    snprintf(p->label, sizeof p->label, "%s", label);
+    return true;
+}
 static Pixmap preview_paint(PreviewPainter *p, const Frame *frame, Window window, int w, int h,
                             const char *label, unsigned long color, int target)
 {
-    if (!preview_image(p, w, h)) {
+    int total_height = h + p->chrome_height;
+    if (!preview_chrome(p, w, label, color, target) || !preview_image(p, w, total_height)) {
         return None;
     }
     Display *d = p->image.d;
     XImage *im = p->image.image;
-    memset(im->data, 0, (size_t)im->bytes_per_line * h);
+    memset(im->data, 0, (size_t)im->bytes_per_line * total_height);
     double scale = fmin((double)w / frame->width, (double)h / frame->height);
     int iw = (int)(frame->width * scale), ih = (int)(frame->height * scale);
     int ox = (w - iw) / 2, oy = (h - ih) / 2;
@@ -1739,28 +1809,30 @@ static Pixmap preview_paint(PreviewPainter *p, const Frame *frame, Window window
             }
         }
     }
+    for (int y = 0; y < p->chrome.height; y++) {
+        const uint8_t *row = p->chrome.data + (size_t)y * p->chrome.stride;
+        uint32_t *destination =
+            native32 ? (uint32_t *)(im->data + (size_t)(h + y) * im->bytes_per_line) : NULL;
+        for (int x = 0; x < w; x++) {
+            const uint8_t *pixel = row + x * 4;
+            unsigned long value =
+                p->channel[0][pixel[0]] | p->channel[1][pixel[1]] | p->channel[2][pixel[2]];
+            if (native32) {
+                destination[x] = (uint32_t)value;
+            } else {
+                XPutPixel(im, x, h + y, value);
+            }
+        }
+    }
     xerror = 0;
-    /* Each published pixmap is immutable. Reusing an installed background would
-     * allow a worker from an older privacy epoch to alter visible pixels. */
-    Pixmap pixmap = XCreatePixmap(d, window, (unsigned)w, (unsigned)(h + PREVIEW_CHROME_HEIGHT),
+    /* A complete immutable pixmap includes only local chrome outside the frame. */
+    Pixmap pixmap = XCreatePixmap(d, window, (unsigned)w, (unsigned)total_height,
                                   (unsigned)DefaultDepth(d, p->image.screen));
     if (p->image.shm_attached) {
-        XShmPutImage(d, pixmap, p->gc, im, 0, 0, 0, 0, (unsigned)w, (unsigned)h, False);
+        XShmPutImage(d, pixmap, p->gc, im, 0, 0, 0, 0, (unsigned)w, (unsigned)total_height, False);
     } else {
-        XPutImage(d, pixmap, p->gc, im, 0, 0, 0, 0, (unsigned)w, (unsigned)h);
+        XPutImage(d, pixmap, p->gc, im, 0, 0, 0, 0, (unsigned)w, (unsigned)total_height);
     }
-    XSetForeground(d, p->gc, 0x111111);
-    XFillRectangle(d, pixmap, p->gc, 0, h, (unsigned)w, PREVIEW_CHROME_HEIGHT);
-    const char *targets[] = {"Virtual camera", "Recording", "Streaming"};
-    for (int lane = 0; lane < 3; lane++) {
-        int x = lane * w / 3, width = (lane + 1) * w / 3 - x;
-        XSetForeground(d, p->gc, lane == target ? 0x243c39 : 0x20242a);
-        XFillRectangle(d, pixmap, p->gc, x + 3, h + 3, (unsigned)(width > 6 ? width - 6 : 1), 26);
-        XSetForeground(d, p->gc, lane == target ? 0xb7e7dd : 0xc7ccd3);
-        XDrawString(d, pixmap, p->gc, x + 10, h + 21, targets[lane], (int)strlen(targets[lane]));
-    }
-    XSetForeground(d, p->gc, color);
-    XDrawString(d, pixmap, p->gc, 10, h + 51, label, (int)strlen(label));
     /* Completes SHM consumption and painting before publishing across connections. */
     XSync(d, False);
     if (xerror) {
@@ -1773,7 +1845,7 @@ static void *preview_run(void *data)
 {
     Preview *p = data;
     Display *d = NULL;
-    PreviewPainter painter = {0};
+    PreviewPainter painter = {.chrome_height = p->chrome_height, .density = p->density};
     Frame frame = {0};
     pthread_mutex_lock(&p->mutex);
     while (!p->stop) {
@@ -1844,6 +1916,8 @@ static void *preview_run(void *data)
         XCloseDisplay(d);
     }
     frame_free(&frame);
+    frame_free(&painter.chrome);
+    preview_text_destroy(painter.text);
     return NULL;
 }
 static int preview_start(Xorg *p, char *e, size_t n)
@@ -1855,6 +1929,8 @@ static int preview_start(Xorg *p, char *e, size_t n)
     if (!worker) {
         return fail(e, n, "cannot allocate preview worker");
     }
+    worker->density = p->preview_density;
+    worker->chrome_height = p->preview_chrome_height;
     pthread_mutex_init(&worker->mutex, NULL);
     pthread_cond_init(&worker->changed, NULL);
     int rc = pthread_create(&worker->thread, NULL, preview_run, worker);
@@ -1963,7 +2039,7 @@ int x11_preview(Platform *platform, const Frame *frame, const State *state, cons
         pthread_mutex_unlock(&worker->mutex);
         return -1;
     }
-    int w = p->preview_w, h = p->preview_h - PREVIEW_CHROME_HEIGHT;
+    int w = p->preview_w, h = p->preview_h - p->preview_chrome_height;
     if (w < 1 || h < 1 || w > 4096 || h > 4096) {
         pthread_mutex_unlock(&worker->mutex);
         return fail(e, n, "preview window size is unsupported; resize it below 4096 pixels");
@@ -2023,6 +2099,13 @@ static void countdown_event(Xorg *p, const XEvent *event)
     if ((event->type == ClientMessage && (Atom)event->xclient.data.l[0] == p->wm_delete) ||
         (event->type == KeyPress && XLookupKeysym((XKeyEvent *)&event->xkey, 0) == XK_Escape)) {
         p->countdown_cancelled = true;
+    } else if (event->type == ButtonPress && event->xbutton.button == Button1) {
+        XWindowAttributes attributes;
+        if (XGetWindowAttributes(p->d, p->countdown, &attributes) &&
+            event->xbutton.y < p->preview_chrome_height / 2 && event->xbutton.y >= 0 &&
+            event->xbutton.x >= attributes.width - (int)lround(110 * p->preview_density)) {
+            p->countdown_cancelled = true;
+        }
     } else if (event->type == DestroyNotify) {
         p->countdown = None;
         p->preview = None;
@@ -2104,27 +2187,34 @@ static int countdown_paint(Xorg *p, uint64_t remaining_ns, char *error, size_t n
         }
     }
     unsigned seconds = (unsigned)((remaining_ns - 1) / 1000000000 + 1);
-    Config text = p->countdown_config;
-    if (!text.blur_font[0]) {
-        snprintf(text.blur_font, sizeof text.blur_font, "Noto Sans");
-    }
-    if (!text.pause_font[0]) {
-        snprintf(text.pause_font, sizeof text.pause_font, "Noto Sans");
-    }
-    text.width = w;
-    text.height = h;
-    text.pause_title_size = text.blur_title_size = h < 240 ? 48 : 80;
-    text.pause_subtitle_size = text.blur_subtitle_size = 16;
-    text.blur_foreground = 0xf8f9fb;
-    snprintf(text.blur_title, sizeof text.blur_title, "%u", seconds);
-    text.blur_subtitle[0] = 0;
-    text.blur_footer[0] = 0;
     if (!p->countdown_text) {
-        p->countdown_text = presentation_text_create();
+        p->countdown_text = preview_text_create();
     }
-    if (!p->countdown_text ||
-        presentation_text_draw(p->countdown_text, &text, true, canvas, error, n)) {
-        return -1;
+    char number[16];
+    snprintf(number, sizeof number, "%u", seconds);
+    int number_size = (int)lround(48 * p->preview_density);
+    int number_width = preview_text_width(p->countdown_text, number, number_size);
+    if (!p->countdown_text || number_width < 0 ||
+        preview_text_draw(p->countdown_text, canvas, number, number_size, (w - number_width) / 2,
+                          h / 2 + (int)lround(18 * p->preview_density), 0xf8f9fb) < 0) {
+        return fail(error, n, "cannot render bundled Inter countdown text");
+    }
+    int header_height = p->preview_chrome_height / 2;
+    int button_width = (int)lround(110 * p->preview_density);
+    int padding = (int)lround(5 * p->preview_density);
+    ui_rectangle(canvas, 0, 0, w, header_height, 0x101113);
+    ui_rectangle(canvas, w - button_width, padding, button_width - padding,
+                 header_height - 2 * padding, 0x293136);
+    int label_size = (int)lround(13 * p->preview_density);
+    Frame label_frame = *canvas;
+    label_frame.width = w - button_width - padding;
+    if (preview_text_draw(p->countdown_text, &label_frame, "Recording countdown", label_size,
+                          (int)lround(10 * p->preview_density),
+                          (int)lround(21 * p->preview_density), 0xf8f9fb) < 0 ||
+        preview_text_draw(p->countdown_text, canvas, "Cancel (Esc)", label_size,
+                          w - button_width + padding, (int)lround(21 * p->preview_density),
+                          0xf8f9fb) < 0) {
+        return fail(error, n, "cannot render bundled Inter countdown controls");
     }
     if (!p->countdown_image) {
         p->countdown_image = XCreateImage(p->d, DefaultVisual(p->d, p->screen),
@@ -2185,11 +2275,6 @@ static int countdown_paint(Xorg *p, uint64_t remaining_ns, char *error, size_t n
         -M_PI / 2 + 2 * M_PI * (double)(1000000000 - remaining_ns % 1000000000) / 1000000000;
     XDrawLine(p->d, p->countdown_buffer, p->countdown_gc, cx, cy, cx + (int)(cos(angle) * radius),
               cy + (int)(sin(angle) * radius));
-    XSetForeground(p->d, p->countdown_gc, 0x101113);
-    XFillRectangle(p->d, p->countdown_buffer, p->countdown_gc, 0, 0, (unsigned)w, 32);
-    XSetForeground(p->d, p->countdown_gc, 0xf8f9fb);
-    const char *label = "Recording countdown  |  Esc to cancel";
-    XDrawString(p->d, p->countdown_buffer, p->countdown_gc, 10, 21, label, (int)strlen(label));
     XSetWindowBackgroundPixmap(p->d, p->countdown, p->countdown_buffer);
     XMapWindow(p->d, p->countdown);
     XCopyArea(p->d, p->countdown_buffer, p->countdown, p->countdown_gc, 0, 0, (unsigned)w,
@@ -2293,7 +2378,8 @@ int x11_countdown(Platform *platform, uint64_t remaining_ns, char *error, size_t
                            .max_width = p->preview_w,
                            .max_height = p->preview_h};
         XSetWMNormalHints(p->d, p->countdown, &size);
-        XSelectInput(p->d, p->countdown, ExposureMask | StructureNotifyMask | KeyPressMask);
+        XSelectInput(p->d, p->countdown,
+                     ExposureMask | StructureNotifyMask | KeyPressMask | ButtonPressMask);
         begin(p);
         p->countdown_buffer =
             XCreatePixmap(p->d, p->countdown, (unsigned)p->preview_w, (unsigned)p->preview_h,
