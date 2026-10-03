@@ -4,7 +4,7 @@ Build `make X11=0 WAYLAND=1` to omit all Xorg dependencies, or
 `make X11=1 WAYLAND=1` for both backends. GDBus (GLib `gio-unix-2.0`) and
 PipeWire implement the optional backend; FFmpeg and PipeWire audio remain shared.
 Start `cast --backend wayland`. A desktop consent dialog chooses one screen.
-The daemon continues servicing controls while consent is pending. Live output
+The daemon continues servicing controls while consent is pending. Virtual camera
 starts privacy paused, including after source selection; explicitly resume it.
 Another selection request is rejected while the dialog is pending. A source
 commits when its first valid frame arrives; only then are zoom and annotations reset.
@@ -49,8 +49,9 @@ require metadata. No second cursor is drawn over an embedded cursor.
 | Preview | Implemented; recursion constraints apply | Unsupported |
 | Separate panel exclusion | Authenticated panel and WM frame neutral-masked in monitor/region; absent from application pixmaps | Unsupported; portal captures may include the panel |
 | V4L2 camera/output, layouts, recording/audio | Shared implementation | Shared implementation |
+| RTMP/RTMPS streaming | Shared H.264/AAC implementation; local ingest tested | Same shared implementation; no X11/SDL dependency |
 
-The optional control panel can display daemon-produced frames on Wayland, but the
+The optional control-only panel runs on Wayland without embedding frames. The
 ScreenCast portal does not provide a general way for cast to exclude that local
 window from a shared monitor. Panel status explicitly reports unsupported exclusion.
 Place the panel on an unshared display, choose a separate application window in the

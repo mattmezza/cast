@@ -10,7 +10,7 @@ completion is unknown: inspect status before repeating a non-idempotent command.
 
 Startup flags appear before the command: `--config PATH`, `--socket PATH`,
 `--backend xorg|wayland`, `--output-device PATH`, `--camera-device PATH`,
-`--width N`, `--height N`, `--fps N`, `--no-live`, `--no-camera`,
+`--width N`, `--height N`, `--fps N`, `--no-virtual`, `--no-camera`,
 `--mic-source NAME`, `--desktop-source NAME`, `--record-dir PATH`,
 `--container NAME`, `--video-codec NAME`, `--audio-codec NAME`, `--countdown SECONDS`.
 Selecting an audio source does not enable its lane: configure or explicitly enable it.
@@ -67,26 +67,26 @@ best effort. Consecutive identical labels collapse as `j`, `jx2`, `jx3`. A bound
 queue retains recent labels for `[keys] timeout_ms` (3000 ms by default); repeat
 counts refresh that row, and older rows expire independently.
 Configure keys.filter to exclude every cast-control shortcut you bind.
-`annotations live|record keys|clicks on|off` selects annotation visibility per lane.
+`annotations virtual|record|stream keys|clicks on|off` selects annotation visibility per lane.
 
 `pause` solid-pauses both applicable outputs, remembers only states it changes,
-and cancels a pending recording start or cut-resume countdown. Live emits neutral
+and cancels a pending recording start or cut-resume countdown. Virtual camera emits neutral
 frames and recording continues writing neutral frames, with silence in both lanes.
 Repeated pause is idempotent. `resume` restores only remembered solid states;
 it never starts a recording or clears recording cut. Independent solid commands
 supersede that lane's remembered restoration; freeze/blur/cut are orthogonal.
 
-`live pause|resume|toggle` selects solid privacy pause; toggle reverses that flag.
-`live freeze|unfreeze` holds/releases the complete screen and camera composition.
-`live blur [on|off|toggle]` applies/removes/toggles a configurable blurred, tinted
+`virtual pause|resume|toggle` selects solid privacy pause; toggle reverses that flag.
+`virtual freeze|unfreeze` holds/releases the complete screen and camera composition.
+`virtual blur [on|off|toggle]` applies/removes/toggles a configurable blurred, tinted
 composition with optional title/subtitle/footer. Bare `blur` enables it; `unblur` disables
 it. Blur is above freeze, and solid pause overrides both. Blur alone keeps capturing
 moving content. None of these effects resumes solid pause. Freeze and blur silence
 cast virtual audio. Blur can leave information recognizable; use solid pause for privacy.
 
-`live message "TEXT"` changes the shared solid-pause title without resuming any
+`virtual message "TEXT"` changes the shared solid-pause title without resuming any
 output. Pass `""` to remove the title. The limit is 127 UTF-8 bytes. Use the shared
-settings below to edit titles/subtitles and colours in either output:
+settings below to edit titles/subtitles and colours across all three outputs:
 
 ```sh
 cast settings output.pause_title "Back soon" output.pause_subtitle "{date:%A} {time:%H:%M}"
@@ -94,12 +94,12 @@ cast settings output.pause_background '#20252b' output.pause_foreground '#ffffff
 cast settings output.blur_title "Break" output.blur_subtitle "{datetime}"
 cast settings output.blur_radius 48 output.blur_opacity 0.6
 cast settings output.blur_footer "Back shortly" output.blur_text_gap 20
-cast live footer "{datetime:%A, %d %B · %H:%M}"
+cast virtual footer "{datetime:%A, %d %B · %H:%M}"
 ```
 
 `output.pause_text` and `output.pause_color` remain aliases. `output.pause_font`
 and `output.blur_font` are config-file-only; edit the file and use `config reload`.
-Title, subtitle and footer are optional. `live footer "TEXT"` and
+Title, subtitle and footer are optional. `virtual footer "TEXT"` and
 `record footer "TEXT"` change the same shared solid-pause footer; use
 `settings output.blur_footer "TEXT"` for the blur footer. Their limit is 255 UTF-8
 bytes. `output.pause_text_gap` / `output.blur_text_gap` set title/subtitle distance
@@ -124,7 +124,7 @@ recording. The foreground daemon prints completion/error, and quit waits for it.
 `record pause` writes the configured solid screen plus silence. `record resume`
 clears solid pause unless the recording is cut. `record toggle` toggles only solid
 pause, never cut/start/stop. `record freeze|unfreeze` and
-`record blur [on|off|toggle]` / `record unblur` match live presentation effects.
+`record blur [on|off|toggle]` / `record unblur` match virtual presentation effects.
 Recording uses the same style settings but has independent visual flags.
 
 `record cut` interrupts file writing without ending the encoder/container.
@@ -135,7 +135,7 @@ the standalone guide also leaves the file cut. All controls require an existing
 recording. Pause/freeze/blur record silence; cut admits neither video nor audio.
 **Migration from v0.3:** use `record cut` where you previously used `record pause`
 to remove interruption time. Encoder/disk failures retain recoverable partial data
-and leave live controls operational.
+and leave virtual camera controls operational.
 
 `audio list` lists PipeWire sources. `audio mic|desktop|virtual on|off|toggle` controls
 lanes/virtual source; `audio mic|desktop source NAME` selects explicitly;
@@ -143,15 +143,15 @@ lanes/virtual source; `audio mic|desktop source NAME` selects explicitly;
 source; it starts off. A speaker-monitor source can include call participants;
 application capture avoids broad mixes where PipeWire supports it. Disappearing
 sources silence the lane and report errors; there is no broad-source fallback.
-Live pause/freeze/blur silences cast's optional virtual microphone. A physical mic selected
+Virtual camera pause/freeze/blur silences cast's optional virtual microphone. A physical mic selected
 directly by a conference app needs the app's own mute control. cast creates no
 physical-speaker playback route; video and audio devices are selected separately.
 
 `preset NAME|next|prev` applies composition-only named settings and configured cycle.
-`preview on|off|toggle` controls local preview; `preview target live|record` chooses
-its lane. Local LIVE/PAUSED/FROZEN/BLURRED/CUT/RECORDING labels stay out of exported frames.
+`preview on|off|toggle` controls local preview; `preview target virtual|record|stream` chooses
+its lane. Local RUNNING/PAUSED/FROZEN/BLURRED/CUT/RECORDING labels stay out of exported frames.
 `status [--json]` reports capabilities, source, layout, camera visibility, zoom,
-live/record state, path/active duration/countdown/finalization, audio routing, errors and drops.
+virtual/record/stream state, path/active duration/countdown/finalization, audio routing, errors and drops.
 `doctor` performs read-only dependency/device/directory checks with setup advice.
 `setup` prints virtual-camera, configuration and conferencing instructions without
 changing the system. `completions [bash|zsh|fish]` prints shell setup instructions;
@@ -161,8 +161,8 @@ a daemon or configuration file.
 Arch x86_64 release package and verifies its SHA-256 checksum. With no version it
 selects the latest release. Installation uses pacman and asks for sudo when needed;
 download-only saves a checked package and its checksum without installation.
-Stop the daemon before updating and restart it afterwards. `cast update v0.4`
-selects the release tag v0.4 and package version 0.4.0.
+Stop the daemon before updating and restart it afterwards. `cast update v0.7`
+selects the release tag v0.7 and package version 0.7.0.
 `panel` opens the optional Clay/SDL3 control panel (`PANEL=1` build). Closing it
 leaves the daemon running. See [panel behavior and exclusion](control-panel.md).
 `settings SECTION.KEY VALUE [SECTION.KEY VALUE ...]` applies an atomic batch of
@@ -175,7 +175,7 @@ For example: `cast settings camera.radius 16 camera.border_color "#80c9ff"`.
 and finalizes an existing recording. No command persists session changes to config.
 
 For a status bar, poll `cast status --json` and parse JSON, for example
-`cast status --json | jq -r '.live.state + " / " + .record.state'`.
+`cast status --json | jq -r '.virtual.state + " / " + .record.state'`.
 The last_error field retains the last reported failure; errors are also printed
 by the foreground daemon. A successful unrelated command does not erase evidence.
 
@@ -213,3 +213,44 @@ expansion. These controls never resume outputs, and solid pause covers them.
 Every existing cycle accepts `prev` as well as `next`. Previous wraps backwards
 through the configured order for layouts, presets and camera anchors, or through
 the fixed shape/aspect order; monitor cycling follows the Xorg monitor list.
+
+## Three outputs and streaming
+
+Virtual camera means the local conferencing output (`cast virtual`), Recording
+means a local file (`cast record`), and Streaming means one RTMP/RTMPS destination
+(`cast stream`). Physical-webcam composition remains `cast camera`.
+
+`virtual start|stop` explicitly enables/disables the local producer without
+changing other outputs. Start is privacy-paused. `status --json` describes all three
+lanes. `stream start` accepts asynchronous startup in solid pause;
+`stream resume` is the explicit reveal step. `stream stop` is safe and idempotent,
+including while connecting or retrying. `stream pause|resume|toggle`,
+`stream freeze|unfreeze`, `stream blur [on|off|toggle]` and `stream unblur` require an
+existing session. Toggle changes solid pause; it never starts/stops a broadcast.
+Resume clears solid pause only. Streaming continues real media time and has no Cut.
+
+`stream status [--json]` reports lifecycle state, independent presentation flags,
+a safe destination/service, session/connected durations, rolling outgoing bitrate,
+accepted-frame/audio and successful-write counters, bounded queue/drop information,
+retry progress and a sanitized error. Successful writes describe local
+transmission, not service acceptance or viewer delivery. No viewer counts are
+invented. Top-level `status --json` adds the same `stream` object alongside `virtual`.
+
+`settings stream.KEY VALUE [stream.KEY VALUE ...]` validates a session-only atomic
+batch. `stream.service twitch|youtube` fills quality presets; explicit quality
+values later in the batch override them. Stop before changing connection or
+encoder settings; presentation styling remains editable. `preview target
+virtual|record|stream` selects the actual lane’s effects before encoding.
+`annotations stream keys|clicks on|off` controls that lane’s annotations.
+
+`doctor` checks local codec/muxer/protocol/TLS availability, settings and stream-key
+file permissions without reading its value into output or probing an endpoint.
+See [streaming.md](streaming.md) for safe key-file creation and service recipes.
+
+This release intentionally replaces every virtual-camera `live` spelling:
+`cast live` → `cast virtual`, `--no-live` → `--no-virtual`, preview target `live` →
+`virtual`, annotations lane `live` → `virtual`, and `annotations.live_keys` /
+`annotations.live_clicks` → `annotations.virtual_keys` / `virtual_clicks`.
+Status replaces the `live` object with `virtual`; no duplicate legacy field remains.
+Obsolete commands/config values fail with migration guidance without executing an
+operation. Historical release notes retain their original names.

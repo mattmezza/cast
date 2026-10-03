@@ -1,5 +1,5 @@
 pkgbase = cast-git
-	pkgdesc = Screen and webcam presentation camera with local recording and a control panel
+	pkgdesc = Screen and webcam presentation camera with recording, RTMP streaming and a control panel
 	pkgver = 0.1.r8.3427382
 	pkgrel = 1
 	url = https://github.com/mattmezza/cast
@@ -12,6 +12,7 @@ pkgbase = cast-git
 	license = GPL-3.0-only
 	checkdepends = python
 	checkdepends = dbus
+	checkdepends = openssl
 	makedepends = git
 	makedepends = pkgconf
 	depends = glibc

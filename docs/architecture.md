@@ -2,7 +2,7 @@
 
 cast is one foreground C executable. Its client sends bounded NUL-separated arguments
 through an owned Unix socket. A serial event loop orders commands and acknowledges
-privacy transitions only after media queue barriers and neutral live-frame publication.
+privacy transitions only after media queue barriers and neutral virtual-frame publication.
 A separate lock protects single-instance ownership even when a socket is stale.
 
 Shared data is RGBA8, with explicit dimensions, stride, ownership and monotonic time.
@@ -28,7 +28,7 @@ Configuration uses maintained BSD-3-Clause-licensed inih, vendored without local
 A strict schema layer validates sections, units and duplicate keys with source lines.
 Precedence is defaults, config file, startup overrides, then session commands.
 
-Live and recording each have independent solid-pause, freeze and blur flags.
+Virtual camera, recording and streaming each have independent solid-pause, freeze and blur flags.
 Composition is copied or frozen first, then blurred and tinted; solid pause selects
 neutral content above both. Recording cut gates file admission above every visual
 mode. Freeze captures screen and camera together without transient keys/clicks.
@@ -75,3 +75,40 @@ Stage geometry places the screen opposite the camera anchor and allows overlap
 based on their aspect-preserving sizes. Shared gradient stops and reduced blurred
 backdrops fill uncovered regions. Screen masks also clip its pointer/click layers;
 logo and text alpha-blend above source layers before lane pause/freeze/blur selection.
+
+## Independent streaming lane
+
+The main loop composes a third frame with its own pause/freeze/blur and annotation
+flags. It shares source geometry and presentation resources, never the virtual-camera
+whole-output mirror. Streaming uses continuous monotonic media time; recording cut
+changes only the recording clock. Audio uses an independent streaming privacy gate.
+
+A bounded supervisor admits owned raw frames without waiting for network I/O. A
+`posix_spawn` child re-enters the same executable's private worker mode and owns FFmpeg
+H.264/AAC/FLV and RTMP/RTMPS state. Process isolation makes cancellation bounded even
+when a resolver or TLS implementation ignores FFmpeg's interrupt callback. There is
+no fork into a multithreaded encoder. A sealed, bounded shared-memory handoff holds
+`queue_frames` raw frames plus one current cadence frame (at most 512 MiB), and a
+one-second stereo audio ring. Only the newest eligible raw frame is encoded. Video scheduling includes AAC
+encoder priming so direct FLV submissions remain globally timestamp-ordered without
+a mux interleave backlog that could retain retired privacy media. Codec
+work, network writes and finalization never hold the daemon's status/control lock.
+
+Privacy epochs retire queued and converted-but-unsubmitted old media, purge audio
+and force a fresh keyframe. Ordinary presentation changes retain the connection.
+Already accepted codec/network media may remain downstream; a pause acknowledgement
+cannot retract bytes already sent. Lag/write deadlines retire a stalled child, and
+finite exponential backoff starts a fresh codec/mux session at the current privacy
+state. Stop cancels both the child and any pending retry.
+
+Only an owned regular mode-0600 key file is accepted. Its secret is read transiently
+inside the worker, never included in snapshots or diagnostics. TLS verifies peer
+certificates and hostnames using system trust or the configured CA file. Public
+status exposes lifecycle, privacy state, counters and sanitized authority information.
+
+The panel retains the existing field table, button/glyph helpers and transport client.
+Operate commands apply immediately; Compose stages per-field drafts and submits one
+validated atomic settings batch. Acknowledgements advance only the matching draft
+revision, so newer edits survive an older reply. Header, tabs, exclusion and feedback
+remain pinned while the body scrolls. Native preview target and state controls use
+cached bundled Inter geometry outside the outgoing composition.

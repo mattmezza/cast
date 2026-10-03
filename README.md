@@ -4,8 +4,8 @@
 
 Your screen, your camera, your call. `cast` is a foreground Linux utility written in C
 that composes screen capture and a webcam into an existing virtual camera, with optional
-presentation annotations, PipeWire audio and independent local recording. Runtime
-configuration and one CLI replace a scene editor or heavyweight GUI.
+presentation annotations, PipeWire audio, independent local recording and RTMP/RTMPS
+streaming. Runtime configuration and one CLI replace a scene editor or heavyweight GUI.
 
 Xorg is the primary backend. Optional Wayland capture uses the ScreenCast portal and
 PipeWire; selection, input and preview capabilities differ by backend. A conference
@@ -20,7 +20,7 @@ up-to-date Arch x86_64 system with curl installed:
 
 ```sh
 curl -fsSL --proto '=https' --proto-redir '=https' \
-  https://raw.githubusercontent.com/mattmezza/cast/v0.6/packaging/install.sh | sh -s -- v0.6
+  https://raw.githubusercontent.com/mattmezza/cast/v0.7/packaging/install.sh | sh -s -- v0.7
 cast setup
 ```
 
@@ -34,7 +34,7 @@ Virtual-camera setup is a separate step explained by `cast setup`; the installer
 does not create devices or change your configuration.
 
 ```sh
-cast update v0.6
+cast update v0.7
 cast completions
 ```
 
@@ -62,8 +62,7 @@ make -j
 ./cast doctor
 ```
 
-`make X11=1 WAYLAND=1` enables both backends. `make X11=0 WAYLAND=1` omits Xorg
-libraries entirely. `make check`, `make sanitize` and `make package` run verification,
+`make X11=1 WAYLAND=1` enables both backends. `make X11=0 WAYLAND=1` removes Cast’s direct Xorg build dependencies. `make check`, `make sanitize` and `make package` run verification,
 sanitizers and binary/source packaging respectively. `make check-unit` runs independent
 tests without needing socket bind/display permissions; `make check-xorg` runs the
 isolated Xvfb smoke, and `make benchmark` measures composition alone. Test dependencies (Python, Xvfb,
@@ -77,9 +76,11 @@ them with `sudo pacman -S --needed sdl3 sdl3_ttf`, build with
 `./cast panel` alongside the daemon. Closing the panel leaves capture running.
 See [panel controls and capture visibility](docs/control-panel.md).
 
-![Compact native control panel showing live synthetic output and focused sections](assets/control-panel.png)
+![Cast control panel with pinned output lanes and Operate and Compose tabs](assets/control-panel.png)
 
-Before live output, create an existing loopback device. These commands are for an
+*Private synthetic fixture; capture capabilities depend on the selected backend.*
+
+Before virtual camera output, create an existing loopback device. These commands are for an
 Arch user running the `linux` kernel to execute; cast does not run them:
 
 ```sh
@@ -104,16 +105,20 @@ cp -n examples/cast.conf ~/.config/cast/cast.conf
 
 The panel and preview are Xorg utility windows (`CastPanel` and `CastPreview`);
 window managers that float utilities, including mwm, center them automatically.
-The panel uses square controls with drawn icons. Home contains the Live and Recording
-controls; its Preview button toggles a separate floating window, available while
-navigating settings. A recording countdown temporarily uses that preview and closes
-it completely before recording begins.
+The panel follows the supplied **Operate / Compose** design. Its pinned header
+shows Virtual camera, Recording and Streaming, with global privacy and Preview
+controls. Compose opens dedicated pages from a flat section list; all settings
+are inline, with sticky Back and a pinned Apply/Revert bar. Alt+1…7 jump directly
+to sections, 1/2 switch tabs, and Escape goes back. Edits stay local until Apply
+or Enter; page and scroll restore when reopening the panel in the same session. Preview remains a separate floating window with three target
+pills. A recording countdown temporarily uses it and hides it before recording
+begins.
 
 The virtual camera starts with a neutral **Paused** frame at normal cadence. In another
-terminal, explicitly enable live video and then select `cast` in the conference:
+terminal, explicitly enable virtual video and then select `cast` in the conference:
 
 ```sh
-./cast live resume
+./cast virtual resume
 ./cast layout next
 ./cast pause
 ./cast resume
@@ -129,11 +134,11 @@ terminal, explicitly enable live video and then select `cast` in the conference:
 The daemon runs in the terminal and opens no window by default. Use `./cast preview on`
 for a local view of the actual output. The physical camera LED can turn on during
 startup privacy pause: cast opens the input device, while transmitted video stays
-neutral until explicit live resume.
+neutral until explicit virtual camera resume.
 
 The `stage` layout places an inset screen opposite the camera anchor. Resize either
 source while keeping its aspect ratio; they overlap when their sizes need it. Screen
-borders and rounded corners are configurable. Source in the panel includes screen
+borders and rounded corners are configurable. Compose → Background & stage includes screen
 appearance and a shared background with blurred screen/camera, solid fill, or a
 custom two/three-color gradient. Effects includes transparent logo and static text
 placement, with independent edge distances and font selection.
@@ -148,27 +153,47 @@ cast camera anchor bottom-right
 cast layout prev                     # every next cycle also accepts prev
 cast logo path /absolute/path/logo.png
 cast logo on
-cast text set 'Matteo · Live demo'
+cast text set 'Matteo · Demo'
 cast text font 'Noto Sans'
 cast text on
 ```
+
+Streaming sends the same composition and selected audio to one RTMP/RTMPS service,
+independently of recording and conferencing. Configure the server address and a
+mode-600 **stream-key file**, then use the explicit two-step start:
+
+```sh
+cast stream start           # connects privacy-paused
+cast stream status --json
+cast stream resume          # deliberately reveal the composition
+cast stream pause           # pause screen + silence, continuous connection
+cast stream stop
+```
+
+See [Twitch/YouTube setup and local streaming limits](docs/streaming.md).
+`cast --no-virtual` supports streaming/recording without a loopback device.
+
+**Migration from v0.6:** `cast live` is now `cast virtual`, `--no-live` is
+`--no-virtual`, `preview target live` becomes `preview target virtual`, and
+`annotations.live_keys/live_clicks` become `annotations.virtual_keys/virtual_clicks`.
+Status JSON has `virtual` and `stream` objects. Old spellings fail with migration
+instructions; there are no aliases.
 
 Camera content is mirrored by default; the screen stays unmirrored. Use
 `./cast camera mirror off` to disable it for the session, or set `mirror = false`
 in the configuration's `[camera]` section.
 
-`./cast live message "Back in five minutes"` changes the solid pause title for
-this session. **Settings → Pause screen** and **Blur screen** edit optional titles,
-subtitles, footers, text spacing, colours and blur strength. **Home** provides
-independent live and recording freeze/blur controls and recording cut/resume. The
-separate preview follows a
-successful Start record or Start live action automatically.
+`./cast virtual message "Back in five minutes"` changes the solid pause title for
+this session. **Compose → Settings → Pause screen** and **Blur screen** edit optional titles,
+subtitles, footers, text spacing, colours and blur strength. **Operate** provides
+independent output controls and recording cut/resume. Successful start/resume actions
+select that output’s preview target; a later manual choice takes precedence.
 
 ```sh
 cast camera anchor top             # middle of the top edge; also bottom/left/right
-cast live freeze
-cast live blur on                  # blur the frozen frame; unfreeze keeps blur on
-cast live pause                    # solid screen overrides freeze and blur
+cast virtual freeze
+cast virtual blur on                  # blur the frozen frame; unfreeze keeps blur on
+cast virtual pause                    # solid screen overrides freeze and blur
 cast settings output.pause_title "Back soon" output.pause_subtitle "{date:%A} {time:%H:%M}"
 ```
 
@@ -191,7 +216,7 @@ use solid pause for privacy. Blur is a presentation effect and can leave content
 recognizable. Recording pause now writes a solid screen with silence; **cut** removes
 interruption time from the same file. Pause, freeze and blur silence cast audio.
 
-For recording without a virtual camera, use `./cast --no-live`; for screen-only use
+For recording without a virtual camera, use `./cast --no-virtual`; for screen-only use
 `./cast --no-camera` and `./cast layout screen`. Device paths and output dimensions can
 also be passed at startup. Configuration precedence is defaults, file, startup flags,
 then session commands; commands never write configuration back to disk.

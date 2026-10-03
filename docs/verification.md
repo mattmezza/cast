@@ -474,3 +474,22 @@ ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
 ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
   python3 tests/test_stream_network.py --binary /tmp/cast-stream-asan/test_stream
 ```
+
+## v0.7 panel drill-in refinement
+
+The second UI round changes only the native panel. Private Xvfb workflows verify
+all seven dedicated Compose pages, sticky Back, `1`/`2`, `Alt+1…7`, sheet-first
+Escape, composition deep links and zoom reset. Dirty fields stay local; Enter
+applies the current section as one batch, keeps the page/scroll, and acknowledged
+edits remove the pinned draft bar. A long Camera page keeps Apply/Revert visible.
+Panel process close/reopen restores page, parent sheet and per-view scroll from
+session shared memory; unsent drafts are discarded on process exit. A new daemon
+socket session resets navigation. Config bytes are unchanged throughout.
+
+The native checks cover 360–800 logical pixel widths and 1x/2x density: equal
+44px lane chips, equal 30px meta-actions, a pinned 46px status bar, single-line
+16px status rows, bounded long connection/failure messages and whole-row clipping
+on the Compose list. A batched visual inspection and one confirmation cover
+Operate, the section list, long dirty pages, setup, failure and disconnection.
+No preview, daemon, IPC, command identifier, configuration schema, palette or
+bundled-font slot is changed by this refinement.

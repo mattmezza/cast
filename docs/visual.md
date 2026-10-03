@@ -62,7 +62,7 @@ Window capture uses an XComposite named pixmap so overlap by other windows does 
 select or capture those windows. Resizing and remapping reacquire the backing pixmap.
 Minimization/unmapping and destruction produce neutral output with actionable errors.
 Monitor availability and region bounds are checked on each acquisition. Interactive
-selection and capture do not change either output's privacy or recording state.
+selection and capture do not change any output's privacy or recording state.
 
 ## Stage and screen styling
 
@@ -114,7 +114,7 @@ transition, with configured limits and steps. Locked mode targets the cursor whe
 the zoom factor changes, then holds that viewport. Follow mode uses a dead zone and
 time-adjusted exponential smoothing; both clamp the viewport at source edges.
 Leaving the source holds the view until valid cursor metadata returns. Following
-advances once for a capture timestamp so live and recording retain identical screen
+advances once for a capture timestamp so all three outputs retain identical screen
 pixels even when their annotation switches differ.
 
 Xorg root/pixmap capture excludes the server cursor; cast draws a simple arrow using
@@ -158,13 +158,14 @@ Privacy/source boundaries synchronize and drain pending Xorg input, clear labels
 and rings, and discard input on the resume boundary. Modifier state notifications
 continue to be consumed while paused. If one independent output remains active,
 annotations can continue for that output; privacy-paused output frames remain neutral.
-Live and recording key/click switches are independently configurable. `keys clear`
+Virtual camera and recording key/click switches are independently configurable. `keys clear`
 clears existing annotation memory without changing the enabled switch.
 
 ## Preview and recursion
 
-The Xorg preview shows the selected live/record target with a local header containing
-LIVE/PAUSED/FROZEN and recording state. Its header is drawn in its X window after
+The Xorg preview shows the selected virtual/record/stream target. Its always-visible
+Virtual camera / Recording / Streaming pills and a local state strip sit outside
+the composition; the strip separates connection and presentation state. Its chrome is drawn in its X window after
 composition and is not added to the output frame. Preview submission follows the
 configured output cadence. Painting runs on a dedicated X connection/thread with
 one replaceable pending frame; a busy worker drops preview updates instead of
@@ -172,12 +173,11 @@ building a delay queue or stalling the virtual camera or controls. Conversion us
 cached image storage and a fast path for common Xorg visuals. The preview is a
 managed utility window with `WM_CLASS` `cast-preview` / `CastPreview`. Window
 managers that float utility windows (including mwm) center it automatically. Other
-window managers can use the class or utility type for a floating rule. Drag its
-header with the left mouse button to move it; use `cast preview off` to hide it and
+window managers can use the class or utility type for a floating rule. Drag the window using your window manager; use `cast preview off` to hide it and
 `cast preview on` to show it. Window creation, source acquisition and shutdown still
 depend on a responsive X server.
 
-The preview stays mapped during capture and live/record/privacy changes. On a state
+The preview stays mapped during capture and virtual/record/privacy changes. On a state
 or source boundary, its existing contents are cleared to a neutral background while
 the new state is painted. The worker prepares a server pixmap; the main connection
 installs it only if it belongs to the current state epoch. An older pending update
@@ -209,7 +209,7 @@ content is being replaced. Separate application-window capture retains the appli
 pixmap pixels even beneath the panel. The panel cannot be selected as a source while
 registered, including selecting its enclosing WM frame. Closing its authenticated connection removes registration.
 
-Panel and preview masking occurs before composition, so live, recording, zoom, fit,
+Panel and preview masking occurs before composition, so virtual, recording, zoom, fit,
 freeze and the panel's program preview receive already-masked source pixels. This
 covers underlying desktop content; it does not recover that content or remove arbitrary
 windows. The panel remains mapped throughout ordinary acquisition. Wayland portals
@@ -272,3 +272,8 @@ encoder starts and is excluded from Xorg monitor/region capture together with it
 window-manager frame. It is not an output overlay. Neutral masking covers screen
 content underneath the guide while it is visible; application-window capture
 excludes it naturally. Wayland uses the panel guide; it has no standalone guide.
+
+The native recording countdown uses bundled Inter numerals and a film-leader guide
+with Cancel (also Escape). Initial recording and cut-resume hide and acknowledge the
+whole preview footprint before admitting recorded media. Target pills can also be
+selected with keys 1/2/3; their decoration is never encoded.

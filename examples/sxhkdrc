@@ -5,7 +5,7 @@ super + shift + p
 super + shift + r
     cast resume
 super + p
-    cast live toggle
+    cast virtual toggle
 super + shift + space
     cast record toggle
 super + shift + c
@@ -39,6 +39,6 @@ super + control + shift + s
     cast record stop
 # Freeze holds content (silences cast virtual audio); pause still overrides freeze.
 super + control + f
-    cast live freeze
+    cast virtual freeze
 super + control + shift + f
-    cast live unfreeze
+    cast virtual unfreeze

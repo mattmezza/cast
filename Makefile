@@ -84,6 +84,8 @@ $(BUILD)/test_media: tests/test_media.c $(MEDIA_SOURCES) src/config.c vendor/ini
 $(BUILD)/test_stream: tests/test_stream.c $(MEDIA_SOURCES) src/config.c vendor/inih/ini.c src/cast.h src/media_internal.h src/stream.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -DCAST_TEST -o $@ $(filter %.c,$^) $(PKG_LIBS) $(LDLIBS)
+check-stream-sustained: $(BUILD)/test_stream
+	python3 tests/test_stream_sustained.py --binary $(BUILD)/test_stream
 check-stream: $(BUILD)/test_stream
 	$(BUILD)/test_stream
 	python3 tests/test_stream_network.py --binary $(BUILD)/test_stream
@@ -208,4 +210,4 @@ release-ci:
 	sh packaging/release.sh release-ci '$(VERSION)' '$(RELEASE_NOTES)' 1 1 '$(RELEASE_TAG)' 1
 clean:
 	rm -rf build cast
-.PHONY: FORCE all check check-unit check-stream check-panel-routes check-wayland check-wayland-unit check-xorg check-loopback check-panel benchmark sanitize install uninstall package-check package release-check release-ci release clean
+.PHONY: FORCE all check check-unit check-stream check-stream-sustained check-panel-routes check-wayland check-wayland-unit check-xorg check-loopback check-panel benchmark sanitize install uninstall package-check package release-check release-ci release clean

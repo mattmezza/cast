@@ -79,7 +79,7 @@ _cast() {
         annotations:3) offer='on off' ;;
         stream:1) offer='start stop pause resume toggle freeze unfreeze blur unblur status' ;;
             stream:2) case $first in blur) offer='on off toggle' ;; status) offer='--json' ;; esac ;;
-            virtual:1) offer='start stop status pause resume toggle freeze unfreeze blur unblur message title subtitle footer' ;;
+            virtual:1) offer='start stop pause resume toggle freeze unfreeze blur unblur message title subtitle footer' ;;
         virtual:2) [[ $first == blur ]] && offer='on off toggle' ;;
         record:1) offer='start stop pause resume toggle freeze unfreeze blur unblur cut cancel title subtitle footer' ;;
         record:2)

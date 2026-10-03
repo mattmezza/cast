@@ -12,7 +12,7 @@ licenses of the dynamically linked libraries below.
 | inih r60 | INI parsing with source-line callbacks | BSD-3-Clause, bundled LICENSE.txt |
 | FFmpeg libavcodec/libavformat/libavutil/libswscale/libswresample | MJPEG/local logo decode, conversion, software encoding, audio resampling and muxing | LGPL-2.1-or-later baseline; GPL build options can change the effective license |
 | Fontconfig | Resolve configured system font patterns and fallback glyphs | Distribution COPYING (MIT/permissive notices), installed with cast |
-| FreeType | Rasterize pause/blur text and cached static overlays | FreeType License (FTL), BSD-style credit clause, compatible with GPLv3 |
+| FreeType | Rasterize pause/blur text, static overlays and native preview Inter | FreeType License (FTL), BSD-style credit clause, compatible with GPLv3 |
 | PipeWire | Audio capture/mix source and optional portal video | MIT for library core; distribution package carries notices for its other components |
 | Xlib, Xext, RandR, Xi, Xfixes, XComposite | Optional Xorg capture/input/presentation | MIT/X11 family licenses from the distribution packages |
 | GLib/GIO/GObject | Optional Wayland async D-Bus portal and FD passing | LGPL-2.1-or-later |
@@ -54,13 +54,18 @@ your distribution package metadata before making a redistributable release.
 
 Build tools are a C compiler, GNU make and pkg-config. Python is used only for
 integration tests; no Python interpreter, test fixtures, compiler or privileged
-input device is required for normal runtime. Xorg dependencies are absent with
-`X11=0`; portal GLib dependencies are absent with `WAYLAND=0`. PipeWire audio and
+input device is required for normal runtime. Cast introduces no direct Xorg dependency with
+`X11=0` (distribution FFmpeg libraries may still pull Xorg transitively); portal GLib dependencies are absent with `WAYLAND=0`. PipeWire audio and
 FFmpeg, Fontconfig and FreeType remain required in either build. A usable system
 font is required for output text, with Noto Sans as the default. Headless builds have no GUI toolkit dependency. `PANEL=1` adds the optional Clay
 layout library (vendored v0.14, MIT), SDL3 and SDL3_ttf (zlib licenses). The bundled
-Inter panel font is SIL OFL 1.1, with its unmodified license installed alongside
-Clay and SDL3_ttf notices. The panel is C and does not introduce a browser runtime.
+Inter UI font is SIL OFL 1.1. Xorg preview also uses the embedded Inter font
+through the existing FreeType dependency, including with `PANEL=0`. Its unmodified
+license is installed whenever the panel or Xorg preview is built. The panel is C and does not introduce a browser runtime.
 The development machine uses a locally built static SDL3_ttf 3.2.2 SDK because
 the system package is absent; system SDL3, FreeType and HarfBuzz remain dynamic.
 Standard builds use the distribution's SDL3_ttf package.
+
+Streaming reuses FFmpeg H.264/AAC/FLV and RTMP/RTMPS support; it adds no runtime
+library. Test-only local TLS fixtures require the `openssl` command, and native
+panel integration uses Xvfb, xdotool and xclip. No such test tools are needed to run Cast.

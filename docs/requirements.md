@@ -36,7 +36,7 @@ hardware compatibility. Integration-only acceptance remains unchecked below.
 - [x] Expanded private D-Bus portal lifecycle execution in a normal session.
 - [x] Kernel loopback consumer pixels and physical PipeWire virtual-source privacy silence.
 - [ ] Real Wayland portal streams, physical hotplug and user keyboard/IME acceptance.
-- [x] Short full-pipeline 1080p30 live/record/both CPU/RSS/fps/drop samples.
+- [x] Short full-pipeline 1080p30 virtual/record/both CPU/RSS/fps/drop samples.
 - [ ] Remote conferencing compatibility, endurance, physical AV drift and glass-to-glass latency.
 
 See verification.md for measured results and environment restrictions, and
@@ -80,3 +80,20 @@ the user; the application does not load modules or change system configuration.
 
 All composition changes preserve privacy/output and recording state, remain
 session-only, and use shared platform-independent rendering.
+
+## v0.7 native redesign and streaming
+
+| Requirement | Implementation | Verification |
+|---|---|---|
+| Three independently controlled output lanes; intentional virtual rename without aliases | main.c, commands.c, config.c, state.c | Old CLI/config/status spellings rejected before mutation; three-output decoded daemon fixture |
+| Independent H.264/AAC FLV RTMP/RTMPS worker | stream.c, audio.c, media.c | Decoded local RTMP AV, actual TLS trust/hostname and publish-denial fixtures |
+| Bounded cancellation, raw queue, privacy epochs and finite reconnects | stream.c | Blocked DNS/TLS/write, in-flight retired frame, reconnect headers and stale-pixel tests |
+| Safe key-file and diagnostics handling | stream.c | Ownership/mode/type/size/link tests and random-secret redaction |
+| Twitch/YouTube quality presets and generic destination | config.c, panel.c, docs/streaming.md | Preset precedence tests; official guidance checked; account acceptance remains manual |
+| Pinned lanes with Operate/Compose and acknowledged drafts | panel.c | Routed command tests and native 1×/2× workflows, 360–800 logical widths |
+| Independent preview target pills, local state and countdown Cancel | x11.c, preview_text.c | Private Xorg SHM/fallback target, countdown and first-recorded-frame checks |
+| Optional panel/Xorg boundaries retained | Makefile, platform.c | Wayland-only panel/headless Werror unit and decoded three-output checks; no direct forbidden dependencies |
+
+Public broadcasts, actual service credentials and real Wayland compositor acceptance
+are not claimed by these private fixtures. Existing physical acceptance results above
+remain historical; v0.7 automation uses synthetic media only.

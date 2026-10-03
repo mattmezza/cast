@@ -108,7 +108,7 @@ complete -c cast -n '__cast_at keys mode' -a 'shortcuts all'
 complete -c cast -n '__cast_at annotations' -a 'virtual record stream'
 complete -c cast -n '__cast_at annotations virtual; or __cast_at annotations record; or __cast_at annotations stream' -a 'keys clicks'
 complete -c cast -n '__cast_at annotations virtual keys; or __cast_at annotations virtual clicks; or __cast_at annotations record keys; or __cast_at annotations record clicks' -a 'on off'
-complete -c cast -n '__cast_at virtual' -a 'start stop status pause resume toggle freeze unfreeze blur unblur message title subtitle footer'
+complete -c cast -n '__cast_at virtual' -a 'start stop pause resume toggle freeze unfreeze blur unblur message title subtitle footer'
 complete -c cast -n '__cast_at record' -a 'start stop pause resume toggle freeze unfreeze blur unblur cut cancel title subtitle footer'
 complete -c cast -n '__cast_at virtual blur; or __cast_at record blur' -a 'on off toggle'
 complete -c cast -n '__cast_at record start' -F

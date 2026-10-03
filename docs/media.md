@@ -25,7 +25,7 @@ buffer was queued in the current epoch, so a late old exposure cannot bypass the
 boundary drain. Hardware latency still needs acceptance testing. A camera temporarily awaiting its next frame remains available for
 later acquisition.
 
-Live output opens an existing V4L2 output device and negotiates the exact configured
+Virtual camera opens an existing V4L2 output device and negotiates the exact configured
 canvas size as YUYV, RGB24 or BGR32. It converts the composed RGBA frame and writes in
 nonblocking mode. Exclusive-caps loopback advertisement is dynamic; the known
 v4l2loopback driver can negotiate OUTPUT even while advertising CAPTURE. A busy
@@ -66,7 +66,7 @@ to a device clock. This limits queue growth; measured physical AV latency/drift 
 long session remains a hardware acceptance item.
 
 The optional named virtual source defaults to `cast-microphone`. Its callbacks read the
-same mix, but live pause and live freeze force silence independently of local recording.
+same mix, but virtual camera pause and virtual freeze force silence independently of local recording.
 Off/failed lanes contribute silence. Each barrier clears capture rings, trims buffers
 older than the new monotonic boundary and flushes PipeWire stream queues. Already
 consumed audio in a conferencing application lies outside cast's control. cast cannot
@@ -94,8 +94,8 @@ active edge with silence. Resume starts a new active segment in the same open fi
 wall-clock time spent paused is removed from both media timelines. Frames older than
 the current admission boundary are rejected. Already accepted codec work before a
 privacy boundary may finish. A recording privacy barrier waits for any such in-flight
-codec call before acknowledgement; live neutral video and virtual-audio silence are
-published first. Finalization never holds the queue/status lock, and live privacy does
+codec call before acknowledgement; virtual neutral video and virtual-audio silence are
+published first. Finalization never holds the queue/status lock, and virtual privacy does
 not wait for a recording that is already finalizing.
 
 `record stop` closes admission immediately and acknowledges `recording finalizing: PATH`.
@@ -115,7 +115,7 @@ Runtime paths are interpreted by the daemon, so relative paths use its working d
 
 Encoder, write, final-I/O and fsync failures stop only the recording and report the
 filename/error. They preserve the started partial file and allow a later recording;
-live output keeps its independent path. Failure during initial setup removes the new,
+virtual camera output keeps its independent path. Failure during initial setup removes the new,
 unstarted file. Matroska uses clusters limited to one second or one MiB to improve
 partial-file recovery opportunities. This does not promise that a crash or full disk
 leaves every frame decodable. Ordinary MP4 also depends on completed indexes/trailer.
@@ -134,21 +134,21 @@ permissions/free space with `cast doctor` before long captures.
 `tests/test_media.c` opens real FFmpeg encoders/muxers, feeds synthetic RGBA frames and
 480-sample tone buffers, then decodes both streams through FFmpeg. It verifies:
 
-- Simultaneous live/recording and recording-only paths, repeated same-file pauses, removal
+- Simultaneous virtual/recording and recording-only paths, repeated same-file pauses, removal
   of a 600 ms interruption, audio energy and AV timing after resume.
 - Privacy invalidation of queued green frames, rejection of an old frame after resume,
   and absence of an injected sensitive-audio pulse in decoded output.
 - A bounded full queue and a 300 ms delay while the encoder mutex is held, with status,
-  filename, duration, live writing, stop and live privacy during finalization remaining
+  filename, duration, virtual writing, stop and virtual privacy during finalization remaining
   responsive; new recording is rejected until finalization ends.
 - Injected encoder failure and ENOSPC in the recording write callback, retention of the
-  partial file, operational live output and a successfully decoded next recording.
+  partial file, operational virtual camera output and a successfully decoded next recording.
 - Clipped microphone/desktop mixing, independent virtual silence, stale-buffer rejection,
   disabled lanes, no overwrite and preservation of the camera after failed reconfigure.
 
 An optimized run on 2026-10-01 decoded 32 video frames for about 1.060 seconds of active
 recording; AAC ended at 1.066 seconds and the largest video timestamp gap was 34 ms.
-The delayed encoder dropped 16 burst frames; the combined status/live/stop/privacy calls
+The delayed encoder dropped 16 burst frames; the combined status/virtual/stop/privacy calls
 completed in 0.41 ms. These are small 160x90 synthetic acceptance results, not 1080p30
 performance or a physical latency measurement. Address/undefined sanitizer verification
 of the media suite also passed; the complete record is in [verification.md](verification.md).
@@ -171,3 +171,20 @@ Long-run physical AV drift, conference receive-path compatibility and glass-to-g
 latency remain acceptance work. Follow [hardware-acceptance.md](hardware-acceptance.md).
 Actual short-run throughput and memory are recorded in [verification.md](verification.md).
 No kernel module or system audio configuration was changed by these tests.
+
+## Streaming
+
+`cast stream start` opens one configured RTMP/RTMPS destination in solid privacy pause.
+`cast stream resume` explicitly reveals it. Its H.264/AAC FLV encoders, bounded raw
+queue and continuous media clock are separate from recording. Pause, freeze and blur
+silence this lane independently; there is no streaming cut. Group resume restores
+only outputs that group pause changed, and never starts a stopped output.
+
+The worker consumes current frames at the configured canvas cadence, dropping stale
+raw work before encoding. Audio reads a 60 ms delayed horizon; unavailable samples
+become silence. Retries create fresh headers/keyframes and retain current privacy
+state. DNS, TLS and blocked writes run in a cancellable isolated child, keeping
+capture, controls and the other outputs responsive. See [architecture](architecture.md)
+for the bounded handoff and privacy boundary, [streaming setup](streaming.md) for
+credentials and service presets, and [verification](verification.md) for measured
+protocol behavior. Actual Twitch/YouTube account acceptance remains a manual test.

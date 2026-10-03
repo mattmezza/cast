@@ -66,7 +66,7 @@ aspect changes use centered cropping with bounded offsets. Circle uses a square 
 Camera content is mirrored by default; the screen stays unmirrored. Set `mirror = false`
 in `[camera]` to disable it persistently, or use `cast camera mirror off` for the session.
 
-`cast live message "TEXT"` changes `output.pause_text` for the session immediately
+`cast virtual message "TEXT"` changes `output.pause_text` for the session immediately
 without resuming video. `cast settings SECTION.KEY VALUE [SECTION.KEY VALUE ...]`
 applies a validated atomic session batch through the same schema and restart rules
 as reload. Settings and panel controls do not write the selected config file.
@@ -196,8 +196,8 @@ The following table is the supported schema. `examples/cast.conf` includes every
 | keys | background | `#20252b` | #RRGGBB |
 | keys | filter | `Super+Pause,Super+F9,Super+F10,Super+F11,Super+F12,Super+Shift+P,Super+Shift+R,Super+P,Super+Shift+Space,Super+Shift+C,Super+=,Super+-,Super+Shift+A,Super+Shift+L,Super+Shift+D,Super+Shift+M,Super+Shift+S,Super+Z,Super+Shift++,Super+Shift+_,Super+Shift+K,Super+Shift+B,Super+Shift+V,Ctrl+Super+Shift+R,Ctrl+Super+Shift+S,Ctrl+Super+F,Ctrl+Super+Shift+F` | Literal string |
 | keys | navigation | `Left,Right,Up,Down,Home,End,Page_Up,Page_Down,Escape,Tab,Return,BackSpace,Delete` | Literal string |
-| annotations | live_keys | `true` | true / false |
-| annotations | live_clicks | `true` | true / false |
+| annotations | virtual_keys | `true` | true / false |
+| annotations | virtual_clicks | `true` | true / false |
 | annotations | record_keys | `true` | true / false |
 | annotations | record_clicks | `true` | true / false |
 | audio | mic | `false` | true / false |
@@ -216,8 +216,24 @@ The following table is the supported schema. `examples/cast.conf` includes every
 | record | preset | `veryfast` | Literal string |
 | record | countdown | `0` | 0–60 (integer) |
 | record | queue | `8` | 1–120 (integer) |
+| stream | service | `custom` | custom,twitch,youtube |
+| stream | server_url | `` | Bounded rtmp:// or rtmps:// server prefix; no key/userinfo |
+| stream | key_file | `` | Absolute owned regular mode-600 stream-key file; no symlink |
+| stream | tls_ca_file | `` | Optional absolute CA trust file; empty uses system trust |
+| stream | video_bitrate_kbps | `2500` | 100–50000 kbps |
+| stream | audio_bitrate_kbps | `128` | 32–320 kbps |
+| stream | encoder_preset | `veryfast` | ultrafast,superfast,veryfast,faster,fast,medium,slow,slower,veryslow |
+| stream | queue_frames | `3` | 1–120 raw frames; freshest frame selected before encoding |
+| stream | lag_ms | `250` | 50–5000 ms |
+| stream | connect_timeout_ms | `5000` | 100–30000 ms |
+| stream | write_timeout_ms | `3000` | 100–30000 ms |
+| stream | reconnect_attempts | `3` | 0–10 retries after initial attempt |
+| stream | reconnect_initial_ms | `500` | 100–10000 ms |
+| stream | reconnect_max_ms | `4000` | 100–30000 ms; at least initial delay |
+| annotations | stream_keys | `true` | true / false |
+| annotations | stream_clicks | `true` | true / false |
 | preview | enabled | `false` | true / false |
-| preview | target | `live` | live,record |
+| preview | target | `virtual` | virtual,record,stream |
 | ipc | socket | `` | Literal string |
 | ipc | timeout_ms | `5000` | 100–30000 (integer) |
 
@@ -225,7 +241,7 @@ Capture kind=window selects the active Xorg window once at startup; interactive 
 
 ## Pause and blur text
 
-Solid pause and blur share their configured styles across live and recording;
+Solid pause and blur share their configured styles across virtual, recording and streaming;
 the output flags remain independent. Set title, subtitle and footer to empty values
 for a screen with no text. `pause_text` aliases `pause_title`, and `pause_color`
 aliases `pause_background`; specifying either spelling twice is a duplicate.
@@ -324,3 +340,30 @@ literal (its braces are not pause/blur placeholders). Unlike pause/blur fonts,
 a Fontconfig pattern such as `:file=/absolute/path/font.ttf`. Fontconfig may choose
 a fallback for an unavailable family; an explicit unreadable font file is rejected.
 Runtime updates remain session-only.
+
+## Streaming configuration
+
+Only the stream-key file path is stored in configuration. Server URLs may use
+RTMP or RTMPS, never arbitrary FFmpeg schemes, credentials or embedded stream keys.
+No tilde, environment or command expansion occurs. An empty server/key configuration
+keeps streaming unconfigured and never starts it. Optional tls_ca_file selects a CA trust file
+for a private ingest; certificate and hostname verification stay
+enabled. Key-file preparation and official service settings are in [streaming.md](streaming.md).
+
+The service preset fills useful quality defaults; explicit INI bitrate/preset keys
+win regardless of file order. Runtime batch values after stream.service override its
+quality selection. Resolution and fps remain shared with the composition. Stop a
+connecting/streaming/reconnecting/stopping session before changing [stream] settings.
+All resource validation is atomic; failed preparation preserves the prior settings
+and unrelated outputs. Runtime edits never write the configuration automatically.
+
+The configured raw video queue plus one cadence frame is bounded to 512 MiB per
+streaming session. Oversized resolution/queue combinations fail with instructions to
+reduce them. The audio ring is bounded to one second of stereo 48 kHz samples.
+Backpressure drops older raw frames before encoding, and excessive network lag
+retires/reconnects the session rather than replaying a stale backlog.
+
+Migration: annotations.live_keys/live_clicks become virtual_keys/virtual_clicks,
+and preview.target=live becomes virtual. Old names are rejected with guidance.
+Add stream_keys/stream_clicks under [annotations] and the [stream] fields above;
+omitted values already use their documented defaults.

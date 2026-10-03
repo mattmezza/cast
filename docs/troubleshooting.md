@@ -39,9 +39,9 @@ when consent fails. Portal support differs by desktop. See [Wayland](wayland.md)
 
 ## Privacy and routing
 
-`cast live resume` explicitly enables the live picture. `cast record resume`
+`cast virtual resume` explicitly enables the virtual picture. `cast record resume`
 continues an existing paused file. `cast resume` restores only lanes that the
-previous group pause changed. A neutral frame is expected while live is paused.
+previous group pause changed. A neutral frame is expected while virtual is paused.
 Freeze deliberately repeats a composed frame; use pause for privacy.
 
 cast cannot mute a physical microphone selected directly in the call application.
@@ -60,7 +60,7 @@ understand your PipeWire graph. Audio and video are separate conference devices.
 
 Recording pause removes the interruption from the same file's timeline; it does
 not suspend FFmpeg. Check `cast status --json` for errors and frame drops. Storage
-failure stops recording while the control/live loop remains operational. Keep
+failure stops recording while the control/virtual loop remains operational. Keep
 partial recordings: Matroska is the default for recoverability; recovery depends
 on which packets and indexes reached storage. Try remuxing a copy with
 `ffmpeg -i partial.mkv -c copy recovered.mkv`; successful recovery is not guaranteed.
@@ -83,7 +83,7 @@ to a whole-desktop capture; errors and neutral frames are deliberate.
 
 If commands cannot connect, check the selected runtime socket and ensure daemon
 and CLI use the same user and instance. XDG_RUNTIME_DIR must be absolute, owned
-by you and private. Do not manually remove a socket belonging to a live daemon.
+by you and private. Do not manually remove a socket belonging to a running daemon.
 Only stale sockets safely owned by the current user are cleaned automatically.
 
 If an invalid edited config prevents routing, use `cast --socket /absolute/path/cast.sock
@@ -92,11 +92,11 @@ configuration checks remain strict.
 
 ## No local camera view after starting cast
 
-`cast` runs as a foreground terminal daemon. Preview defaults off and live output
+`cast` runs as a foreground terminal daemon. Preview defaults off and virtual camera output
 starts privacy-paused. In another terminal, run `cast preview on` for the local
-window, then `cast live resume` to enable the composition. Select the loopback
+window, then `cast virtual resume` to enable the composition. Select the loopback
 camera in the conferencing app after producer startup. The physical webcam LED
-can be on while live is paused because cast has opened its input; privacy pause
+can be on while virtual is paused because cast has opened its input; privacy pause
 controls transmitted video and the virtual audio mix. Use `cast quit` to release
 the camera, then restart the daemon after rebuilding or upgrading its executable.
 

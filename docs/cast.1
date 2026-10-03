@@ -1,6 +1,6 @@
-.TH CAST 1 "October 2026" "cast 0.6.0" "User Commands"
+.TH CAST 1 "October 2026" "cast 0.7.0" "User Commands"
 .SH NAME
-cast \- presentation camera and recorder
+cast \- presentation camera, recorder and RTMP streamer
 .SH SYNOPSIS
 .B cast
 [options] [command]
@@ -15,7 +15,7 @@ completion is unknown: inspect status before repeating a non\-idempotent command
 .PP
 Startup flags appear before the command: \-\-config PATH, \-\-socket PATH,
 \-\-backend xorg|wayland, \-\-output\-device PATH, \-\-camera\-device PATH,
-\-\-width N, \-\-height N, \-\-fps N, \-\-no\-live, \-\-no\-camera,
+\-\-width N, \-\-height N, \-\-fps N, \-\-no\-virtual, \-\-no\-camera,
 \-\-mic\-source NAME, \-\-desktop\-source NAME, \-\-record\-dir PATH,
 \-\-container NAME, \-\-video\-codec NAME, \-\-audio\-codec NAME, \-\-countdown SECONDS.
 Selecting an audio source does not enable its lane: configure or explicitly enable it.
@@ -71,21 +71,21 @@ best effort. Consecutive identical labels collapse as j, jx2, jx3. A bounded
 queue retains recent labels for keys.timeout_ms (3000 ms by default); repeat
 counts refresh that row, and older rows expire independently.
 Configure keys.filter to exclude every cast\-control shortcut you bind.
-annotations live|record keys|clicks on|off selects annotation visibility per lane.
+annotations virtual|record|stream keys|clicks on|off selects annotation visibility per lane.
 .PP
 pause solid-pauses both applicable outputs and cancels pending start/cut-resume
 countdown. Recording continues writing neutral video and silence. resume restores
 only remembered solid states, never starts a recording or clears a cut. Independent
 solid commands supersede remembered restoration; freeze/blur/cut preserve it.
 .PP
-live pause|resume|toggle controls solid privacy pause. live freeze|unfreeze
-holds/releases screen and camera together. live blur [on|off|toggle] applies a
+virtual pause|resume|toggle controls solid privacy pause. virtual freeze|unfreeze
+holds/releases screen and camera together. virtual blur [on|off|toggle] applies a
 configurable blurred/tinted composition with optional title/subtitle/footer; bare blur
 turns it on, unblur turns it off. Blur overlays freeze; solid pause overrides both.
 Pause/freeze/blur silence cast audio. Blur can leave content recognizable: use solid
 pause for privacy. Neither unfreeze nor unblur resumes a solid pause.
 .PP
-live message "TEXT" changes the shared solid-pause title without changing output
+virtual message "TEXT" changes the shared solid-pause title without changing output
 states. Empty title/subtitle/footer values are valid. settings output.pause_title TEXT,
 output.pause_subtitle TEXT, output.pause_background #RRGGBB and
 output.pause_foreground #RRGGBB edit solid-screen style. The corresponding blur_title,
@@ -95,7 +95,7 @@ blur_font are config-file-only, default Noto Sans, applied through config reload
 The optional pause_footer/blur_footer is centered near the bottom. Footer sizes
 pause_footer_size/blur_footer_size default to 18 output pixels (8..256).
 pause_text_gap/blur_text_gap set title/subtitle distance independently of font size
-(0..512 output pixels, default 12). live/record footer TEXT changes the shared
+(0..512 output pixels, default 12). virtual/record footer TEXT changes the shared
 solid-pause footer; settings output.blur_footer TEXT changes the blur footer.
 Titles allow 127 UTF-8 bytes; subtitles and footers allow 255. {date}, {time}, {datetime} expand
 in local time; a colon adds a strftime format, e.g. {date:%Y-%m-%d} or {time:%H:%M}.
@@ -105,7 +105,7 @@ record start [PATH] creates one file without overwriting. record stop requests
 finalization; status --json reports record.finalizing; quit waits for completion.
 record pause writes the solid title/subtitle/footer screen and silence. record resume clears
 solid pause unless cut; record toggle toggles solid pause, never cut/start/stop.
-record freeze|unfreeze and record blur [on|off|toggle] / unblur match live effects,
+record freeze|unfreeze and record blur [on|off|toggle] / unblur match virtual effects,
 with independent flags and shared styles.
 .PP
 record cut interrupts video/audio file admission. record resume from cut reuses the
@@ -127,15 +127,15 @@ audio mic|desktop gain 80% sets gain (0..400%). Desktop capture requires an expl
 source; it starts off. A speaker\-monitor source can include call participants;
 application capture avoids broad mixes where PipeWire supports it. Disappearing
 sources silence the lane and report errors; there is no broad\-source fallback.
-Live pause/freeze/blur silences cast's optional virtual microphone. A physical mic selected
+Virtual camera pause/freeze/blur silences cast's optional virtual microphone. A physical mic selected
 directly by a conference app needs the app's own mute control. cast creates no
 physical\-speaker playback route; video and audio devices are selected separately.
 .PP
 preset NAME|next|prev applies composition\-only named settings and configured cycle.
-preview on|off|toggle controls local preview; preview target live|record chooses
-its lane. Local LIVE/PAUSED/FROZEN/RECORDING labels stay out of exported frames.
+preview on|off|toggle controls local preview; preview target virtual|record|stream chooses
+its lane. Local RUNNING/PAUSED/FROZEN/RECORDING labels stay out of exported frames.
 status [\-\-json] reports capabilities, source, layout, camera visibility, zoom,
-live/record state, path/active duration/countdown/finalization, audio routing, errors and drops.
+virtual/record state, path/active duration/countdown/finalization, audio routing, errors and drops.
 doctor performs read\-only dependency/device/directory checks with setup advice.
 setup prints virtual\-camera and conferencing instructions without changing the system.
 completions [bash|zsh|fish] prints shell setup instructions;
@@ -155,7 +155,7 @@ reset restores effective composition defaults only; quit cleanly shuts down
 and finalizes an existing recording. No command persists session changes to config.
 .PP
 For a status bar, poll cast status \-\-json and parse JSON, for example
-cast status \-\-json | jq \-r '.live.state + " / " + .record.state'.
+cast status \-\-json | jq \-r '.virtual.state + " / " + .record.state'.
 The last_error field retains the last reported failure; errors are also printed
 by the foreground daemon. A successful unrelated command does not erase evidence.
 .PP
@@ -189,3 +189,30 @@ Every next cycle also accepts prev, wrapping backwards through the same configur
 order. These commands change session settings; cast never writes user config.
 .SH SEE ALSO
 sxhkd(1), ffmpeg(1), pw-cli(1)
+
+.SH STREAMING
+cast stream start opens one RTMP/RTMPS destination asynchronously, privacy-paused.
+cast stream resume explicitly reveals the composition; connection success alone
+never reveals it. stop ends transmission and cancels every retry.
+.PP
+stream pause|resume|toggle, freeze|unfreeze, blur [on|off|toggle], and unblur require
+an existing session. Resume clears solid pause only; blur remains above freeze.
+Solid pause, freeze and blur send silence. Streaming keeps continuous media time
+and has no recording-style cut operation. stream status [\-\-json] reports local
+lifecycle, presentation, write/queue/drop/retry statistics and sanitized errors;
+network writes do not prove service or viewer delivery.
+.PP
+settings stream.KEY VALUE changes the session only. Connection/encoder settings
+are locked while active: stop first. Store only an absolute stream-key file path
+in [stream]. It must be a regular file owned by you, with mode 600, no symlinks,
+and one nonempty line. Edit it locally; never put the actual secret in a command,
+URL, config, or panel field. RTMPS verifies certificates and hostnames.
+.PP
+preview target virtual|record|stream selects a lane. annotations stream keys|clicks
+on|off controls streaming annotations. virtual start|stop enables/disables local
+virtual-camera output independently; start is privacy-paused.
+.SH MIGRATION
+The old live command is now virtual; \-\-no\-live is \-\-no\-virtual.
+preview target live becomes virtual. annotations.live_keys/live_clicks become
+annotations.virtual_keys/virtual_clicks. Status JSON uses virtual and stream objects.
+Old spellings fail with migration instructions and execute no operation.
