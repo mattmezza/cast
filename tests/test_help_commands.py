@@ -99,7 +99,15 @@ with tempfile.TemporaryDirectory(prefix="cast-help-test-") as directory:
     assert bash_complete("cast", "camera", "mirror", "") == {"on", "off", "toggle"}
     assert bash_complete("cast", "camera", "aspect", "4", ":", "") == {"3"}
     assert bash_complete("cast", "annotations", "record", "keys", "") == {"on", "off"}
-    assert bash_complete("cast", "preview", "target", "") == {"virtual", "record"}
+    assert bash_complete("cast", "preview", "target", "") == {"virtual", "record", "stream"}
+    assert {"virtual", "stream"} <= bash_complete("cast", "")
+    assert "live" not in bash_complete("cast", "")
+    assert {"start", "stop", "pause", "resume", "toggle", "freeze", "unfreeze", "blur", "unblur", "status"} == bash_complete("cast", "stream", "")
+    assert bash_complete("cast", "stream", "blur", "") == {"on", "off", "toggle"}
+    assert bash_complete("cast", "stream", "status", "") == {"--json"}
+    assert bash_complete("cast", "annotations", "") == {"virtual", "record", "stream"}
+    assert bash_complete("cast", "settings", "stream.service", "") == {"custom", "twitch", "youtube"}
+    assert "veryfast" in bash_complete("cast", "settings", "stream.encoder_preset", "")
     assert bash_complete("cast", "audio", "virtual", "") == {"on", "off", "toggle"}
     assert bash_complete("cast", "completions", "--script", "") == set(SCRIPTS)
     keys = bash_complete("cast", "settings", "")

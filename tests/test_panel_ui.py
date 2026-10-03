@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -123,7 +124,9 @@ def exercise():
                 xdo("key", "--clearmodifiers", "BackSpace")
             wait_until(lambda: ui().get("edit_text") == value, "typing did not update local draft")
             if apply:
+                before = ui()["frame"]
                 xdo("key", "--clearmodifiers", "Return")
+                wait_until(lambda: ui()["frame"] > before, "Enter was not handled")
                 acknowledge()
 
         def capture(name):
@@ -166,7 +169,16 @@ def exercise():
             operate(0)
             click_widget(30)
             wait_until(lambda: not state()["virtual"]["paused"], "Resume virtual camera failed")
-            click_widget(31)
+            # A genuinely stopped daemon makes Pending observable without slowing rendering.
+            os.kill(daemon.pid, signal.SIGSTOP)
+            try:
+                click_widget(31)
+                wait_until(lambda: ui().get("command_pending"), "Pending feedback missing", timeout=1)
+                before = ui()["frame"]
+                wait_until(lambda: ui()["frame"] > before, "panel blocked on daemon acknowledgement", timeout=1)
+            finally:
+                os.kill(daemon.pid, signal.SIGCONT)
+            acknowledge()
             click_widget(36)
             wait_until(lambda: state()["virtual"]["frozen"] and state()["virtual"]["blurred"], "stacked effects failed")
             click_widget(30)
@@ -215,7 +227,8 @@ def exercise():
             navigate(0)
             original_zoom = state()["zoom"]
             edit("zoom.factor", "99", apply=True)
-            assert state()["zoom"] == original_zoom and ui()["error"]
+            wait_until(lambda: ui()["error"], "invalid draft error did not arrive")
+            assert state()["zoom"] == original_zoom
             edit("zoom.factor", "3.25", apply=True)
             wait_until(lambda: state()["zoom"] == 3.25, "Enter did not apply valid draft")
             navigate(2)
@@ -233,6 +246,14 @@ def exercise():
             edit("output.pause_text", "", apply=True)
             wait_until(lambda: state()["virtual"]["message"] == "", "optional title could not be blank")
             edit("output.pause_footer", "Returns {date:%A, %d %B} at {time:%H:%M}", apply=True)
+            # Exercise SDL's actual clipboard path, including UTF-8 and optional footer.
+            unicode_footer = "Back soon · café ☕ — {time:%H:%M}"
+            edit("output.pause_footer", "")
+            subprocess.run(["xclip", "-selection", "clipboard"], input=unicode_footer,
+                           env=environment, text=True, stdout=log, stderr=log, check=True)
+            xdo("key", "--clearmodifiers", "ctrl+v", "Return")
+            wait_until(lambda: widget("output.pause_footer")["value"] == unicode_footer,
+                       "UTF-8 clipboard footer did not apply")
             capture("compose-presentation")
             # Keyboard navigation uses the same retained field draft.
             edit("output.pause_text", "Keyboard draft")
@@ -334,7 +355,7 @@ def exercise():
 
 
 if __name__ == "__main__":
-    for dependency in ("xvfb-run", "xdotool", "xprop", "ffmpeg"):
+    for dependency in ("xvfb-run", "xdotool", "xprop", "xclip", "ffmpeg"):
         if not shutil.which(dependency):
             raise SystemExit(f"native panel check requires {dependency}")
     if "--inside" not in sys.argv:

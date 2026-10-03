@@ -459,7 +459,8 @@ static Icon button_icon(const Panel *p, uint32_t id, Action action)
         return ICON_SCREEN;
     }
     if (id == 130) {
-        return ICON_STREAM;
+        return p->snapshot.stream.active && !p->snapshot.state.stream_paused ? ICON_PAUSE
+                                                                             : ICON_PLAY;
     }
     if (id >= 139 && id <= 141) {
         return ICON_STOP;
@@ -540,7 +541,7 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
     if (w) {
         w->index = index;
     }
-    Clay_Color bg = selected             ? (Clay_Color){35, 63, 83, 255}
+    Clay_Color bg = selected && enabled  ? (Clay_Color){35, 63, 83, 255}
                     : hot(id) && enabled ? hovered
                     : id == 99           ? background
                                          : control;
@@ -570,11 +571,17 @@ static void command_button(Panel *p, uint32_t id, const char *text, bool enabled
                            const char *b, const char *c)
 {
     const State *s = &p->snapshot.state;
-    bool selected = (id == 22 && (p->snapshot.config.preview ||
-                                  (p->snapshot.countdown && p->snapshot.capabilities.preview))) ||
-                    (id == 31 && s->virtual_frozen) || (id == 36 && s->virtual_blurred) ||
-                    (id == 37 && s->record_frozen) || (id == 38 && s->record_blurred) ||
-                    (id == 39 && s->record_cut);
+    bool selected =
+        (id == 22 && (p->snapshot.config.preview ||
+                      (p->snapshot.countdown && p->snapshot.capabilities.preview))) ||
+        (id == 31 && s->virtual_frozen) || (id == 36 && s->virtual_blurred) ||
+        (id == 37 && s->record_frozen) || (id == 38 && s->record_blurred) ||
+        (id == 39 && s->record_cut) ||
+        (id == 30 && (!p->snapshot.config.virtual_enabled || s->virtual_paused)) ||
+        (id == 32 && !s->recording && !p->snapshot.countdown && !p->snapshot.finalizing) ||
+        (id == 33 && (s->record_paused || s->record_cut)) ||
+        (id == 130 && (!p->snapshot.stream.active || s->stream_paused)) ||
+        (id == 137 && s->stream_frozen) || (id == 138 && s->stream_blurred);
     button(p, id, text, enabled, selected, A_COMMAND, 0);
     Widget *w = &p->widgets[p->widget_count - 1];
     w->arg[0] = a;
@@ -882,7 +889,7 @@ static void pinned_header(Panel *p)
                 }
                 CLAY({.id = element_id(id),
                       .layout = {.sizing = {.width = CLAY_SIZING_GROW(),
-                                            .height = CLAY_SIZING_FIXED(54)},
+                                            .height = CLAY_SIZING_FIXED(p->width < 400 ? 64 : 54)},
                                  .padding = {8, 8, 6, 6},
                                  .childGap = 3,
                                  .layoutDirection = CLAY_TOP_TO_BOTTOM},
@@ -892,11 +899,13 @@ static void pinned_header(Panel *p)
                       .border = {.color = p->focus == id ? accent : control,
                                  .width = outline_width}})
                 {
-                    label(lane_names[lane], 0, muted);
-                    CLAY({.layout = {.childGap = 5, .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
+                    label(lane_names[lane], 0, hot(id) ? secondary : muted);
+                    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
+                                     .childGap = 5,
+                                     .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
                     {
                         state_marker(state_color(s, lane));
-                        label(lane_status(p, lane), 0, state_color(s, lane));
+                        text_wrapped(lane_status(p, lane), state_color(s, lane));
                     }
                 }
             }
@@ -917,7 +926,7 @@ static void pinned_header(Panel *p)
         }
         text_wrapped(format(p, "source %s%s%s · layout %s · preset %s%s", s->config.capture_kind,
                             s->config.monitor[0] ? " " : "", s->config.monitor, s->config.layout,
-                            s->config.preset_count ? "configured" : "—",
+                            s->current_preset[0] ? s->current_preset : "—",
                             s->config.zoom_factor > 1 ? " · zoom on" : ""),
                      muted);
         CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
@@ -969,11 +978,14 @@ static void disclosure(Panel *p, uint32_t id, const char *title, const char *det
                          .childGap = 4}})
         {
             label(title, action == A_LANE ? 3 : 2, foreground);
-            if (detail && detail[0]) {
+            if (action != A_LANE && detail && detail[0]) {
                 text_wrapped(detail, secondary);
             }
         }
-        icon_slot(open ? ICON_MINUS : ICON_PLUS, true, false);
+        if (action == A_LANE && detail && detail[0]) {
+            label(detail, 0, index < 3 ? state_color(&p->snapshot, index) : secondary);
+        }
+        icon_slot(open ? ICON_CHEVRON : ICON_FORWARD, true, false);
     }
 }
 static int find_field(const char *key)
@@ -1179,7 +1191,7 @@ static void draft_actions(Panel *p, int section)
               .sizing = {.width = CLAY_SIZING_GROW()}, .padding = {0, 0, 8, 4}, .childGap = 8}})
     {
         button(p, 700 + (uint32_t)section * 2, section == 7 ? "Apply — session only" : "Apply",
-               dirty && p->snapshot.connected, false, A_APPLY_SECTION, section);
+               dirty && p->snapshot.connected, dirty, A_APPLY_SECTION, section);
         button(p, 701 + (uint32_t)section * 2, "Revert", dirty, false, A_REVERT, section);
     }
     text_wrapped("Session only — config file untouched.", muted);
@@ -1921,8 +1933,7 @@ static void render(Panel *p, Clay_RenderCommandArray commands)
             SDL_SetRenderClipRect(p->renderer, &clips[depth]);
             break;
         case CLAY_RENDER_COMMAND_TYPE_CUSTOM:
-            if ((uintptr_t)c->renderData.custom.customData >= ICON_DATA_BASE &&
-                (uintptr_t)c->renderData.custom.customData < ICON_DATA_BASE + 1024) {
+            if ((uintptr_t)c->renderData.custom.customData >= ICON_DATA_BASE) {
                 draw_icon(p, box, (uintptr_t)c->renderData.custom.customData);
                 break;
             }
@@ -2828,6 +2839,10 @@ int panel_run(const Config *config, char *error, size_t n)
             snprintf(error, n, "cannot open bundled control panel font: %s", SDL_GetError());
             cleanup(p, NULL);
             return -1;
+        }
+        if (i == 2 || i == 3) {
+            TTF_SetFontStyle(p->font[i], TTF_STYLE_BOLD);
+            TTF_SetFontStyle(p->raster_font[i], TTF_STYLE_BOLD);
         }
     }
     uint32_t memory_size = Clay_MinMemorySize();

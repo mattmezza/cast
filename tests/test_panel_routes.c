@@ -56,8 +56,33 @@ static void camera_geometry(App *app, int *x, int *y, int *w, int *h)
     char error[CAST_ERR];
     assert(!compositor_geometry(&app->config, 640, 480, x, y, w, h, error, sizeof error));
 }
+static double luminance(Clay_Color c)
+{
+    double rgb[] = {c.r / 255.0, c.g / 255.0, c.b / 255.0};
+    for (size_t i = 0; i < 3; i++) {
+        rgb[i] = rgb[i] <= .04045 ? rgb[i] / 12.92 : pow((rgb[i] + .055) / 1.055, 2.4);
+    }
+    return .2126 * rgb[0] + .7152 * rgb[1] + .0722 * rgb[2];
+}
+static void check_text_contrast(void)
+{
+    Clay_Color ink[] = {foreground,           secondary,           muted, accent, danger,
+                        {224, 197, 102, 255}, {131, 221, 182, 255}};
+    Clay_Color bg[] = {background, surface, control, hovered, {35, 63, 83, 255}};
+    for (size_t i = 0; i < sizeof ink / sizeof *ink; i++) {
+        for (size_t j = 0; j < sizeof bg / sizeof *bg; j++) {
+            /* Muted labels never use hover/selected fills: disabled uses control,
+             * hovered chip metadata uses secondary, selected buttons use accent. */
+            if (i == 2 && j >= 3) {
+                continue;
+            }
+            assert((luminance(ink[i]) + .05) / (luminance(bg[j]) + .05) >= 4.5);
+        }
+    }
+}
 int main(void)
 {
+    check_text_contrast();
     SDL_MouseWheelEvent wheel = {.y = .25f, .direction = SDL_MOUSEWHEEL_NORMAL};
     assert(wheel_delta(&wheel) == .75f);
     wheel.direction = SDL_MOUSEWHEEL_FLIPPED;
@@ -318,13 +343,13 @@ int main(void)
     assert(!strcmp(record_status(&panel->snapshot), "Countdown"));
 
     /* Native controls cancel the controller's actual countdown without starting
-     * a recording; the independent live pause command does not cancel it. */
+     * a recording; the independent virtual pause command does not cancel it. */
     app->config.record_countdown = 5;
     const char *start[] = {"record", "start"};
     assert(!route_command(panel->client, 2, start, error, sizeof error));
     assert(app->countdown && !app->state.recording);
-    const char *pause_live[] = {"virtual", "pause"};
-    assert(!route_command(panel->client, 2, pause_live, error, sizeof error));
+    const char *pause_virtual[] = {"virtual", "pause"};
+    assert(!route_command(panel->client, 2, pause_virtual, error, sizeof error));
     assert(app->countdown && app->state.virtual_paused);
     Widget cancel = {.enabled = true, .action = A_COMMAND, .argc = 2, .arg = {"record", "stop"}};
     activate(panel, &cancel);

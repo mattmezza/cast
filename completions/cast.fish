@@ -14,7 +14,7 @@ function __cast_arguments
                 case --config --socket --backend --output-device --camera-device --width --height --fps --mic-source --desktop-source --record-dir --container --video-codec --audio-codec --countdown
                     set skip_value 1
                     continue
-                case --no-live --no-camera
+                case --no-virtual --no-camera
                     continue
             end
         end
@@ -57,7 +57,7 @@ function __cast_setting_value
 end
 
 complete -c cast -f
-complete -c cast -n __cast_at -a 'layout split camera screen logo text capture zoom cursor clicks keys annotations pause resume live record audio preset preview status doctor config settings panel reset quit completions setup update help'
+complete -c cast -n __cast_at -a 'layout split camera screen logo text capture zoom cursor clicks keys annotations pause resume virtual stream record audio preset preview status doctor config settings panel reset quit completions setup update help'
 complete -c cast -l help -d 'Show command reference'
 complete -c cast -n __cast_at -l version -d 'Print cast version'
 complete -c cast -n __cast_at -l config -r -F -d 'Config file'
@@ -68,7 +68,7 @@ complete -c cast -n __cast_at -l camera-device -r -F -d 'Physical camera device'
 complete -c cast -n __cast_at -l width -r -d 'Output width'
 complete -c cast -n __cast_at -l height -r -d 'Output height'
 complete -c cast -n __cast_at -l fps -r -d 'Output frame rate'
-complete -c cast -n __cast_at -l no-live -d 'Disable virtual-camera output'
+complete -c cast -n __cast_at -l no-virtual -d 'Disable virtual-camera output'
 complete -c cast -n __cast_at -l no-camera -d 'Disable camera input'
 complete -c cast -n __cast_at -l mic-source -r -d 'PipeWire microphone source'
 complete -c cast -n __cast_at -l desktop-source -r -d 'PipeWire desktop source'
@@ -105,19 +105,19 @@ complete -c cast -n '__cast_at cursor highlight' -a 'on off toggle'
 complete -c cast -n '__cast_at clicks' -a 'on off toggle'
 complete -c cast -n '__cast_at keys' -a 'on off toggle mode clear'
 complete -c cast -n '__cast_at keys mode' -a 'shortcuts all'
-complete -c cast -n '__cast_at annotations' -a 'live record'
-complete -c cast -n '__cast_at annotations live; or __cast_at annotations record' -a 'keys clicks'
-complete -c cast -n '__cast_at annotations live keys; or __cast_at annotations live clicks; or __cast_at annotations record keys; or __cast_at annotations record clicks' -a 'on off'
-complete -c cast -n '__cast_at live' -a 'pause resume toggle freeze unfreeze blur unblur message title subtitle footer'
+complete -c cast -n '__cast_at annotations' -a 'virtual record stream'
+complete -c cast -n '__cast_at annotations virtual; or __cast_at annotations record; or __cast_at annotations stream' -a 'keys clicks'
+complete -c cast -n '__cast_at annotations virtual keys; or __cast_at annotations virtual clicks; or __cast_at annotations record keys; or __cast_at annotations record clicks' -a 'on off'
+complete -c cast -n '__cast_at virtual' -a 'start stop status pause resume toggle freeze unfreeze blur unblur message title subtitle footer'
 complete -c cast -n '__cast_at record' -a 'start stop pause resume toggle freeze unfreeze blur unblur cut cancel title subtitle footer'
-complete -c cast -n '__cast_at live blur; or __cast_at record blur' -a 'on off toggle'
+complete -c cast -n '__cast_at virtual blur; or __cast_at record blur' -a 'on off toggle'
 complete -c cast -n '__cast_at record start' -F
 complete -c cast -n '__cast_at audio' -a 'list mic desktop virtual'
 complete -c cast -n '__cast_at audio mic; or __cast_at audio desktop' -a 'on off toggle source gain'
 complete -c cast -n '__cast_at audio virtual' -a 'on off toggle'
 complete -c cast -n '__cast_at preset' -a 'next prev'
 complete -c cast -n '__cast_at preview' -a 'on off toggle target'
-complete -c cast -n '__cast_at preview target' -a 'live record'
+complete -c cast -n '__cast_at preview target' -a 'virtual record stream'
 complete -c cast -n '__cast_at status' -l json -d 'Print JSON status'
 complete -c cast -n '__cast_at config' -a 'check defaults reload'
 complete -c cast -n '__cast_at config check' -F
@@ -138,5 +138,13 @@ complete -c cast -n '__cast_setting_value camera.anchor' -a 'top-left top-right 
 complete -c cast -n '__cast_setting_value camera.aspect' -a 'native 16:9 4:3 1:1'
 complete -c cast -n '__cast_setting_value keys.mode' -a 'shortcuts all'
 complete -c cast -n '__cast_setting_value keys.position' -a 'top-left top-right bottom-left bottom-right'
-complete -c cast -n '__cast_setting_value preview.target' -a 'live record'
-complete -c cast -n '__cast_setting_value logo.enabled text.enabled background.gradient_via_enabled output.enabled camera.enabled camera.visible camera.mirror zoom.follow cursor.enabled cursor.highlight clicks.enabled clicks.middle keys.enabled annotations.live_keys annotations.live_clicks annotations.record_keys annotations.record_clicks audio.mic audio.desktop audio.virtual preview.enabled' -a 'true false'
+complete -c cast -n '__cast_setting_value preview.target' -a 'virtual record stream'
+complete -c cast -n '__cast_setting_value logo.enabled text.enabled background.gradient_via_enabled output.enabled camera.enabled camera.visible camera.mirror zoom.follow cursor.enabled cursor.highlight clicks.enabled clicks.middle keys.enabled annotations.virtual_keys annotations.virtual_clicks annotations.record_keys annotations.record_clicks annotations.stream_keys annotations.stream_clicks audio.mic audio.desktop audio.virtual preview.enabled' -a 'true false'
+
+complete -c cast -n '__cast_at stream' -a 'start stop pause resume toggle freeze unfreeze blur unblur status'
+complete -c cast -n '__cast_at stream blur' -a 'on off toggle'
+complete -c cast -n '__cast_at stream status' -l json
+complete -c cast -n '__cast_at annotations stream keys; or __cast_at annotations stream clicks' -a 'on off'
+complete -c cast -n '__cast_setting_value stream.service' -a 'custom twitch youtube'
+complete -c cast -n '__cast_setting_value stream.encoder_preset' -a 'ultrafast superfast veryfast faster fast medium slow slower veryslow'
+complete -c cast -n '__cast_setting_value stream.key_file stream.tls_ca_file logo.path camera.device output.device' -F

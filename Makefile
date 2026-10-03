@@ -6,7 +6,7 @@ DESTDIR =
 X11 = 1
 WAYLAND = 0
 PANEL = 0
-VERSION = 0.6.0
+VERSION = 0.7.0
 SOURCE_COMMIT = working-tree
 RELEASE_NOTES =
 RELEASE_TAG = v$(VERSION)
@@ -15,14 +15,14 @@ CFLAGS = -O2 -g
 WARN = -Wall -Wextra -Wformat=2 -Wstrict-prototypes -Wmissing-prototypes
 BASE_PACKAGES = fontconfig freetype2 libavcodec libavformat libavutil libswscale libswresample libpipewire-0.3
 PACKAGES = $(BASE_PACKAGES)
-SOURCES = src/main.c src/commands.c src/config.c src/state.c src/compositor.c src/composition_assets.c src/presentation_text.c src/platform.c src/media.c src/webcam.c src/audio.c src/record.c src/panel_transport.c src/help_commands.c src/update.c vendor/inih/ini.c
+SOURCES = src/main.c src/commands.c src/config.c src/state.c src/compositor.c src/composition_assets.c src/presentation_text.c src/platform.c src/media.c src/webcam.c src/audio.c src/record.c src/stream.c src/panel_transport.c src/help_commands.c src/update.c vendor/inih/ini.c
 INI_FLAGS = -DINI_HANDLER_LINENO=1 -DINI_CALL_HANDLER_ON_NEW_SECTION=1 -DINI_ALLOW_MULTILINE=0 -DINI_ALLOW_INLINE_COMMENTS=0 -DINI_STOP_ON_FIRST_ERROR=1 -DINI_MAX_LINE=8192
 CPPFLAGS += -Isrc -Ivendor/inih $(INI_FLAGS) -D_GNU_SOURCE
 LDLIBS += -lm -lpthread
 # GNU make conditionals keep backend dependency lists completely removable.
 ifeq ($(X11),1)
 PACKAGES += x11 xext xrandr xi xfixes xcomposite
-SOURCES += src/x11.c
+SOURCES += src/x11.c src/preview_text.c
 CPPFLAGS += -DWITH_X11
 endif
 ifeq ($(WAYLAND),1)
@@ -34,7 +34,11 @@ PKG_CFLAGS = $(shell $(PKG_CONFIG) --cflags $(PACKAGES))
 PKG_LIBS = $(shell $(PKG_CONFIG) --libs $(PACKAGES))
 BUILD = build/x$(X11)-w$(WAYLAND)
 COMMAND_ASSETS = $(BUILD)/src/command_assets.o
-OBJECTS = $(SOURCES:%.c=$(BUILD)/%.o) $(COMMAND_ASSETS)
+FONT_OBJECT =
+ifneq ($(filter 1,$(X11) $(PANEL)),)
+FONT_OBJECT = $(BUILD)/src/panel_font.o
+endif
+OBJECTS = $(SOURCES:%.c=$(BUILD)/%.o) $(COMMAND_ASSETS) $(FONT_OBJECT)
 ifeq ($(PANEL),1)
 # Overridable for a locally built SDK; normal builds use system SDL3/SDL3_ttf.
 ifeq ($(origin PANEL_CFLAGS):$(origin PANEL_LIBS),undefined:undefined)
@@ -48,10 +52,10 @@ SOURCES += src/panel.c
 CPPFLAGS += -DWITH_PANEL -Ivendor/clay $(PANEL_CFLAGS)
 LDLIBS += $(PANEL_LIBS)
 BUILD = build/x$(X11)-w$(WAYLAND)-p1
-OBJECTS += $(BUILD)/src/panel_font.o
+
 endif
 CORE_SOURCES = src/compositor.c src/composition_assets.c src/presentation_text.c src/config.c src/state.c vendor/inih/ini.c
-MEDIA_SOURCES = src/media.c src/webcam.c src/audio.c src/record.c src/compositor.c src/composition_assets.c src/presentation_text.c
+MEDIA_SOURCES = src/media.c src/webcam.c src/audio.c src/record.c src/stream.c src/compositor.c src/composition_assets.c src/presentation_text.c
 
 all: cast
 FORCE:
@@ -77,15 +81,22 @@ $(BUILD)/test_visual: tests/test_visual.c src/compositor.c src/composition_asset
 $(BUILD)/test_media: tests/test_media.c $(MEDIA_SOURCES) src/config.c vendor/inih/ini.c src/cast.h src/media_internal.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -DCAST_TEST -o $@ $(filter %.c,$^) $(PKG_LIBS) $(LDLIBS)
+$(BUILD)/test_stream: tests/test_stream.c $(MEDIA_SOURCES) src/config.c vendor/inih/ini.c src/cast.h src/media_internal.h src/stream.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -DCAST_TEST -o $@ $(filter %.c,$^) $(PKG_LIBS) $(LDLIBS)
+check-stream: $(BUILD)/test_stream
+	$(BUILD)/test_stream
+	python3 tests/test_stream_network.py --binary $(BUILD)/test_stream
+
 $(BUILD)/test_wayland: tests/test_wayland.c src/wayland.c src/compositor.c src/composition_assets.c src/presentation_text.c src/state.c src/cast.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_wayland.c src/compositor.c src/composition_assets.c src/presentation_text.c src/state.c $(PKG_LIBS) $(LDLIBS)
-$(BUILD)/test_commands: tests/test_commands.c $(SOURCES) src/app_internal.h src/cast.h src/media_internal.h src/platform_backend.h $(COMMAND_ASSETS)
+$(BUILD)/test_commands: tests/test_commands.c $(SOURCES) src/app_internal.h src/cast.h src/media_internal.h src/platform_backend.h $(COMMAND_ASSETS) $(FONT_OBJECT)
 	@mkdir -p $(BUILD)
-	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_commands.c $(filter-out src/main.c src/panel.c,$(SOURCES)) $(COMMAND_ASSETS) $(PKG_LIBS) $(LDLIBS)
-$(BUILD)/test_panel_transport: tests/test_panel_transport.c $(SOURCES) src/app_internal.h src/panel_transport.h $(COMMAND_ASSETS)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_commands.c $(filter-out src/main.c src/panel.c,$(SOURCES)) $(COMMAND_ASSETS) $(FONT_OBJECT) $(PKG_LIBS) $(LDLIBS)
+$(BUILD)/test_panel_transport: tests/test_panel_transport.c $(SOURCES) src/app_internal.h src/panel_transport.h $(COMMAND_ASSETS) $(FONT_OBJECT)
 	@mkdir -p $(BUILD)
-	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_panel_transport.c $(filter-out src/main.c src/panel.c,$(SOURCES)) $(COMMAND_ASSETS) $(PKG_LIBS) $(LDLIBS)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_panel_transport.c $(filter-out src/main.c src/panel.c,$(SOURCES)) $(COMMAND_ASSETS) $(FONT_OBJECT) $(PKG_LIBS) $(LDLIBS)
 ifeq ($(PANEL),1)
 $(BUILD)/test_panel_routes: tests/test_panel_routes.c $(SOURCES) src/panel_transport.h $(BUILD)/src/panel_font.o $(COMMAND_ASSETS)
 	@mkdir -p $(BUILD)
@@ -100,13 +111,13 @@ $(BUILD)/benchmark: tests/benchmark.c $(CORE_SOURCES) src/cast.h
 benchmark: $(BUILD)/benchmark
 	$(BUILD)/benchmark
 ifeq ($(X11),1)
-XORG_TEST_SOURCES = tests/x11_smoke.c src/compositor.c src/composition_assets.c src/presentation_text.c src/platform.c src/x11.c
+XORG_TEST_SOURCES = tests/x11_smoke.c src/compositor.c src/composition_assets.c src/presentation_text.c src/platform.c src/x11.c src/preview_text.c
 ifeq ($(WAYLAND),1)
 XORG_TEST_SOURCES += src/wayland.c
 endif
-$(BUILD)/test_xorg: $(XORG_TEST_SOURCES) src/cast.h src/platform_backend.h
+$(BUILD)/test_xorg: $(XORG_TEST_SOURCES) src/cast.h src/platform_backend.h $(FONT_OBJECT)
 	@mkdir -p $(BUILD)
-	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(shell $(PKG_CONFIG) --cflags xtst) $(CFLAGS) $(WARN) -std=gnu11 -o $@ $(XORG_TEST_SOURCES) $(PKG_LIBS) $(shell $(PKG_CONFIG) --libs xtst) $(LDLIBS)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(shell $(PKG_CONFIG) --cflags xtst) $(CFLAGS) $(WARN) -std=gnu11 -o $@ $(XORG_TEST_SOURCES) $(FONT_OBJECT) $(PKG_LIBS) $(shell $(PKG_CONFIG) --libs xtst) $(LDLIBS)
 check-xorg: cast $(BUILD)/test_xorg
 	timeout 30s xvfb-run -a -s '-screen 0 800x600x24' $(BUILD)/test_xorg --exercise
 	timeout 30s xvfb-run -a -s '-screen 0 800x600x24 -extension MIT-SHM' $(BUILD)/test_xorg --exercise
@@ -116,7 +127,7 @@ check-xorg:
 	@echo 'check-xorg requires X11=1 and optional Xvfb/libXtst test dependencies' >&2
 	@exit 1
 endif
-check-unit: $(BUILD)/test_core $(BUILD)/test_visual $(BUILD)/test_media $(BUILD)/test_commands $(BUILD)/test_panel_transport
+check-unit: check-stream $(BUILD)/test_core $(BUILD)/test_visual $(BUILD)/test_media $(BUILD)/test_commands $(BUILD)/test_panel_transport
 	$(BUILD)/test_core
 	$(BUILD)/test_visual
 	$(BUILD)/test_media
@@ -126,6 +137,7 @@ check-unit: $(BUILD)/test_core $(BUILD)/test_visual $(BUILD)/test_media $(BUILD)
 check: cast check-unit
 	python3 tests/test_ipc.py
 	python3 tests/test_output_modes.py
+	python3 tests/test_three_outputs.py
 	python3 tests/test_presentation_layers.py
 	python3 tests/test_help_commands.py
 	python3 tests/test_install.py
@@ -168,8 +180,10 @@ install: cast
 	install -Dm644 completions/cast.fish $(DESTDIR)$(PREFIX)/share/fish/vendor_completions.d/cast.fish
 ifeq ($(PANEL),1)
 	install -Dm644 vendor/clay/LICENSE.md $(DESTDIR)$(PREFIX)/share/licenses/cast/clay-LICENSE
-	install -Dm644 assets/fonts/OFL.txt $(DESTDIR)$(PREFIX)/share/licenses/cast/Inter-OFL
 	install -Dm644 licenses/SDL3_ttf-ZLIB.txt $(DESTDIR)$(PREFIX)/share/licenses/cast/SDL3_ttf-ZLIB
+endif
+ifneq ($(filter 1,$(X11) $(PANEL)),)
+	install -Dm644 assets/fonts/OFL.txt $(DESTDIR)$(PREFIX)/share/licenses/cast/Inter-OFL
 endif
 	@for doc in docs/*.md; do install -Dm644 "$$doc" "$(DESTDIR)$(PREFIX)/share/doc/cast/$${doc##*/}"; done
 uninstall:
@@ -184,7 +198,7 @@ package: package-check cast
 	$(MAKE) X11=$(X11) WAYLAND=$(WAYLAND) PANEL=$(PANEL) DESTDIR='$(CURDIR)/dist/stage' PREFIX=/usr install
 	@{ echo 'cast $(VERSION)'; echo 'Source commit: $(SOURCE_COMMIT)'; echo 'Architecture:'; uname -m; echo 'Backend features: X11=$(X11) WAYLAND=$(WAYLAND) PANEL=$(PANEL)'; echo 'Runtime dynamic libraries:'; ldd cast; } > dist/stage/usr/share/doc/cast/build-info.txt
 	tar -C dist/stage -czf dist/cast-$(VERSION)-linux-$$(uname -m).tar.gz .
-	tar --transform='s,^,cast-$(VERSION)/,' -czf dist/cast-$(VERSION)-source.tar.gz Makefile .clang-format cast-build-prompt.md README.md PRODUCT.md DESIGN.md LICENSE licenses src vendor assets completions tests docs examples packaging .github
+	tar --transform='s,^,cast-$(VERSION)/,' -czf dist/cast-$(VERSION)-source.tar.gz Makefile .clang-format cast-build-prompt.md redesign-prompt.md streaming-prompt.md README.md PRODUCT.md DESIGN.md LICENSE licenses src vendor assets completions tests docs examples packaging .github
 	cd dist && sha256sum cast-$(VERSION)-linux-$$(uname -m).tar.gz cast-$(VERSION)-source.tar.gz > SHA256SUMS
 release-check:
 	sh packaging/release.sh check '$(VERSION)' '$(RELEASE_NOTES)' '$(X11)' '$(WAYLAND)' '$(RELEASE_TAG)' '$(PANEL)'
@@ -194,4 +208,4 @@ release-ci:
 	sh packaging/release.sh release-ci '$(VERSION)' '$(RELEASE_NOTES)' 1 1 '$(RELEASE_TAG)' 1
 clean:
 	rm -rf build cast
-.PHONY: FORCE all check check-unit check-panel-routes check-wayland check-wayland-unit check-xorg check-loopback check-panel benchmark sanitize install uninstall package-check package release-check release-ci release clean
+.PHONY: FORCE all check check-unit check-stream check-panel-routes check-wayland check-wayland-unit check-xorg check-loopback check-panel benchmark sanitize install uninstall package-check package release-check release-ci release clean

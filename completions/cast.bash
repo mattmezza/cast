@@ -18,8 +18,8 @@ _cast_complete()
     done
     local cur=${words[current]} raw=${COMP_WORDS[COMP_CWORD]} offer='' mode=''
     local trim=$((${#cur} - ${#raw})) command_index=1 command='' argument=0
-    local commands='layout split camera screen logo text capture zoom cursor clicks keys annotations pause resume live record audio preset preview status doctor config settings panel reset quit completions setup update help'
-    local flags='--config --socket --backend --output-device --camera-device --width --height --fps --no-live --no-camera --mic-source --desktop-source --record-dir --container --video-codec --audio-codec --countdown --help --version'
+    local commands='layout split camera screen logo text capture zoom cursor clicks keys annotations pause resume virtual stream record audio preset preview status doctor config settings panel reset quit completions setup update help'
+    local flags='--config --socket --backend --output-device --camera-device --width --height --fps --no-virtual --no-camera --mic-source --desktop-source --record-dir --container --video-codec --audio-codec --countdown --help --version'
     while ((command_index < current)); do
         token=${words[command_index]}
         case $token in
@@ -33,7 +33,7 @@ _cast_complete()
                     break
                 fi
                 ((command_index += 2)) ;;
-            --no-live|--no-camera) ((command_index++)) ;;
+            --no-virtual|--no-camera) ((command_index++)) ;;
             *) command=${words[command_index]}; break ;;
         esac
     done
@@ -83,11 +83,13 @@ _cast_complete()
             clicks:1) offer='on off toggle' ;;
             keys:1) offer='on off toggle mode clear' ;;
             keys:2) [[ $first == mode ]] && offer='shortcuts all' ;;
-            annotations:1) offer='live record' ;;
+            annotations:1) offer='virtual record stream' ;;
             annotations:2) offer='keys clicks' ;;
             annotations:3) offer='on off' ;;
-            live:1) offer='pause resume toggle freeze unfreeze blur unblur message title subtitle footer' ;;
-            live:2) [[ $first == blur ]] && offer='on off toggle' ;;
+            stream:1) offer='start stop pause resume toggle freeze unfreeze blur unblur status' ;;
+            stream:2) case $first in blur) offer='on off toggle' ;; status) offer='--json' ;; esac ;;
+            virtual:1) offer='start stop status pause resume toggle freeze unfreeze blur unblur message title subtitle footer' ;;
+            virtual:2) [[ $first == blur ]] && offer='on off toggle' ;;
             record:1) offer='start stop pause resume toggle freeze unfreeze blur unblur cut cancel title subtitle footer' ;;
             record:2)
                 if [[ $first == start ]]; then mode=file
@@ -100,7 +102,7 @@ _cast_complete()
                 fi ;;
             preset:1) offer='next prev' ;;
             preview:1) offer='on off toggle target' ;;
-            preview:2) [[ $first == target ]] && offer='live record' ;;
+            preview:2) [[ $first == target ]] && offer='virtual record stream' ;;
             status:1) offer=--json ;;
             config:1) offer='check defaults reload' ;;
             config:2) [[ $first == check ]] && mode=file ;;
@@ -130,8 +132,11 @@ _cast_complete()
                         camera.aspect) offer='native 16:9 4:3 1:1' ;;
                         keys.mode) offer='shortcuts all' ;;
                         keys.position) offer='top-left top-right bottom-left bottom-right' ;;
-                        preview.target) offer='live record' ;;
-                        logo.enabled|text.enabled|background.gradient_via_enabled|output.enabled|camera.enabled|camera.visible|camera.mirror|zoom.follow|cursor.enabled|cursor.highlight|clicks.enabled|clicks.middle|keys.enabled|annotations.live_keys|annotations.live_clicks|annotations.record_keys|annotations.record_clicks|audio.mic|audio.desktop|audio.virtual|preview.enabled) offer='true false' ;;
+                        preview.target) offer='virtual record stream' ;;
+                        stream.service) offer='custom twitch youtube' ;;
+                        stream.key_file|stream.tls_ca_file|logo.path|camera.device|output.device) mode=file ;;
+                        stream.encoder_preset) offer='ultrafast superfast veryfast faster fast medium slow slower veryslow' ;;
+                        logo.enabled|text.enabled|background.gradient_via_enabled|output.enabled|camera.enabled|camera.visible|camera.mirror|zoom.follow|cursor.enabled|cursor.highlight|clicks.enabled|clicks.middle|keys.enabled|annotations.virtual_keys|annotations.virtual_clicks|annotations.record_keys|annotations.record_clicks|annotations.stream_keys|annotations.stream_clicks|audio.mic|audio.desktop|audio.virtual|preview.enabled) offer='true false' ;;
                     esac
                 fi ;;
         esac
