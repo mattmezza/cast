@@ -39,5 +39,8 @@ int stream_key_validate(const char *, char *, size_t);
 #ifdef CAST_TEST
 void stream_test_hold(CastStream *, int);
 void stream_test_stage(CastStream *, int);
+bool stream_test_blocked(CastStream *);
+uint64_t stream_test_write_age(CastStream *);
+void stream_test_clock_delay(CastStream *, unsigned);
 #endif
 #endif

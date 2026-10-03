@@ -60,6 +60,7 @@ struct AVFrame;
 struct SwsContext;
 struct SwsContext *camera_test_scaler(struct SwsContext *, const struct AVFrame *);
 void audio_test_push(CastAudio *, int, uint64_t, const float *, int);
+CastAudio *audio_test_open(const Config *);
 void audio_test_virtual_read(CastAudio *, uint64_t, float *, int);
 CastAudio *media_test_audio(Media *);
 void recorder_test_slow(CastRecorder *, int);

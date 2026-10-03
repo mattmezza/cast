@@ -415,7 +415,6 @@ void media_audio_status(Media *m, char *out, size_t n)
 void media_doctor(const Config *cfg, char *out, size_t n)
 {
     camera_doctor(cfg, out, n);
-    stream_doctor(cfg, out, n);
     size_t used = strlen(out);
     snprintf(
         out + used, n - used,

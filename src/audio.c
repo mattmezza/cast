@@ -872,6 +872,34 @@ void audio_error(CastAudio *a, char *out, size_t n)
     }
 }
 #ifdef CAST_TEST
+CastAudio *audio_test_open(const Config *config)
+{
+    /* The synthetic source exercises the same ring readers and privacy epochs
+     * without connecting to a PipeWire server or loading its input modules. */
+    pthread_once(&pw_once, initialize_pw);
+    CastAudio *audio = calloc(1, sizeof(*audio));
+    if (!audio) {
+        return NULL;
+    }
+    audio->cfg = *config;
+    audio->virtual_silent = true;
+    audio->virtual_lane.owner = audio;
+    for (int lane = 0; lane < 2; lane++) {
+        audio->lane[lane].owner = audio;
+        audio->lane[lane].samples = calloc(AUDIO_RING * 2, sizeof(float));
+        if (!audio->lane[lane].samples) {
+            audio_close(audio);
+            return NULL;
+        }
+    }
+    audio->loop = pw_thread_loop_new("cast synthetic audio", NULL);
+    if (!audio->loop || pw_thread_loop_start(audio->loop) < 0) {
+        audio_close(audio);
+        return NULL;
+    }
+    audio->started = true;
+    return audio;
+}
 void audio_test_virtual_read(CastAudio *a, uint64_t ns, float *dst, int count)
 {
     if (a->started) {

@@ -31,8 +31,9 @@
 #define STREAM_KEY_MAX 1024
 #define STREAM_WORKER_FD 3
 #define STREAM_TICK_NS 10000000ULL
-/* One latest-frame mailbox deliberately uses less than queue_frames' upper bound.
- * No encoded reference packets are dropped to recover from network backpressure. */
+/* Raw video is bounded by the configured queue and a retained cadence frame.
+ * The consumer selects the freshest queued frame and drops older raw work;
+ * encoded reference packets are never indiscriminately dropped for lag. */
 struct StreamShared {
     unsigned magic;
     size_t size, frame_size;
@@ -43,10 +44,13 @@ struct StreamShared {
     atomic_uint_fast64_t bytes_written, video_frames, audio_samples, dropped_frames;
     uint64_t frame_epoch, frame_ns, frame_sequence, consumed_sequence;
     bool have_frame, silent;
+    unsigned queue_head, queue_count, queue_capacity;
+    uint64_t frame_times[120];
     uint64_t audio_begin, audio_end;
     float audio[STREAM_AUDIO_RING * 2];
 #ifdef CAST_TEST
     atomic_int hold_ms, hold_stage;
+    atomic_bool test_blocked;
 #endif
     uint8_t frame[];
 };
@@ -79,6 +83,9 @@ struct CastStream {
     StreamSnapshot status;
     uint64_t audio_next_ns, audio_epoch, connect_started_ns;
     uint64_t bitrate_sample_ns, bitrate_sample_bytes;
+#ifdef CAST_TEST
+    unsigned test_clock_delay_ms;
+#endif
 };
 struct StreamEncoder {
     struct StreamShared *shared;
@@ -93,6 +100,10 @@ struct StreamEncoder {
     uint64_t written_bytes;
 };
 extern char **environ;
+static atomic_bool authentication_rejected;
+#ifdef CAST_TEST
+static void test_hold(struct StreamShared *, int);
+#endif
 static uint64_t samples_at(uint64_t ns)
 {
     return ns / 1000000000ULL * STREAM_RATE + ns % 1000000000ULL * STREAM_RATE / 1000000000ULL;
@@ -108,19 +119,23 @@ static void lock_media(struct StreamShared *shared)
         /* A deadline can kill an encoder during its short memory copy. No stale
          * partially copied frame may survive that process's retirement. */
         shared->have_frame = false;
+        atomic_fetch_add(&shared->dropped_frames, shared->queue_count);
+        shared->queue_head = shared->queue_count = 0;
         shared->audio_begin = shared->audio_end = 0;
-        wipe(shared->frame, shared->frame_size);
+        wipe(shared->frame, shared->frame_size * (shared->queue_capacity + 1));
         wipe(shared->audio, sizeof(shared->audio));
         pthread_mutex_consistent(&shared->media_mutex);
     }
 }
 static void clear_media_locked(struct StreamShared *shared)
 {
+    atomic_fetch_add(&shared->dropped_frames, shared->queue_count);
     shared->have_frame = false;
     shared->consumed_sequence = shared->frame_sequence;
     shared->frame_ns = 0;
+    shared->queue_head = shared->queue_count = 0;
     shared->audio_begin = shared->audio_end = 0;
-    wipe(shared->frame, shared->frame_size);
+    wipe(shared->frame, shared->frame_size * (shared->queue_capacity + 1));
     wipe(shared->audio, sizeof(shared->audio));
 }
 const char *stream_lifecycle_name(StreamLifecycle state)
@@ -290,14 +305,28 @@ static void discard_ffmpeg_log(void *opaque, int level, const char *format, va_l
 {
     (void)opaque;
     (void)level;
-    (void)format;
-    (void)arguments;
+    char diagnostic[1024];
+    vsnprintf(diagnostic, sizeof(diagnostic), format, arguments);
+    if (strcasestr(diagnostic, "NetStream.Publish.BadName") ||
+        strcasestr(diagnostic, "NetStream.Publish.Denied") ||
+        strcasestr(diagnostic, "NetStream.Publish.Deny") ||
+        strcasestr(diagnostic, "NetConnection.Connect.Rejected") ||
+        strcasestr(diagnostic, "authentication failed") ||
+        strcasestr(diagnostic, "invalid stream key") || strcasestr(diagnostic, "access denied") ||
+        strcasestr(diagnostic, "unauthorized")) {
+        atomic_store(&authentication_rejected, true);
+    }
+    wipe(diagnostic, sizeof(diagnostic));
     /* This callback exists only in the exec-isolated child. FFmpeg protocol
      * diagnostics can contain tcUrl/playpath (the key), so none are forwarded.
      * Parent diagnostics use fixed action strings and numeric AVERROR values. */
 }
 static int worker_fail(struct StreamShared *shared, int failure, int code)
 {
+    if (atomic_load(&authentication_rejected) &&
+        (failure == FAILURE_CONNECT || failure == FAILURE_WRITE)) {
+        code = AVERROR(EACCES);
+    }
     atomic_store(&shared->failure_code, code);
     atomic_store(&shared->failure, failure);
     return -1;
@@ -433,10 +462,6 @@ static int write_packets(struct StreamEncoder *encoder, AVCodecContext *codec, A
     }
     int result;
     while ((result = avcodec_receive_packet(codec, packet)) >= 0) {
-        if (encoder->epoch != atomic_load(&encoder->shared->epoch)) {
-            av_packet_unref(packet);
-            continue;
-        }
         av_packet_rescale_ts(packet, codec->time_base, stream->time_base);
         packet->stream_index = stream->index;
         /* AAC's initial encoder delay can yield a negative first timestamp.
@@ -447,7 +472,19 @@ static int write_packets(struct StreamEncoder *encoder, AVCodecContext *codec, A
             packet->dts +=
                 av_rescale_q(codec->initial_padding, codec->time_base, stream->time_base);
         }
+        /* Acceptance is serialized with the privacy epoch, but the memory
+         * mutex is released before invoking any FFmpeg/network operation. */
+        lock_media(encoder->shared);
+        if (encoder->epoch != atomic_load(&encoder->shared->epoch)) {
+            if (codec == encoder->video) {
+                atomic_fetch_add(&encoder->shared->dropped_frames, 1);
+            }
+            pthread_mutex_unlock(&encoder->shared->media_mutex);
+            av_packet_unref(packet);
+            continue;
+        }
         child_phase(encoder->shared, WORKER_WRITE);
+        pthread_mutex_unlock(&encoder->shared->media_mutex);
         /* No interleaved muxer queue: each accepted packet is submitted now.
          * Network-accepted packets cannot be retracted by a privacy command. */
         result = av_write_frame(encoder->format, packet);
@@ -480,6 +517,17 @@ static int epoch_refresh(struct StreamEncoder *encoder)
     encoder->force_keyframe = true;
     return setup_audio_encoder(encoder, false);
 }
+static void clear_video_pixels(struct StreamEncoder *encoder)
+{
+    if (av_frame_make_writable(encoder->video_frame) < 0) {
+        return;
+    }
+    for (int plane = 0; plane < 3; plane++) {
+        int height = plane ? encoder->shared->cfg.height / 2 : encoder->shared->cfg.height;
+        wipe(encoder->video_frame->data[plane],
+             (size_t)encoder->video_frame->linesize[plane] * height);
+    }
+}
 static int encode_video(struct StreamEncoder *encoder)
 {
     struct StreamShared *shared = encoder->shared;
@@ -490,6 +538,23 @@ static int encode_video(struct StreamEncoder *encoder)
     uint64_t epoch = atomic_load(&shared->epoch);
     bool have_frame;
     lock_media(shared);
+    if (shared->queue_count) {
+        unsigned latest = (shared->queue_head + shared->queue_count - 1) % shared->queue_capacity;
+        bool fresh = cast_now_ns() - shared->frame_times[latest] <=
+                     (uint64_t)shared->cfg.stream.lag_ms * 1000000ULL;
+        if (fresh) {
+            memcpy(shared->frame, shared->frame + shared->frame_size * (latest + 1),
+                   shared->frame_size);
+            shared->have_frame = true;
+            shared->frame_epoch = epoch;
+        }
+        atomic_fetch_add(&shared->dropped_frames, shared->queue_count - (fresh ? 1U : 0U));
+        for (unsigned i = 0; i < shared->queue_count; i++) {
+            unsigned slot = (shared->queue_head + i) % shared->queue_capacity;
+            wipe(shared->frame + shared->frame_size * (slot + 1), shared->frame_size);
+        }
+        shared->queue_head = shared->queue_count = 0;
+    }
     have_frame = shared->have_frame && shared->frame_epoch == epoch;
     if (have_frame) {
         memcpy(raw, shared->frame, shared->frame_size);
@@ -519,7 +584,12 @@ static int encode_video(struct StreamEncoder *encoder)
     if (result < 0) {
         return result;
     }
+#ifdef CAST_TEST
+    test_hold(shared, WORKER_ENCODING);
+#endif
     if (epoch != atomic_load(&shared->epoch)) {
+        atomic_fetch_add(&shared->dropped_frames, 1);
+        clear_video_pixels(encoder);
         return 0;
     }
     encoder->video_frame->pts = encoder->video_pts;
@@ -530,13 +600,7 @@ static int encode_video(struct StreamEncoder *encoder)
     /* Remove raw converted pixels before any potentially stalled network write.
      * avcodec_send_frame has accepted the media; codec-owned copies are scoped
      * to that epoch and its packets are checked before network acceptance. */
-    if (av_frame_make_writable(encoder->video_frame) >= 0) {
-        for (int plane = 0; plane < 3; plane++) {
-            int height = plane ? shared->cfg.height / 2 : shared->cfg.height;
-            wipe(encoder->video_frame->data[plane],
-                 (size_t)encoder->video_frame->linesize[plane] * height);
-        }
-    }
+    clear_video_pixels(encoder);
     if (result < 0) {
         return result;
     }
@@ -590,10 +654,12 @@ static int encode_audio(struct StreamEncoder *encoder)
 static void test_hold(struct StreamShared *shared, int stage)
 {
     if (atomic_load(&shared->hold_stage) == stage) {
-        int milliseconds = atomic_load(&shared->hold_ms);
+        int milliseconds = atomic_exchange(&shared->hold_ms, 0);
+        atomic_store(&shared->test_blocked, milliseconds > 0);
         struct timespec pause = {.tv_sec = milliseconds / 1000,
                                  .tv_nsec = (milliseconds % 1000) * 1000000L};
         nanosleep(&pause, NULL);
+        atomic_store(&shared->test_blocked, false);
     }
 }
 #endif
@@ -612,7 +678,8 @@ int stream_worker_main(int fd)
     }
     if (shared->magic != STREAM_MAGIC || shared->size != (size_t)metadata.st_size ||
         shared->frame_size != (size_t)shared->cfg.width * shared->cfg.height * 4 ||
-        shared->size != sizeof(*shared) + shared->frame_size) {
+        shared->queue_capacity < 1 || shared->queue_capacity > 120 ||
+        shared->size != sizeof(*shared) + shared->frame_size * (shared->queue_capacity + 1)) {
         munmap(shared, (size_t)metadata.st_size);
         return 2;
     }
@@ -654,6 +721,9 @@ int stream_worker_main(int fd)
     AVDictionary *options = NULL;
     av_dict_set(&options, "protocol_whitelist", "rtmp,rtmps,tcp,tls", 0);
     av_dict_set(&options, "tls_verify", "1", 0);
+    char hostname[1024];
+    av_url_split(NULL, 0, NULL, 0, hostname, sizeof(hostname), NULL, NULL, 0, server);
+    av_dict_set(&options, "verifyhost", hostname, 0);
     if (shared->cfg.stream.tls_ca_file[0]) {
         av_dict_set(&options, "ca_file", shared->cfg.stream.tls_ca_file, 0);
     }
@@ -687,7 +757,11 @@ int stream_worker_main(int fd)
     while (atomic_load(&shared->session)) {
         uint64_t now = cast_now_ns();
         uint64_t elapsed = now - encoder.started_ns;
-        uint64_t video_due = (uint64_t)encoder.video_pts * 1000000000ULL / shared->cfg.fps;
+        /* AAC releases each packet one encoder frame later. Delay video by
+         * that same interval so direct FLV submissions are globally ordered,
+         * without an interleaver retaining unsubmitted media across privacy. */
+        uint64_t video_due = (uint64_t)encoder.video_pts * 1000000000ULL / shared->cfg.fps +
+                             (uint64_t)encoder.sound->initial_padding * 1000000000ULL / STREAM_RATE;
         uint64_t audio_due = (uint64_t)encoder.audio_pts * 1000000000ULL / STREAM_RATE;
         uint64_t due = video_due < audio_due ? video_due : audio_due;
         if (elapsed > due + (uint64_t)shared->cfg.stream.lag_ms * 1000000ULL) {
@@ -759,7 +833,7 @@ static void worker_error(struct CastStream *stream, int failure, int code)
     /* av_strerror is keyed only by a numeric code, never FFmpeg's URL-bearing
      * log text. Authentication rejection is treated as permanent below. */
     char detail[AV_ERROR_MAX_STRING_SIZE];
-    av_strerror(code < 0 ? code : AVERROR(code), detail, sizeof(detail));
+    av_strerror(code < 0 ? code : AVERROR(code ? code : EIO), detail, sizeof(detail));
     snprintf(stream->status.error, sizeof(stream->status.error), "%s (%s)", action, detail);
 }
 static int spawn_worker(struct CastStream *stream)
@@ -886,13 +960,22 @@ static void *supervise(void *opaque)
             } else {
                 int phase = atomic_load(&stream->shared->phase);
                 uint64_t began = atomic_load(&stream->shared->phase_started_ns);
+                uint64_t observed_now = now;
+#ifdef CAST_TEST
+                /* Reproduce a worker publishing after the supervisor clock
+                 * sample, without depending on a particular thread schedule. */
+                observed_now -= (uint64_t)stream->test_clock_delay_ms * 1000000ULL;
+#endif
                 uint64_t budget =
                     (uint64_t)(phase == WORKER_CONNECT ? stream->cfg.stream.connect_timeout_ms
                                                        : stream->cfg.stream.write_timeout_ms) *
                     1000000ULL;
                 if ((phase == WORKER_CONNECT || phase == WORKER_WRITE ||
                      phase == WORKER_ENCODING) &&
-                    began && now - began > budget) {
+                    /* The worker can publish a phase timestamp after this
+                     * supervisor iteration sampled now. Never let unsigned
+                     * subtraction turn that newer timestamp into a timeout. */
+                    began && observed_now > began && observed_now - began > budget) {
                     atomic_store(&stream->shared->failure,
                                  phase == WORKER_CONNECT ? FAILURE_CONNECT : FAILURE_WRITE);
                     atomic_store(&stream->shared->failure_code, AVERROR(ETIMEDOUT));
@@ -1042,7 +1125,15 @@ int stream_start(CastStream *stream, const Config *cfg, char *error, size_t size
     }
     free_shared(stream);
     size_t frame_size = (size_t)cfg->width * cfg->height * 4;
-    size_t shared_size = sizeof(struct StreamShared) + frame_size;
+    size_t shared_size =
+        sizeof(struct StreamShared) + frame_size * ((size_t)cfg->stream.queue_frames + 1);
+    if (shared_size > 512ULL * 1024 * 1024) {
+        snprintf(error, size,
+                 "streaming raw queue exceeds the 512 MiB safety bound; reduce stream.queue_frames "
+                 "or output resolution");
+        pthread_mutex_unlock(&stream->mutex);
+        return -1;
+    }
     int fd = memfd_create("cast-stream-mailbox", MFD_CLOEXEC | MFD_ALLOW_SEALING);
     if (fd < 0 || ftruncate(fd, (off_t)shared_size)) {
         if (fd >= 0) {
@@ -1064,6 +1155,7 @@ int stream_start(CastStream *stream, const Config *cfg, char *error, size_t size
     shared->magic = STREAM_MAGIC;
     shared->size = shared_size;
     shared->frame_size = frame_size;
+    shared->queue_capacity = (unsigned)cfg->stream.queue_frames;
     shared->cfg = *cfg;
     shared->silent = true;
     pthread_mutexattr_t attributes;
@@ -1134,22 +1226,28 @@ int stream_frame(CastStream *stream, const Frame *frame, bool silent, char *erro
         return -1;
     }
     lock_media(shared);
-    if (shared->frame_sequence != shared->consumed_sequence) {
-        atomic_fetch_add(&shared->dropped_frames, 1);
-    }
     if (silent != shared->silent) {
         atomic_fetch_add(&shared->epoch, 1);
         clear_media_locked(shared);
     }
     shared->silent = silent;
+    if (shared->queue_count == shared->queue_capacity) {
+        wipe(shared->frame + shared->frame_size * (shared->queue_head + 1), shared->frame_size);
+        shared->queue_head = (shared->queue_head + 1) % shared->queue_capacity;
+        shared->queue_count--;
+        atomic_fetch_add(&shared->dropped_frames, 1);
+    }
+    unsigned tail = (shared->queue_head + shared->queue_count) % shared->queue_capacity;
+    uint8_t *queued_frame = shared->frame + shared->frame_size * (tail + 1);
     for (int y = 0; y < frame->height; y++) {
-        memcpy(shared->frame + (size_t)y * frame->width * 4,
-               frame->data + (size_t)y * frame->stride, (size_t)frame->width * 4);
+        memcpy(queued_frame + (size_t)y * frame->width * 4, frame->data + (size_t)y * frame->stride,
+               (size_t)frame->width * 4);
     }
     shared->frame_epoch = atomic_load(&shared->epoch);
     shared->frame_ns = cast_now_ns();
+    shared->frame_times[tail] = shared->frame_ns;
     shared->frame_sequence++;
-    shared->have_frame = true;
+    shared->queue_count++;
     pthread_mutex_unlock(&shared->media_mutex);
     pthread_mutex_unlock(&stream->mutex);
     return 0;
@@ -1189,8 +1287,7 @@ void stream_status(CastStream *stream, StreamSnapshot *status)
         status->audio_samples = atomic_load(&stream->shared->audio_samples);
         status->dropped_frames = atomic_load(&stream->shared->dropped_frames);
         lock_media(stream->shared);
-        status->queue_depth =
-            stream->shared->frame_sequence != stream->shared->consumed_sequence ? 1 : 0;
+        status->queue_depth = stream->shared->queue_count;
         pthread_mutex_unlock(&stream->shared->media_mutex);
     }
     pthread_mutex_unlock(&stream->mutex);
@@ -1233,4 +1330,33 @@ void stream_test_stage(CastStream *stream, int stage)
     }
     pthread_mutex_unlock(&stream->mutex);
 }
+bool stream_test_blocked(CastStream *stream)
+{
+    pthread_mutex_lock(&stream->mutex);
+    bool blocked = stream->shared && atomic_load(&stream->shared->test_blocked);
+    pthread_mutex_unlock(&stream->mutex);
+    return blocked;
+}
+
+uint64_t stream_test_write_age(CastStream *stream)
+{
+    pthread_mutex_lock(&stream->mutex);
+    uint64_t age = 0;
+    if (stream->shared && atomic_load(&stream->shared->phase) == WORKER_WRITE) {
+        uint64_t began = atomic_load(&stream->shared->phase_started_ns);
+        uint64_t now = cast_now_ns();
+        if (now >= began) {
+            age = now - began;
+        }
+    }
+    pthread_mutex_unlock(&stream->mutex);
+    return age;
+}
+void stream_test_clock_delay(CastStream *stream, unsigned milliseconds)
+{
+    pthread_mutex_lock(&stream->mutex);
+    stream->test_clock_delay_ms = milliseconds;
+    pthread_mutex_unlock(&stream->mutex);
+}
+
 #endif

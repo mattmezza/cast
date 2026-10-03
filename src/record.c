@@ -527,7 +527,7 @@ static void *worker(void *data)
         pthread_mutex_unlock(&r->mutex);
 #ifdef CAST_TEST
         /* Test slowdown precedes codec acceptance: a barrier can discard this
-         * job while live/status/stop stay responsive. */
+         * job while virtual/status/stop stay responsive. */
         int slow = atomic_load(&r->slow_ms);
         if (job.frame.data && slow > 0) {
             struct timespec delay = {.tv_sec = slow / 1000, .tv_nsec = (slow % 1000) * 1000000L};
