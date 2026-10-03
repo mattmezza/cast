@@ -15,7 +15,7 @@ CFLAGS = -O2 -g
 WARN = -Wall -Wextra -Wformat=2 -Wstrict-prototypes -Wmissing-prototypes
 BASE_PACKAGES = fontconfig freetype2 libavcodec libavformat libavutil libswscale libswresample libpipewire-0.3
 PACKAGES = $(BASE_PACKAGES)
-SOURCES = src/main.c src/commands.c src/config.c src/state.c src/compositor.c src/presentation_text.c src/platform.c src/media.c src/webcam.c src/audio.c src/record.c src/panel_transport.c src/help_commands.c src/update.c vendor/inih/ini.c
+SOURCES = src/main.c src/commands.c src/config.c src/state.c src/compositor.c src/composition_assets.c src/presentation_text.c src/platform.c src/media.c src/webcam.c src/audio.c src/record.c src/panel_transport.c src/help_commands.c src/update.c vendor/inih/ini.c
 INI_FLAGS = -DINI_HANDLER_LINENO=1 -DINI_CALL_HANDLER_ON_NEW_SECTION=1 -DINI_ALLOW_MULTILINE=0 -DINI_ALLOW_INLINE_COMMENTS=0 -DINI_STOP_ON_FIRST_ERROR=1 -DINI_MAX_LINE=8192
 CPPFLAGS += -Isrc -Ivendor/inih $(INI_FLAGS) -D_GNU_SOURCE
 LDLIBS += -lm -lpthread
@@ -51,7 +51,7 @@ BUILD = build/x$(X11)-w$(WAYLAND)-p1
 OBJECTS += $(BUILD)/src/panel_font.o
 endif
 CORE_SOURCES = src/presentation_text.c src/config.c src/state.c vendor/inih/ini.c
-MEDIA_SOURCES = src/media.c src/webcam.c src/audio.c src/record.c src/compositor.c src/presentation_text.c
+MEDIA_SOURCES = src/media.c src/webcam.c src/audio.c src/record.c src/compositor.c src/composition_assets.c src/presentation_text.c
 
 all: cast
 FORCE:
@@ -71,15 +71,15 @@ $(BUILD)/src/command_assets.o: src/command_assets.S completions/cast.bash comple
 $(BUILD)/test_core: tests/test_core.c $(CORE_SOURCES) src/cast.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_core.c $(CORE_SOURCES) $(PKG_LIBS) $(LDLIBS)
-$(BUILD)/test_visual: tests/test_visual.c src/compositor.c src/presentation_text.c src/cast.h
+$(BUILD)/test_visual: tests/test_visual.c src/compositor.c src/composition_assets.c src/presentation_text.c src/cast.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ $(filter %.c,$^) $(PKG_LIBS) $(LDLIBS)
 $(BUILD)/test_media: tests/test_media.c $(MEDIA_SOURCES) src/config.c vendor/inih/ini.c src/cast.h src/media_internal.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -DCAST_TEST -o $@ $(filter %.c,$^) $(PKG_LIBS) $(LDLIBS)
-$(BUILD)/test_wayland: tests/test_wayland.c src/wayland.c src/compositor.c src/presentation_text.c src/state.c src/cast.h
+$(BUILD)/test_wayland: tests/test_wayland.c src/wayland.c src/compositor.c src/composition_assets.c src/presentation_text.c src/state.c src/cast.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_wayland.c src/compositor.c src/presentation_text.c src/state.c $(PKG_LIBS) $(LDLIBS)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_wayland.c src/compositor.c src/composition_assets.c src/presentation_text.c src/state.c $(PKG_LIBS) $(LDLIBS)
 $(BUILD)/test_commands: tests/test_commands.c $(SOURCES) src/app_internal.h src/cast.h src/media_internal.h src/platform_backend.h $(COMMAND_ASSETS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_commands.c $(filter-out src/main.c src/panel.c,$(SOURCES)) $(COMMAND_ASSETS) $(PKG_LIBS) $(LDLIBS)
@@ -94,13 +94,13 @@ check-unit: check-panel-routes
 check-panel-routes: $(BUILD)/test_panel_routes
 	$(BUILD)/test_panel_routes
 endif
-$(BUILD)/benchmark: tests/benchmark.c src/compositor.c $(CORE_SOURCES) src/cast.h
+$(BUILD)/benchmark: tests/benchmark.c src/compositor.c src/composition_assets.c $(CORE_SOURCES) src/cast.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ $(filter %.c,$^) $(PKG_LIBS) $(LDLIBS)
 benchmark: $(BUILD)/benchmark
 	$(BUILD)/benchmark
 ifeq ($(X11),1)
-XORG_TEST_SOURCES = tests/x11_smoke.c src/compositor.c src/presentation_text.c src/platform.c src/x11.c
+XORG_TEST_SOURCES = tests/x11_smoke.c src/compositor.c src/composition_assets.c src/presentation_text.c src/platform.c src/x11.c
 ifeq ($(WAYLAND),1)
 XORG_TEST_SOURCES += src/wayland.c
 endif
@@ -126,6 +126,7 @@ check-unit: $(BUILD)/test_core $(BUILD)/test_visual $(BUILD)/test_media $(BUILD)
 check: cast check-unit
 	python3 tests/test_ipc.py
 	python3 tests/test_output_modes.py
+	python3 tests/test_presentation_layers.py
 	python3 tests/test_help_commands.py
 	python3 tests/test_install.py
 check-loopback: cast
