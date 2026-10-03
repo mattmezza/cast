@@ -15,11 +15,15 @@
 #undef Cursor
 #endif
 #include <errno.h>
+#include <fcntl.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 /* Small immediate widgets share Clay's layout, clipping, and pointer geometry.
  * The worker transports bounded requests; no socket operation runs on this thread. */
@@ -280,7 +284,8 @@ typedef enum {
     W_BUTTON,
     W_FIELD,
     W_SELECT,
-    W_OPTION
+    W_OPTION,
+    W_LINK
 } WidgetType;
 typedef enum {
     A_NONE,
@@ -299,7 +304,8 @@ typedef enum {
     A_SECTION,
     A_REVERT,
     A_APPLY_SECTION,
-    A_SETUP
+    A_SETUP,
+    A_BACK
 } Action;
 typedef enum {
     ICON_NONE,
@@ -345,6 +351,20 @@ typedef struct {
     int size, width, height;
     uint64_t used;
 } TextCache;
+typedef enum {
+    VIEW_OPERATE,
+    VIEW_COMPOSE,
+    VIEW_SECTION,
+    VIEW_SETUP
+} PanelView;
+#define VIEW_SCROLL_COUNT 10
+typedef struct {
+    uint32_t magic;
+    uint64_t session_cookie;
+    PanelView view, return_view;
+    int section, lane, return_section;
+    float scroll[VIEW_SCROLL_COUNT];
+} NavigationMemory;
 typedef struct {
     SDL_Window *window;
     SDL_Renderer *renderer;
@@ -357,6 +377,12 @@ typedef struct {
     int widget_count, tab;
     int main_tab, open_lane, open_section;
     bool stream_setup;
+    PanelView view, return_view;
+    int return_section;
+    float view_scroll[VIEW_SCROLL_COUNT];
+    bool restore_scroll;
+    uint64_t navigation_generation, navigation_attachment;
+    NavigationMemory *navigation;
     bool groups[TAB_COUNT][GROUP_COUNT], quit, mouse_down, click;
     uint32_t focus, active_text, dropdown;
     int dropdown_field, dropdown_choice;
@@ -388,6 +414,88 @@ static Clay_String literal(const char *s)
 {
     return (Clay_String){.length = (int32_t)strlen(s), .chars = s};
 }
+/* These two compact roles reuse Inter's existing secondary slot. They are
+ * rasterized at their actual density/size, rather than shrinking cached text. */
+#define FONT_QUIET 100
+#define FONT_META 200
+static TTF_Font *text_font(Panel *p, int key, bool raster)
+{
+    int slot = key < 5 ? key : 0;
+    TTF_Font *font = raster ? p->raster_font[slot] : p->font[slot];
+    float size = key == FONT_QUIET ? 11 : key == FONT_META ? 11.5f : font_sizes[slot];
+    TTF_SetFontSize(font, size * (raster ? p->density : 1));
+    TTF_SetFontStyle(font, key == FONT_META || slot == 2 || slot == 3 ? TTF_STYLE_BOLD
+                                                                      : TTF_STYLE_NORMAL);
+    return font;
+}
+static int scroll_index(const Panel *p)
+{
+    return p->view == VIEW_OPERATE   ? 0
+           : p->view == VIEW_COMPOSE ? 1
+           : p->view == VIEW_SETUP   ? 9
+                                     : 2 + p->open_section;
+}
+static void remember_scroll(Panel *p)
+{
+    Clay_ScrollContainerData body = Clay_GetScrollContainerData(CLAY_ID("SettingsScroll"));
+    if (body.found && !p->restore_scroll) {
+        p->view_scroll[scroll_index(p)] = body.scrollPosition->y;
+    }
+}
+static void navigate_view(Panel *p, PanelView view, int section)
+{
+    remember_scroll(p);
+    p->view = view;
+    p->main_tab = view == VIEW_COMPOSE || view == VIEW_SECTION;
+    p->open_section = view == VIEW_SECTION ? section : -1;
+    p->stream_setup = view == VIEW_SETUP;
+    p->dropdown = 0;
+    p->restore_scroll = true;
+}
+/* POSIX shared memory keeps only navigation numbers across panel processes.
+ * It is session memory, reset for each daemon socket session; no config, draft,
+ * media, secret or daemon IPC field is persisted here. */
+static void open_navigation(Panel *p, const Config *config)
+{
+    unsigned long hash = 5381;
+    for (const unsigned char *c = (const unsigned char *)config->socket_path; *c; c++) {
+        hash = hash * 33 + *c;
+    }
+    char name[96];
+    snprintf(name, sizeof name, "/cast-panel-view-%lu-%lx", (unsigned long)getuid(), hash);
+    int fd = shm_open(name, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (fd < 0) {
+        return;
+    }
+    struct stat st;
+    if (fstat(fd, &st) || st.st_uid != getuid() || (st.st_mode & 0777) != 0600 ||
+        (st.st_size != 0 && st.st_size != sizeof(NavigationMemory)) ||
+        (!st.st_size && ftruncate(fd, sizeof(NavigationMemory)))) {
+        close(fd);
+        return;
+    }
+    void *memory = mmap(NULL, sizeof(NavigationMemory), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    close(fd);
+    if (memory != MAP_FAILED) {
+        p->navigation = memory;
+    }
+}
+static void save_navigation(Panel *p)
+{
+    if (!p->navigation || !p->navigation_generation) {
+        return;
+    }
+    remember_scroll(p);
+    NavigationMemory saved = {.magic = 0x43565032,
+                              .session_cookie = p->navigation_generation,
+                              .view = p->view,
+                              .section = p->open_section,
+                              .lane = p->open_lane,
+                              .return_view = p->return_view,
+                              .return_section = p->return_section};
+    memcpy(saved.scroll, p->view_scroll, sizeof saved.scroll);
+    *p->navigation = saved;
+}
 static const char *format(Panel *p, const char *fmt, ...)
 {
     if (p->string_used + 512 >= sizeof p->strings) {
@@ -414,6 +522,45 @@ static void label(const char *text, int font, Clay_Color color)
                                                .fontSize = (uint16_t)font_sizes[font],
                                                .textColor = color,
                                                .wrapMode = CLAY_TEXT_WRAP_NONE}));
+}
+static void quiet_label(const char *text, Clay_Color ink, bool semibold)
+{
+    CLAY_TEXT(literal(text),
+              CLAY_TEXT_CONFIG({.fontId = 0,
+                                .fontSize = semibold ? 12 : 11,
+                                .userData = (void *)(uintptr_t)(semibold ? FONT_META : FONT_QUIET),
+                                .textColor = ink,
+                                .wrapMode = CLAY_TEXT_WRAP_NONE}));
+}
+static const char *fit_text(Panel *p, const char *text, float available, int key)
+{
+    int width, height;
+    TTF_Font *font = text_font(p, key, false);
+    size_t n = strcspn(text, "\n");
+    TTF_GetStringSize(font, text, n, &width, &height);
+    if ((float)width <= available && n == strlen(text)) {
+        return text;
+    }
+    if (available < 8) {
+        return "";
+    }
+    n = n > 480 ? 480 : n;
+    while (n && ((unsigned char)text[n] & 0xc0) == 0x80) {
+        n--;
+    }
+    int dots;
+    TTF_GetStringSize(font, "…", strlen("…"), &dots, &height);
+    while (n) {
+        TTF_GetStringSize(font, text, n, &width, &height);
+        if (width + dots <= available) {
+            break;
+        }
+        n--;
+        while (n && ((unsigned char)text[n] & 0xc0) == 0x80) {
+            n--;
+        }
+    }
+    return format(p, "%.*s…", (int)n, text);
 }
 static Widget *widget(Panel *p, uint32_t id, WidgetType type, Action action, bool enabled)
 {
@@ -534,7 +681,7 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
                    Action action, int index)
 {
     if (action != A_TAB && action != A_GROUP && action != A_PREVIEW && action != A_DROPDOWN &&
-        p->snapshot.command_queued > p->snapshot.command_completed) {
+        action != A_BACK && p->snapshot.command_queued > p->snapshot.command_completed) {
         enabled = false;
     }
     Widget *w = widget(p, id, W_BUTTON, action, enabled);
@@ -547,11 +694,12 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
                                          : control;
     Clay_Color ink = enabled ? selected ? accent : foreground : muted;
     CLAY({.id = element_id(id),
-          .layout = {.sizing = {.width = (id == 30 || id == 32 || id == 130 || id == 34)
+          .layout = {.sizing = {.width = (id == 30 || id == 32 || id == 130 || id == 34 || id == 22)
                                              ? CLAY_SIZING_GROW()
                                              : CLAY_SIZING_FIT(),
-                                .height = CLAY_SIZING_FIXED(40)},
-                     .padding = {10, action == A_DROPDOWN ? 26 : 10, 8, 8},
+                                .height = CLAY_SIZING_FIXED(id == 22 || id == 34 ? 30 : 40)},
+                     .padding = {10, action == A_DROPDOWN ? 26 : 10, id == 22 || id == 34 ? 6 : 8,
+                                 id == 22 || id == 34 ? 6 : 8},
                      .childGap = 6,
                      .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}},
           .backgroundColor = bg,
@@ -564,7 +712,11 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
         if (icon != ICON_NONE) {
             icon_slot(icon, enabled, selected);
         }
-        label(text, 1, ink);
+        if (id == 22 || id == 34) {
+            quiet_label(text, ink, true);
+        } else {
+            label(text, 1, ink);
+        }
     }
 }
 static void command_button(Panel *p, uint32_t id, const char *text, bool enabled, const char *a,
@@ -738,7 +890,7 @@ static void field_row(Panel *p, size_t index)
                 }
                 if (f->flags & READ_ONLY) {
                     label("Restart", 0, secondary);
-                } else if (p->edit[index].dirty) {
+                } else if (p->edit[index].dirty && !p->draft_context) {
                     button(p, id + 1, "Apply", enabled, false, A_APPLY, (int)index);
                 }
             }
@@ -861,25 +1013,15 @@ static void text_button(Panel *p, uint32_t id, const char *text, bool enabled, A
 static void pinned_header(Panel *p)
 {
     const PanelSnapshot *s = &p->snapshot;
+    float available = fminf(p->width, 520) - 32;
+    float share = (available - 12) / 3;
     CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
-                     .padding = {16, 16, 12, 0},
-                     .childGap = 10,
+                     .padding = {16, 16, 8, 0},
+                     .childGap = 8,
                      .layoutDirection = CLAY_TOP_TO_BOTTOM}})
     {
-        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
-                         .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
-        {
-            CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
-                             .childGap = 8,
-                             .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
-            {
-                label("Cast", 3, foreground);
-                label("panel", 0, muted);
-            }
-            label(s->connected ? "Connected" : "Disconnected", 0,
-                  s->connected ? secondary : danger);
-        }
-        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 6}})
+        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_FIXED(44)},
+                         .childGap = 6}})
         {
             for (int lane = 0; lane < 3; lane++) {
                 uint32_t id = 10 + (uint32_t)lane;
@@ -888,10 +1030,10 @@ static void pinned_header(Panel *p)
                     w->index = lane;
                 }
                 CLAY({.id = element_id(id),
-                      .layout = {.sizing = {.width = CLAY_SIZING_GROW(),
-                                            .height = CLAY_SIZING_FIXED(p->width < 400 ? 64 : 54)},
-                                 .padding = {8, 8, 6, 6},
-                                 .childGap = 3,
+                      .layout = {.sizing = {.width = CLAY_SIZING_FIXED(share),
+                                            .height = CLAY_SIZING_FIXED(44)},
+                                 .padding = {6, 6, 4, 4},
+                                 .childGap = 2,
                                  .layoutDirection = CLAY_TOP_TO_BOTTOM},
                       .backgroundColor = hot(id)                                    ? hovered
                                          : p->main_tab == 0 && p->open_lane == lane ? surface
@@ -899,24 +1041,24 @@ static void pinned_header(Panel *p)
                       .border = {.color = p->focus == id ? accent : control,
                                  .width = outline_width}})
                 {
-                    label(lane_names[lane], 0, hot(id) ? secondary : muted);
-                    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
+                    label(fit_text(p, lane_names[lane], share - 12, 0), 0,
+                          hot(id) ? secondary : muted);
+                    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_FIXED(share - 12)},
                                      .childGap = 5,
                                      .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
                     {
                         state_marker(state_color(s, lane));
-                        text_wrapped(lane_status(p, lane), state_color(s, lane));
+                        label(fit_text(p, lane_status(p, lane), share - 24, 0), 0,
+                              state_color(s, lane));
                     }
                 }
             }
         }
-        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 8}})
+        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_FIXED(30)},
+                         .childGap = 6}})
         {
-            CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}}})
-            {
-                command_button(p, 34, s->state.group_paused ? "Resume" : "Pause all", s->connected,
-                               s->state.group_paused ? "resume" : "pause", NULL, NULL);
-            }
+            command_button(p, 34, s->state.group_paused ? "Resume" : "Pause all", s->connected,
+                           s->state.group_paused ? "resume" : "pause", NULL, NULL);
             command_button(p, 22,
                            s->countdown        ? "Countdown"
                            : s->config.preview ? "Preview on"
@@ -924,11 +1066,6 @@ static void pinned_header(Panel *p)
                            s->connected && s->capabilities.preview && !s->countdown, "preview",
                            s->config.preview ? "off" : "on", NULL);
         }
-        text_wrapped(format(p, "source %s%s%s · layout %s · preset %s%s", s->config.capture_kind,
-                            s->config.monitor[0] ? " " : "", s->config.monitor, s->config.layout,
-                            s->current_preset[0] ? s->current_preset : "—",
-                            s->config.zoom_factor > 1 ? " · zoom on" : ""),
-                     muted);
         CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
                          .padding = {10, 10, 7, 7},
                          .childGap = 7},
@@ -940,18 +1077,9 @@ static void pinned_header(Panel *p)
                              : "Capture exclusion status is unavailable while disconnected.",
                          muted);
         }
-        if (!s->connected) {
-            CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .padding = {10, 10, 8, 8}},
-                  .backgroundColor = surface})
-            {
-                text_wrapped("Daemon disconnected — showing last known state. Commands are "
-                             "unavailable; outputs keep running per their last state and this "
-                             "window reconnects automatically.",
-                             danger);
-            }
-        }
     }
-    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .padding = {0, 0, 12, 0}}})
+    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .padding = {0, 0, 10, 0}},
+          .border = {.color = line, .width = {.bottom = 1}}})
     {
         text_button(p, 5, "Operate", true, A_MAIN_TAB, 0, p->main_tab == 0);
         text_button(p, 6, "Compose", true, A_MAIN_TAB, 1, p->main_tab == 1);
@@ -1156,7 +1284,7 @@ static int field_section(const FieldSpec *f)
 {
     const char *key = f->key;
     if (f->tab == TAB_STREAM) {
-        return 7;
+        return 6;
     }
     if (f->tab == TAB_CAMERA) {
         return 1;
@@ -1175,26 +1303,18 @@ static int field_section(const FieldSpec *f)
     }
     return 6;
 }
+static bool field_in_section(const FieldSpec *f, int section)
+{
+    return section == 7 ? f->tab == TAB_STREAM : field_section(f) == section;
+}
 static bool section_dirty(const Panel *p, int section)
 {
     for (size_t i = 0; i < FIELD_COUNT; i++) {
-        if (field_section(&fields[i]) == section && p->edit[i].dirty) {
+        if (field_in_section(&fields[i], section) && p->edit[i].dirty) {
             return true;
         }
     }
     return false;
-}
-static void draft_actions(Panel *p, int section)
-{
-    bool dirty = section_dirty(p, section);
-    CLAY({.layout = {
-              .sizing = {.width = CLAY_SIZING_GROW()}, .padding = {0, 0, 8, 4}, .childGap = 8}})
-    {
-        button(p, 700 + (uint32_t)section * 2, section == 7 ? "Apply — session only" : "Apply",
-               dirty && p->snapshot.connected, dirty, A_APPLY_SECTION, section);
-        button(p, 701 + (uint32_t)section * 2, "Revert", dirty, false, A_REVERT, section);
-    }
-    text_wrapped("Session only — config file untouched.", muted);
 }
 static void section_actions(Panel *p, int section)
 {
@@ -1275,82 +1395,130 @@ static const char *section_summary(Panel *p, int section)
         return "pause & blur screens · recording · streaming";
     }
 }
+static void section_list(Panel *p)
+{
+    float width = fminf(p->width, 520) - 32 - 24;
+    for (int section = 0; section < 7; section++) {
+        uint32_t id = 100 + (uint32_t)section;
+        Widget *w = widget(p, id, W_BUTTON, A_SECTION, true);
+        if (w) {
+            w->index = section;
+        }
+        CLAY(
+            {.id = element_id(id),
+             .layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_FIXED(64)},
+                        .padding = {16, 16, 9, 9},
+                        .childGap = 8,
+                        .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}},
+             .backgroundColor = hot(id) ? surface : background,
+             .border = {.color = p->focus == id ? accent : line,
+                        .width = p->focus == id ? outline_width : (Clay_BorderWidth){.bottom = 1}}})
+        {
+            CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
+                             .childGap = 2,
+                             .layoutDirection = CLAY_TOP_TO_BOTTOM}})
+            {
+                label(fit_text(p, section_names[section], width, 2), 2, foreground);
+                label(fit_text(p, section_summary(p, section), width, 0), 0, secondary);
+            }
+            icon_slot(ICON_FORWARD, true, false);
+        }
+    }
+}
 static void compose_body(Panel *p)
 {
+    if (p->open_section < 0) {
+        section_list(p);
+        return;
+    }
+    int section = p->open_section;
     p->draft_context = true;
-    for (int section = 0; section < 7; section++) {
-        disclosure(p, 100 + (uint32_t)section, section_names[section], section_summary(p, section),
-                   A_SECTION, section, p->open_section == section);
-        if (p->open_section != section) {
-            continue;
+    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
+                     .padding = {16, 16, 10, 18},
+                     .childGap = 6,
+                     .layoutDirection = CLAY_TOP_TO_BOTTOM}})
+    {
+        section_actions(p, section);
+        if (section == 6) {
+            label("Recording countdown", 2, foreground);
         }
-        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
-                         .padding = {16, 16, 2, 14},
-                         .childGap = 6,
-                         .layoutDirection = CLAY_TOP_TO_BOTTOM}})
-        {
-            section_actions(p, section);
-            for (size_t i = 0; i < FIELD_COUNT; i++) {
-                if (field_section(&fields[i]) != section) {
-                    continue;
-                }
-                if (fields[i].group > 0) {
-                    continue;
-                }
+        for (size_t i = 0; i < FIELD_COUNT; i++) {
+            if (field_section(&fields[i]) == section && fields[i].group == 0 &&
+                fields[i].tab != TAB_STREAM) {
                 field_row(p, i);
             }
-            for (int tab = 0; tab < TAB_COUNT; tab++) {
-                for (int group = 1; group < GROUP_COUNT; group++) {
-                    bool any = false;
-                    for (size_t i = 0; i < FIELD_COUNT; i++) {
-                        if (fields[i].tab == tab && fields[i].group == group &&
-                            field_section(&fields[i]) == section) {
-                            any = true;
-                        }
-                    }
-                    if (!any) {
-                        continue;
-                    }
-                    const char *names[TAB_COUNT][GROUP_COUNT] = {
-                        {"", "Region geometry", "Zoom behavior", "Stage sizes", "Screen appearance",
-                         "Background gradient"},
-                        {"", "Position & crop", "Camera appearance", "Device"},
-                        {"", "Virtual microphone"},
-                        {"", "Output annotations", "Cursor & clicks", "Keystroke style", "Logo",
-                         "Static text"},
-                        {"", "Recording format", "Cycle order", "Output & connection",
-                         "Pause screen", "Blur screen"},
-                        {"", "Advanced network"}};
-                    disclosure(p, 200 + (uint32_t)tab * GROUP_COUNT + (uint32_t)group,
-                               names[tab][group] ? names[tab][group] : "Advanced", NULL, A_GROUP,
-                               group, p->groups[tab][group]);
-                    p->widgets[p->widget_count - 1].auxiliary = tab;
-                    if (!p->groups[tab][group]) {
-                        continue;
-                    }
-                    if (tab == TAB_SETTINGS && group >= 4) {
-                        text_wrapped("Title, subtitle and footer are optional. Templates: {date}, "
-                                     "{time}, {datetime:…}.",
-                                     muted);
-                        text_wrapped(
-                            format(
-                                p,
-                                "Font is config-only: output.%s_font = %s; reload the config file.",
-                                group == 4 ? "pause" : "blur",
-                                group == 4 ? p->snapshot.config.pause_font
-                                           : p->snapshot.config.blur_font),
-                            muted);
-                    }
-                    for (size_t i = 0; i < FIELD_COUNT; i++) {
-                        if (fields[i].tab == tab && fields[i].group == group &&
-                            field_section(&fields[i]) == section) {
-                            field_row(p, i);
-                        }
+        }
+        const char *names[TAB_COUNT][GROUP_COUNT] = {
+            {"", "Region geometry", "Zoom behavior", "Stage sizes", "Screen appearance",
+             "Background gradient"},
+            {"", "Position & crop", "Camera appearance", "Device"},
+            {"", "Virtual microphone"},
+            {"", "Output annotations", "Cursor & clicks", "Keystroke style", "Logo", "Static text"},
+            {"", "Recording format", "Cycle order", "Output & connection", "Pause screen",
+             "Blur screen"},
+            {"", "Advanced network"}};
+        for (int tab = 0; tab < TAB_COUNT; tab++) {
+            for (int group = 1; group < GROUP_COUNT; group++) {
+                bool any = false;
+                for (size_t i = 0; i < FIELD_COUNT; i++) {
+                    any |= fields[i].tab == tab && fields[i].group == group &&
+                           field_section(&fields[i]) == section;
+                }
+                if (!any) {
+                    continue;
+                }
+                CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .padding = {0, 0, 14, 2}},
+                      .border = {.color = line, .width = {.top = 1}}})
+                {
+                    label(names[tab][group] ? names[tab][group] : "Advanced", 2, foreground);
+                }
+                if (tab == TAB_SETTINGS && group >= 4) {
+                    text_wrapped("Title, subtitle and footer are optional. Templates: {date}, "
+                                 "{time}, {datetime:…}.",
+                                 muted);
+                    text_wrapped(
+                        format(p,
+                               "Font is config-only: output.%s_font = %s; reload the config file.",
+                               group == 4 ? "pause" : "blur",
+                               group == 4 ? p->snapshot.config.pause_font
+                                          : p->snapshot.config.blur_font),
+                        muted);
+                }
+                for (size_t i = 0; i < FIELD_COUNT; i++) {
+                    if (fields[i].tab == tab && fields[i].group == group &&
+                        field_section(&fields[i]) == section) {
+                        field_row(p, i);
                     }
                 }
             }
-            draft_actions(p, section);
         }
+        if (section == 6) {
+            label("Streaming setup", 2, foreground);
+            for (size_t i = 0; i < FIELD_COUNT; i++) {
+                if (fields[i].tab == TAB_STREAM) {
+                    field_row(p, i);
+                }
+            }
+        }
+    }
+}
+static void page_header(Panel *p)
+{
+    if (p->view != VIEW_SECTION && p->view != VIEW_SETUP) {
+        return;
+    }
+    CLAY({.id = CLAY_ID("PageHeader"),
+          .layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_FIXED(52)},
+                     .padding = {16, 16, 6, 6},
+                     .childGap = 10,
+                     .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}},
+          .backgroundColor = background,
+          .border = {.color = line, .width = {.bottom = 1}}})
+    {
+        button(p, 99, p->view == VIEW_SETUP ? "Back" : "Compose", true, false, A_BACK, 0);
+        const char *title =
+            p->view == VIEW_SETUP ? "Streaming setup" : section_names[p->open_section];
+        label(fit_text(p, title, fminf(p->width, 520) - 170, 2), 2, foreground);
     }
 }
 static void operate_body(Panel *p)
@@ -1371,24 +1539,114 @@ static void operate_body(Panel *p)
         }
     }
 }
-static void footer(Panel *p)
+static void pinned_drafts(Panel *p)
 {
-    const char *error = p->error[0] ? p->error : p->snapshot.error;
-    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .padding = {16, 16, 9, 9}},
-          .backgroundColor = background,
+    int section = p->view == VIEW_SETUP ? 7 : p->view == VIEW_SECTION ? p->open_section : -1;
+    unsigned count = 0;
+    for (size_t i = 0; i < FIELD_COUNT; i++) {
+        count += section >= 0 && field_in_section(&fields[i], section) && p->edit[i].dirty;
+    }
+    if (!count) {
+        return;
+    }
+    CLAY({.id = CLAY_ID("DraftBar"),
+          .layout = {.sizing = {.width = CLAY_SIZING_GROW()},
+                     .padding = {10, 10, 6, 6},
+                     .childGap = 4,
+                     .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}},
+          .backgroundColor = surface,
           .border = {.color = line, .width = {.top = 1}}})
     {
-        if (error[0]) {
-            text_wrapped(error, danger);
-        } else if (p->snapshot.command_queued > p->snapshot.command_completed) {
-            text_wrapped("Pending — waiting for daemon acknowledgement…", accent);
-        } else if (p->reply[0] && strcmp(p->reply, "ok")) {
-            text_wrapped(strchr(p->reply, '\n')
-                             ? "Acknowledged — command result appears in the body."
-                             : p->reply,
-                         (Clay_Color){131, 221, 182, 255});
-        } else {
-            text_wrapped("Ready — the daemon is running independently of this window.", muted);
+        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}}})
+        {
+            quiet_label(format(p, "%u unapplied edit%s", count, count == 1 ? "" : "s"), secondary,
+                        false);
+        }
+        quiet_label("·", secondary, false);
+        button(p, 700 + (uint32_t)section * 2, "Apply", p->snapshot.connected, true,
+               A_APPLY_SECTION, section);
+        button(p, 701 + (uint32_t)section * 2, "Revert", true, false, A_REVERT, section);
+        quiet_label("·", secondary, false);
+        quiet_label("session only", secondary, false);
+    }
+}
+static void status_token(Panel *p, uint32_t id, const char *text, int section, float budget)
+{
+    const char *shown = fit_text(p, text, budget, FONT_QUIET);
+    Widget *w = widget(p, id, W_LINK, section < 0 ? A_COMMAND : A_SECTION, true);
+    if (w) {
+        w->index = section;
+        if (section < 0) {
+            w->arg[0] = "zoom";
+            w->arg[1] = "reset";
+            w->argc = 2;
+            w->enabled = p->snapshot.connected;
+        }
+    }
+    CLAY({.id = element_id(id),
+          .layout = {.sizing = {.height = CLAY_SIZING_FIXED(16)},
+                     .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
+    {
+        quiet_label(shown, hot(id) ? foreground : secondary, false);
+    }
+}
+static void footer(Panel *p)
+{
+    float available = fminf(p->width, 520) - 32;
+    const PanelSnapshot *s = &p->snapshot;
+    const char *error = p->error[0] ? p->error : s->error;
+    if (!error[0] && s->stream.state == STREAM_FAILED && s->stream.error[0]) {
+        error = format(p, "Streaming failed — %s", s->stream.error);
+    }
+    const char *message = error[0] ? error
+                          : s->command_queued > s->command_completed
+                              ? "Waiting for daemon acknowledgement…"
+                          : p->reply[0] ? p->reply
+                                        : "Ready — daemon is running independently.";
+    const char *connection = s->connected               ? "Connected"
+                             : p->navigation_generation ? "Reconnecting…"
+                                                        : "Disconnected";
+    CLAY({.id = CLAY_ID("StatusBar"),
+          .layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_FIXED(46)},
+                     .padding = {16, 16, 6, 6},
+                     .childGap = 2,
+                     .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                     .childAlignment = {.x = CLAY_ALIGN_X_CENTER}},
+          .backgroundColor = surface,
+          .border = {.color = line, .width = {.top = 1}}})
+    {
+        CLAY({.id = CLAY_ID("StatusComposition"),
+              .layout = {.sizing = {.height = CLAY_SIZING_FIXED(16)},
+                         .childGap = 6,
+                         .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
+        {
+            bool zoomed = s->config.zoom_factor > 1;
+            float token = (available - (zoomed ? 54 : 36)) / (zoomed ? 4 : 3);
+            status_token(p, 160, s->config.monitor[0] ? s->config.monitor : s->config.capture_kind,
+                         0, token);
+            quiet_label("·", muted, false);
+            status_token(p, 161, s->config.layout, 0, token);
+            quiet_label("·", muted, false);
+            status_token(p, 162, s->current_preset[0] ? s->current_preset : "preset —", 2, token);
+            if (s->config.zoom_factor > 1) {
+                quiet_label("·", muted, false);
+                status_token(p, 163, format(p, "zoom %.2f× ×", s->config.zoom_factor), -1, token);
+            }
+        }
+        CLAY({.id = CLAY_ID("StatusDaemon"),
+              .layout = {.sizing = {.height = CLAY_SIZING_FIXED(16)},
+                         .childGap = 6,
+                         .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
+        {
+            state_marker(s->connected ? (Clay_Color){131, 221, 182, 255} : danger);
+            quiet_label(connection, secondary, false);
+            quiet_label(error[0] ? "✗"
+                        : s->command_completed && !s->command_failed && !error[0] && p->reply[0]
+                            ? "✓"
+                            : "·",
+                        error[0] ? danger : secondary, false);
+            quiet_label(fit_text(p, message, available * .62f, FONT_QUIET),
+                        error[0] ? danger : secondary, false);
         }
     }
 }
@@ -1452,14 +1710,14 @@ static Clay_RenderCommandArray layout(Panel *p)
                          .layoutDirection = CLAY_TOP_TO_BOTTOM}})
         {
             pinned_header(p);
+            page_header(p);
             CLAY({.id = CLAY_ID("SettingsScroll"),
                   .layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_GROW()},
                              .layoutDirection = CLAY_TOP_TO_BOTTOM},
                   .clip = {.vertical = true, .childOffset = Clay_GetScrollOffset()}})
             {
                 if (p->stream_setup) {
-                    disclosure(p, 152, "Streaming setup",
-                               "Service, destination and stream-key file", A_SETUP, 0, true);
+
                     CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
                                      .padding = {16, 16, 0, 14},
                                      .childGap = 6,
@@ -1481,7 +1739,7 @@ static Clay_RenderCommandArray layout(Panel *p)
                                      "a session is active, connection-affecting edits are rejected "
                                      "— stop streaming first; presentation styling stays editable.",
                                      muted);
-                        draft_actions(p, 7);
+
                         button(p, 153, "Cancel", true, false, A_SETUP, 0);
                     }
                 } else if (p->main_tab == 0) {
@@ -1490,13 +1748,28 @@ static Clay_RenderCommandArray layout(Panel *p)
                     compose_body(p);
                 }
             }
+            pinned_drafts(p);
             footer(p);
         }
     }
     dropdown_layout(p);
     Clay_RenderCommandArray commands = Clay_EndLayout();
+    if (p->restore_scroll) {
+        Clay_ScrollContainerData body = Clay_GetScrollContainerData(CLAY_ID("SettingsScroll"));
+        if (body.found) {
+            body.scrollPosition->y = p->view_scroll[scroll_index(p)];
+            p->restore_scroll = false;
+        }
+    }
     for (int i = 0; i < p->widget_count; i++) {
-        p->widgets[i].box = Clay_GetElementData(element_id(p->widgets[i].id)).boundingBox;
+        Widget *w = &p->widgets[i];
+        w->box = Clay_GetElementData(element_id(w->id)).boundingBox;
+        if (p->view == VIEW_COMPOSE && w->id >= 100 && w->id <= 106) {
+            Clay_BoundingBox body = Clay_GetElementData(CLAY_ID("SettingsScroll")).boundingBox;
+            if (w->box.y < body.y || w->box.y + w->box.height > body.y + body.height) {
+                w->enabled = false;
+            }
+        }
     }
     return commands;
 }
@@ -1507,7 +1780,9 @@ static Clay_Dimensions measure(Clay_StringSlice text, Clay_TextElementConfig *co
     int width = 0, height = 0;
     int font = config->fontId < 5 ? config->fontId : 1;
     if (text.length > 0) {
-        TTF_GetStringSize(p->font[font], text.chars, (size_t)text.length, &width, &height);
+        TTF_GetStringSize(
+            text_font(p, config->userData ? (int)(uintptr_t)config->userData : font, false),
+            text.chars, (size_t)text.length, &width, &height);
     }
     return (Clay_Dimensions){(float)width,
                              (float)(height ? height : TTF_GetFontHeight(p->font[font]))};
@@ -1682,7 +1957,23 @@ static void draw_icon(Panel *p, SDL_FRect box, uintptr_t data)
     case ICON_DOT:
         color(p, (Clay_Color){(float)((data >> 40) & 255), (float)((data >> 32) & 255),
                               (float)((data >> 24) & 255), 255});
-        circle(p, box.x + 3.5f, box.y + 3.5f, 2, 3);
+        /* A filled fan stays a dot at 1x; overlapping thick strokes on a
+         * two-pixel ring otherwise look like an asterisk at small sizes. */
+        Uint8 dot_r, dot_g, dot_b, dot_a;
+        SDL_GetRenderDrawColor(p->renderer, &dot_r, &dot_g, &dot_b, &dot_a);
+        SDL_FColor dot_ink = {dot_r / 255.f, dot_g / 255.f, dot_b / 255.f, dot_a / 255.f};
+        SDL_Vertex vertices[17] = {{.position = {box.x + 3.5f, box.y + 3.5f}, .color = dot_ink}};
+        int triangles[48];
+        for (int i = 0; i < 16; i++) {
+            float angle = (float)i * 2 * (float)M_PI / 16;
+            vertices[i + 1] = (SDL_Vertex){
+                .position = {box.x + 3.5f + 2.5f * cosf(angle), box.y + 3.5f + 2.5f * sinf(angle)},
+                .color = dot_ink};
+            triangles[i * 3] = 0;
+            triangles[i * 3 + 1] = i + 1;
+            triangles[i * 3 + 2] = (i + 1) % 16 + 1;
+        }
+        SDL_RenderGeometry(p->renderer, NULL, vertices, 17, triangles, 48);
         break;
     case ICON_NONE:
         break;
@@ -1750,8 +2041,8 @@ static TextCache *cached_text(Panel *p, const char *text, size_t length, int fon
     }
     memcpy(slot->text, text, length);
     slot->text[length] = 0;
-    SDL_Surface *surface_text =
-        TTF_RenderText_Blended(p->raster_font[font], text, length, (SDL_Color){255, 255, 255, 255});
+    SDL_Surface *surface_text = TTF_RenderText_Blended(text_font(p, font, true), text, length,
+                                                       (SDL_Color){255, 255, 255, 255});
     if (!surface_text) {
         free(slot->text);
         slot->text = NULL;
@@ -1864,6 +2155,27 @@ static void draw_field(Panel *p, size_t index, Clay_BoundingBox b, SDL_Rect oute
     draw_text(p, text, strlen(text), 1, value[0] ? foreground : muted, x, y);
     SDL_SetRenderClipRect(p->renderer, &outer_clip);
 }
+static bool list_command_visible(const Panel *p, Clay_BoundingBox box)
+{
+    if (p->view != VIEW_COMPOSE) {
+        return true;
+    }
+    Clay_BoundingBox viewport = Clay_GetElementData(CLAY_ID("SettingsScroll")).boundingBox;
+    for (int i = 0; i < p->widget_count; i++) {
+        const Widget *w = &p->widgets[i];
+        if (w->id < 100 || w->id > 106) {
+            continue;
+        }
+        Clay_BoundingBox row = w->box;
+        bool partial = row.y < viewport.y || row.y + row.height > viewport.y + viewport.height;
+        if (partial && box.x >= row.x - .1f && box.y >= row.y - .1f &&
+            box.x + box.width <= row.x + row.width + .1f &&
+            box.y + box.height <= row.y + row.height + .1f) {
+            return false;
+        }
+    }
+    return true;
+}
 static void render(Panel *p, Clay_RenderCommandArray commands)
 {
     p->draw_frame++;
@@ -1874,6 +2186,11 @@ static void render(Panel *p, Clay_RenderCommandArray commands)
     int depth = 0;
     for (int32_t i = 0; i < commands.length; i++) {
         const Clay_RenderCommand *c = Clay_RenderCommandArray_Get(&commands, i);
+        if (c->commandType != CLAY_RENDER_COMMAND_TYPE_SCISSOR_START &&
+            c->commandType != CLAY_RENDER_COMMAND_TYPE_SCISSOR_END &&
+            !list_command_visible(p, c->boundingBox)) {
+            continue;
+        }
         SDL_FRect box = rect(c->boundingBox);
         switch (c->commandType) {
         case CLAY_RENDER_COMMAND_TYPE_RECTANGLE:
@@ -1907,7 +2224,9 @@ static void render(Panel *p, Clay_RenderCommandArray commands)
         case CLAY_RENDER_COMMAND_TYPE_TEXT:
             draw_text(p, c->renderData.text.stringContents.chars,
                       (size_t)c->renderData.text.stringContents.length,
-                      c->renderData.text.fontId < 5 ? c->renderData.text.fontId : 1,
+                      c->userData                     ? (int)(uintptr_t)c->userData
+                      : c->renderData.text.fontId < 5 ? c->renderData.text.fontId
+                                                      : 1,
                       c->renderData.text.textColor, box.x, box.y);
             break;
         case CLAY_RENDER_COMMAND_TYPE_SCISSOR_START:
@@ -1952,11 +2271,17 @@ static void render(Panel *p, Clay_RenderCommandArray commands)
     /* Native dropdown chevrons are geometry, so font coverage cannot change them. */
     for (int i = 0; i < p->widget_count; i++) {
         const Widget *w = &p->widgets[i];
+        if (w->type == W_LINK && (hot(w->id) || p->focus == w->id)) {
+            color(p, foreground);
+            for (float x = w->box.x; x < w->box.x + w->box.width; x += 3) {
+                SDL_RenderPoint(p->renderer, x, w->box.y + w->box.height - 1);
+            }
+        }
         if (w->type != W_SELECT) {
             continue;
         }
         Clay_ElementData scroll = Clay_GetElementData(CLAY_ID("SettingsScroll"));
-        if (w->id >= 1000) {
+        if (w->id >= 1000 || w->id == 40) {
             SDL_SetRenderClipRect(p->renderer,
                                   &(SDL_Rect){(int)scroll.boundingBox.x, (int)scroll.boundingBox.y,
                                               (int)scroll.boundingBox.width,
@@ -1996,7 +2321,8 @@ static bool widget_in_scroll(const Panel *p, const Widget *w)
 {
     (void)p;
     return w->id != 5 && w->id != 6 && w->id != 22 && w->id != 34 &&
-           !(w->id >= 10 && w->id <= 12) && w->type != W_OPTION;
+           !(w->id >= 10 && w->id <= 12) && w->id != 99 && !(w->id >= 160 && w->id <= 163) &&
+           !(w->id >= 700 && w->id <= 715) && w->type != W_OPTION;
 }
 static void stop_editing(Panel *p)
 {
@@ -2166,20 +2492,13 @@ static void stage_field(Panel *p, int index, const char *value)
         }
     }
 }
-static void reset_body_scroll(void)
-{
-    Clay_ScrollContainerData scroll = Clay_GetScrollContainerData(CLAY_ID("SettingsScroll"));
-    if (scroll.found) {
-        *scroll.scrollPosition = (Clay_Vector2){0, 0};
-    }
-}
 static void apply_section(Panel *p, int section)
 {
     const char *arguments[CAST_MAX_ARGS] = {"settings"};
     int count = 1;
     size_t indexes[CAST_MAX_ARGS / 2], submitted = 0;
     for (size_t i = 0; i < FIELD_COUNT; i++) {
-        if (field_section(&fields[i]) != section || !p->edit[i].dirty) {
+        if (!field_in_section(&fields[i], section) || !p->edit[i].dirty) {
             continue;
         }
         if (!writable(p, &fields[i]) || p->edit[i].pending) {
@@ -2294,30 +2613,34 @@ static void activate(Panel *p, Widget *w)
         break;
     case A_MAIN_TAB:
         stop_editing(p);
-        p->main_tab = w->index;
-        p->stream_setup = false;
-        p->dropdown = 0;
-        reset_body_scroll();
+        navigate_view(p, w->index ? VIEW_COMPOSE : VIEW_OPERATE, -1);
+        p->focus = w->index ? 6 : 5;
         break;
     case A_LANE:
         stop_editing(p);
-        p->main_tab = 0;
-        p->stream_setup = false;
-        p->open_lane = p->open_lane == w->index ? -1 : w->index;
-        reset_body_scroll();
+        p->open_lane = p->view == VIEW_OPERATE && p->open_lane == w->index ? -1 : w->index;
+        navigate_view(p, VIEW_OPERATE, -1);
         break;
     case A_SECTION:
         stop_editing(p);
-        p->main_tab = 1;
-        p->stream_setup = false;
-        p->open_section = p->open_section == w->index ? -1 : w->index;
-        reset_body_scroll();
+        navigate_view(p, VIEW_SECTION, w->index);
+        p->focus = 99;
         break;
     case A_SETUP:
         stop_editing(p);
-        p->stream_setup = w->index != 0;
-        p->dropdown = 0;
-        reset_body_scroll();
+        if (w->index) {
+            p->return_view = p->view;
+            p->return_section = p->open_section;
+            navigate_view(p, VIEW_SETUP, -1);
+        } else {
+            navigate_view(p, p->return_view, p->return_section);
+        }
+        break;
+    case A_BACK:
+        stop_editing(p);
+        navigate_view(p, p->view == VIEW_SETUP ? p->return_view : VIEW_COMPOSE,
+                      p->view == VIEW_SETUP ? p->return_section : -1);
+        p->focus = p->main_tab ? 6 : 5;
         break;
     case A_APPLY_SECTION:
         apply_section(p, w->index);
@@ -2326,7 +2649,7 @@ static void activate(Panel *p, Widget *w)
     case A_REVERT:
         stop_editing(p);
         for (size_t i = 0; i < FIELD_COUNT; i++) {
-            if (field_section(&fields[i]) == w->index) {
+            if (field_in_section(&fields[i], w->index)) {
                 field_value(&fields[i], &p->snapshot.config, p->edit[i].value,
                             sizeof p->edit[i].value);
                 p->edit[i].dirty = false;
@@ -2430,23 +2753,28 @@ static void key_event(Panel *p, const SDL_KeyboardEvent *event)
         move_focus(p, event->mod & SDL_KMOD_SHIFT ? -1 : 1);
         return;
     }
+    if ((event->mod & SDL_KMOD_ALT) && key >= SDLK_1 && key <= SDLK_7) {
+        stop_editing(p);
+        navigate_view(p, VIEW_SECTION, (int)(key - SDLK_1));
+        p->focus = 99;
+        return;
+    }
+    if (!p->active_text && !ctrl && !(event->mod & SDL_KMOD_ALT) &&
+        (key == SDLK_1 || key == SDLK_2)) {
+        navigate_view(p, key == SDLK_1 ? VIEW_OPERATE : VIEW_COMPOSE, -1);
+        p->focus = key == SDLK_1 ? 5 : 6;
+        return;
+    }
     if (key == SDLK_ESCAPE) {
         if (p->dropdown) {
             p->focus = p->dropdown;
             p->dropdown = 0;
             return;
         }
-        int index;
-        FieldEdit *edit = active_edit(p, &index);
-        if (edit) {
-            field_value(&fields[index], &p->snapshot.config, edit->value, sizeof edit->value);
-            edit->dirty = false;
-        }
         stop_editing(p);
-        if (!edit) {
-            p->stream_setup = false;
-            p->open_lane = -1;
-            p->open_section = -1;
+        if (p->view == VIEW_SETUP || p->view == VIEW_SECTION) {
+            navigate_view(p, p->view == VIEW_SETUP ? p->return_view : VIEW_COMPOSE,
+                          p->view == VIEW_SETUP ? p->return_section : -1);
             p->focus = p->main_tab ? 6 : 5;
         }
         return;
@@ -2513,10 +2841,20 @@ static void key_event(Panel *p, const SDL_KeyboardEvent *event)
             edit->revision++;
         } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
             if (edit->dirty) {
-                apply_setting(p, index, edit->value, true);
+                if (p->view == VIEW_SECTION || p->view == VIEW_SETUP) {
+                    apply_section(p, p->view == VIEW_SETUP ? 7 : p->open_section);
+                } else {
+                    apply_setting(p, index, edit->value, true);
+                }
             }
             stop_editing(p);
         }
+        return;
+    }
+    int section = p->view == VIEW_SETUP ? 7 : p->view == VIEW_SECTION ? p->open_section : -1;
+    if (!p->dropdown && section >= 0 && (key == SDLK_RETURN || key == SDLK_KP_ENTER) &&
+        section_dirty(p, section)) {
+        apply_section(p, section);
         return;
     }
     if (key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_SPACE) {
@@ -2620,6 +2958,50 @@ static void poll_client(Panel *p)
             fresh.config = p->snapshot.config;
             fresh.capabilities = p->snapshot.capabilities;
         }
+        if (fresh.connected && fresh.daemon_generation != p->navigation_attachment) {
+            /* Transport attachment counters change on every panel launch. The
+             * daemon socket's inode and creation time identify its actual session. */
+            struct stat socket_stat;
+            uint64_t cookie = 0;
+            if (!stat(fresh.config.socket_path, &socket_stat)) {
+                cookie = (uint64_t)socket_stat.st_ino ^ ((uint64_t)socket_stat.st_dev << 32) ^
+                         ((uint64_t)socket_stat.st_ctim.tv_sec << 16) ^
+                         (uint64_t)socket_stat.st_ctim.tv_nsec;
+            }
+            if (cookie && cookie != p->navigation_generation) {
+                NavigationMemory saved = p->navigation ? *p->navigation : (NavigationMemory){0};
+                bool valid =
+                    saved.magic == 0x43565032 && saved.session_cookie == cookie &&
+                    saved.view >= VIEW_OPERATE && saved.view <= VIEW_SETUP && saved.section >= -1 &&
+                    saved.section < 7 && (saved.view != VIEW_SECTION || saved.section >= 0) &&
+                    saved.lane >= -1 && saved.lane < 4 && saved.return_view >= VIEW_OPERATE &&
+                    saved.return_view <= VIEW_SECTION &&
+                    (saved.return_view != VIEW_SECTION ||
+                     (saved.return_section >= 0 && saved.return_section < 7));
+                memset(p->view_scroll, 0, sizeof p->view_scroll);
+                p->restore_scroll = true;
+                if (valid) {
+                    memcpy(p->view_scroll, saved.scroll, sizeof saved.scroll);
+                    for (size_t i = 0; i < VIEW_SCROLL_COUNT; i++) {
+                        if (!isfinite(p->view_scroll[i]) || p->view_scroll[i] > 0 ||
+                            p->view_scroll[i] < -1000000) {
+                            p->view_scroll[i] = 0;
+                        }
+                    }
+                    p->open_lane = saved.lane;
+                    p->return_view = saved.return_view;
+                    p->return_section = saved.return_section;
+                    navigate_view(p, saved.view, saved.section);
+                } else {
+                    p->open_lane = -1;
+                    p->return_view = VIEW_OPERATE;
+                    p->return_section = -1;
+                    navigate_view(p, VIEW_OPERATE, -1);
+                }
+                p->navigation_generation = cookie;
+            }
+            p->navigation_attachment = fresh.daemon_generation;
+        }
         p->snapshot = fresh;
         if (fresh.command_completed != p->command_seen) {
             p->command_seen = fresh.command_completed;
@@ -2666,6 +3048,10 @@ static void cleanup(Panel *p, void *clay_memory)
     if (!p) {
         free(clay_memory);
         return;
+    }
+    save_navigation(p);
+    if (p->navigation) {
+        munmap(p->navigation, sizeof *p->navigation);
     }
     panel_client_close(p->client);
     for (int i = 0; i < TEXT_CACHE_MAX; i++) {
@@ -2746,8 +3132,16 @@ static void write_ui_state(Panel *p, const char *path)
         json_string(file, is_field ? p->edit[w->index].value : "");
         fputc('}', file);
     }
+    Clay_BoundingBox status = Clay_GetElementData(CLAY_ID("StatusBar")).boundingBox;
+    Clay_BoundingBox composition = Clay_GetElementData(CLAY_ID("StatusComposition")).boundingBox;
+    Clay_BoundingBox daemon = Clay_GetElementData(CLAY_ID("StatusDaemon")).boundingBox;
+    fprintf(file, "],\"status_rows\":[[%.1f,%.1f,%.1f,%.1f],[%.1f,%.1f,%.1f,%.1f]]", composition.x,
+            composition.y, composition.width, composition.height, daemon.x, daemon.y, daemon.width,
+            daemon.height);
+    fprintf(file, ",\"view\":%d,\"status_bar\":[%.1f,%.1f,%.1f,%.1f]", p->view, status.x, status.y,
+            status.width, status.height);
     fprintf(file,
-            "],\"countdown\":%s,\"countdown_seconds\":%u,"
+            ",\"countdown\":%s,\"countdown_seconds\":%u,"
             "\"clipboard_text_available\":%s,\"focus\":%u,\"active_text\":%u,\"edit_text\":",
             p->snapshot.connected && p->snapshot.countdown ? "true" : "false",
             countdown_seconds(p->snapshot.countdown_remaining_ns),
@@ -2784,6 +3178,7 @@ int panel_run(const Config *config, char *error, size_t n)
         return -1;
     }
     p->snapshot.config = *config;
+    open_navigation(p, config);
     p->tab = -1;
     p->open_lane = -1;
     p->open_section = -1;
@@ -2926,6 +3321,7 @@ int panel_run(const Config *config, char *error, size_t n)
         poll_client(p);
         commands = layout(p);
         render(p, commands);
+        save_navigation(p);
         if (ui_state && p->draw_frame % 4 == 0) {
             write_ui_state(p, ui_state);
         }

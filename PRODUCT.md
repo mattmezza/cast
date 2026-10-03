@@ -34,7 +34,8 @@ must remain stable while an output is running, paused or frozen, and closing it 
 
 The panel follows the supplied three-lane header and Operate/Compose prototype.
 Operate exposes independent Virtual camera, Recording and Streaming controls plus
-Audio. Compose groups existing settings into focused progressive disclosures.
+Audio. Compose opens dedicated pages from a flat seven-section list, with inline groups,
+a pinned draft bar, keyboard jumps and session navigation memory.
 Only the body scrolls; output state, global privacy, preview toggle and exclusion
 remain pinned. Drafts apply explicitly and commands use acknowledged IPC.
 Streaming is one configured RTMP/RTMPS destination, without OAuth or service APIs.

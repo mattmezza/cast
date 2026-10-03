@@ -70,12 +70,14 @@ tabs. Operate and Compose are native Operate surfaces. They share neutral dark
 colours, bundled Inter, square controls, authored line icons, visible focus and
 acknowledged daemon state. This replaces the former Home-and-five-sections layout.
 
-The header contains Cast/panel and connection status, three equal lane chips with
-text state, contextual Pause all/Resume, Preview on/off, composition summary and a
-permanent capture-exclusion line. It never scrolls. A disconnected banner displays
-last-known state and explains disabled commands and automatic reconnect. Tabs are
-plain full-width text with an accent underline. The only scrolling region is the
-body, above a pinned pending/acknowledged/failed feedback line.
+The header has exactly two action rows: three equal 44px lane chips with fixed
+state indicators and ellipsized text, then equal 30px Pause all/Resume and Preview
+buttons in 11.5px semibold Inter. The titlebar contains only the window name.
+The permanent capture-exclusion line and full-width Operate/Compose tabs remain
+pinned. Connection state and acknowledged feedback live in a pinned 46px surface
+status bar: two centered 16px rows of quiet 11px text, with composition deep links
+above the connection label and marked, ellipsized feedback. Hovered summary links
+shift to foreground with dotted underlines. The body is the only scrolling region.
 
 Operate has four disclosures: Virtual camera, Recording, Streaming and Audio.
 Selecting a header chip opens the corresponding lane. Primary actions name their
@@ -85,16 +87,24 @@ Start connects privacy-paused and explicit Resume reveals content. Recording has
 countdown Cancel and omitted-time Cut/Resume. Global privacy restoration never
 reveals independently paused outputs or starts stopped ones.
 
-Compose groups Source & layout, Camera, Background & stage, Overlays, Annotations &
-pointer, Audio and Settings. Advanced groups reveal controls progressively. Local
-drafts include booleans/enums; Apply submits a validated atomic batch and Revert
-discards unsent changes. Enter submits the focused field. Drafts survive navigation
-and failed commands. Locked and unsupported fields explain why they are disabled.
-Config-only output fonts display their selected names with reload guidance.
+Compose is a static seven-row section list: Source & layout, Camera, Background &
+stage, Overlays, Annotations & pointer, Audio and Settings. Each row summarizes
+live values and opens a dedicated page with a sticky Compose back button. Every
+control is inline beneath visible group labels; no nested disclosures. List rows
+that straddle the scroll edge are hidden as a whole. Current-section dirty edits
+show a pinned Apply/Revert bar above the status bar. Apply and Enter submit a
+validated atomic batch without changing page or scroll; Revert discards unsent
+changes. Drafts survive navigation and failed commands. Alt+1…7 jump to sections,
+1/2 switch tabs and Escape closes a sheet first, otherwise returning to the list.
+Composition tokens deep-link to source/layout or background/stage; zoom has a reset
+link. Each view remembers its scroll in session memory across panel close/reopen
+against the same daemon. Navigation never writes config. Locked and unsupported
+fields explain why they are disabled; config-only output fonts show reload guidance.
 
 The panel fills 360–520 logical pixels and centers at wider sizes. It uses the
-specified Inter slots: 13 secondary/chips, 16 controls/body, 19 section headings,
-25 title/lane headings and 48 countdown numerals. Density changes rebuild raster
+existing Inter slots: 13 secondary/chips, 16 controls/body, 19 section headings,
+25 lane headings and 48 countdown numerals. Compact secondary roles reuse Inter
+at their actual 11px and 11.5px raster sizes. Density changes rebuild raster
 fonts and text textures. Controls retain square corners, consistent spacing and
 visible pointer/keyboard states. No second UI font or system-font dependency is
 introduced. Every status has text; colour is supplementary.

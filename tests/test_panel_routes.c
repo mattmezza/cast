@@ -299,7 +299,12 @@ int main(void)
     stage_field(panel, shape_index, "rounded");
     stage_field(panel, mirror_index, "true");
     assert(!strcmp(app->config.shape, "circle") && !app->config.mirror);
+    panel->view = VIEW_SECTION;
+    panel->open_section = 1;
+    panel->view_scroll[3] = -180;
     apply_section(panel, 1);
+    assert(panel->view == VIEW_SECTION && panel->open_section == 1 &&
+           panel->view_scroll[3] == -180);
     assert(!panel->error[0] && !strcmp(app->config.shape, "rounded") && app->config.mirror);
     acknowledge_edit(&panel->edit[shape_index], false);
     acknowledge_edit(&panel->edit[mirror_index], false);
