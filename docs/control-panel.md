@@ -8,13 +8,15 @@ has no effect on a `PANEL=0` daemon’s streaming capability.
 
 ## Operate
 
-The pinned header has three lane chips: **Virtual camera**, **Recording**, and
-**Streaming**. Each shows a text state, independent of colour. Selecting a chip
-opens that output’s controls in Operate. **Pause all** / **Resume** follows the
-daemon’s remembered group-pause restoration; independently paused outputs remain
+The pinned header uses two rows: 44-pixel lane chips for **Virtual camera**,
+**Recording**, and **Streaming**, then 30-pixel privacy and preview actions with
+compact 11.5-pixel semibold labels. Each lane shows a text state, independent of
+colour. Selecting a chip opens that output’s controls in Operate.
+**Pause all** / **Resume** follows the daemon’s remembered group-pause restoration;
+independently paused outputs remain
 paused and stopped outputs remain stopped. **Preview on/off** controls the separate
-floating preview. A one-line composition summary and permanent capture-exclusion
-notice remain above the tabs.
+floating preview. The permanent capture-exclusion notice remains above the tabs;
+composition and connection feedback stay in the bottom status bar.
 
 Operate has focused output disclosures and an Audio disclosure. Virtual-camera
 start is privacy-paused; Resume virtual camera explicitly reveals the composition.
@@ -35,15 +37,19 @@ recipes.
 
 ## Compose
 
-Compose follows the supplied design’s focused disclosures: **Source & layout**,
+Compose opens a flat list of seven sections: **Source & layout**,
 **Camera**, **Background & stage**, **Overlays**, **Annotations & pointer**, **Audio**,
-and **Settings**. Advanced screen styling, geometry, gradient stops, overlay anchors,
-annotation policies, recording formats and presentation typography stay within the
-appropriate disclosure. Every existing setting remains reachable.
+and **Settings**. Selecting a section opens its dedicated page with a sticky
+**Compose** back control and all fields inline in labeled groups. Advanced screen
+styling, geometry, gradient stops, overlay anchors, annotation policies, recording
+formats and presentation typography remain on the appropriate page. Every existing
+setting remains reachable.
 
 Text, numeric, enum and boolean composition edits are local drafts. **Apply** sends
-one validated settings batch; **Revert** discards unsent drafts. Enter applies the
-focused field. Drafts survive navigation. A failed acknowledgement keeps the draft,
+one validated settings batch for the current section; **Revert** discards its unsent
+drafts. A pinned draft bar above the status bar shows the current page's edit count,
+Apply/Revert and **session only**. Enter applies the current section's draft.
+Drafts survive page navigation. A failed acknowledgement keeps the draft,
 and an acknowledgement cannot discard typing performed after submission. Explicit
 capture selection, cycling, preset, reload and output actions are commands, with
 pending/acknowledged/failed feedback. Unavailable backend controls are disabled and
@@ -53,6 +59,17 @@ Pause/blur fonts are displayed with config-file and reload guidance; the user’
 output font choices remain separate from the panel’s single bundled Inter family.
 Optional titles, subtitles and footers accept the existing date/time placeholders.
 Static composition text uses a runtime-selectable font and literal text.
+
+Use **1** / **2** to switch between Operate and Compose, and **Alt+1…7** to jump
+directly to the seven sections in the order above. **Escape** dismisses the current
+sheet or choice picker first, then returns from a section page to the Compose list.
+Tab/Shift+Tab moves focus through controls.
+
+Each view remembers its own scroll position. Closing and reopening the panel
+restores the current page, output disclosure and scroll positions while the same
+daemon session runs. A new daemon session resets navigation to Operate. This
+navigation memory does not save drafts or write configuration; runtime Apply
+continues to leave the config file untouched.
 
 ## Floating preview
 
@@ -74,15 +91,19 @@ Wayland reports native preview limitations instead of pretending it has a window
 
 The panel uses fluid widths from 360 logical pixels, a centered column up to 520
 pixels, square controls, visible keyboard focus, and accelerated wheel scrolling.
-Only the body scrolls; the header, tabs and feedback stay pinned. This works in both
-floating and tiled windows, without assuming a window drag handle. The X11 class
+Only the body scrolls; the header, tabs, page Back control, draft bar and status
+stay pinned. This works in both floating and tiled windows, without assuming a
+window drag handle. The X11 class
 is truthfully CastPanel with the utility window type, matching the existing mwm
 floating rule; no window-manager configuration is changed.
 
-A persistent disconnect banner shows last-known state, disables commands and
-explains automatic reconnection. Every submitted command shows Pending followed by
-its acknowledgement or actionable failure. Capture exclusion is informational and
-permanent; neutral masking cannot reconstruct content covered by either window.
+The 46-pixel status bar has two centered rows in 11-pixel text. Its first row shows
+source, layout and preset links to the relevant Compose pages; the zoom token
+resets zoom. Its second row shows connection state and marked pending, acknowledged
+or failed command feedback. Long tokens and messages fit with ellipses. During
+disconnect, last-known state remains visible, commands are disabled and the panel
+reconnects automatically. Capture exclusion is informational and permanent;
+neutral masking cannot reconstruct content covered by either window.
 
 ## Implementation handoff
 
@@ -96,9 +117,15 @@ protocol remains version 1 and requires the same build on both ends, as before.
 The streaming implementation intentionally supersedes the prototype’s unavailable
 capability and the incumbent `live` command names. It supplies real backend states
 and `virtual` commands. Browser demo chrome, simulated device/preset inventories,
-Unicode icons, unsupported preview dragging and illustrative secrets are not
-production controls. Native typography uses the specified Inter slots
-13/16/19/25/48 rather than browser fractional sizes. The setup copy correctly says
+Unicode icons, browser window simulation and illustrative secrets are not
+production controls. Native typography uses Inter slots
+13/16/19/25/48 plus compact 11-pixel status and 11.5-pixel semibold meta-action
+roles, rasterized at actual display density. The setup copy correctly says
 the key stays out of UI/IPC/logs; authentication necessarily sends it to the ingest
-service. The setup disclosure keeps global privacy controls accessible while
+service. The setup sheet keeps global privacy controls accessible while
 editing, instead of blocking them behind browser demo modal chrome.
+
+Panel-owned shared memory retains only navigation and per-view scroll numbers
+for the current daemon session. This panel refinement uses the existing daemon
+commands, snapshots and configuration schema, and retains the floating preview's
+existing behavior.
