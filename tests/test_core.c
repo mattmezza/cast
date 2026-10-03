@@ -98,6 +98,44 @@ static void test_presentation_config(void)
 }
 int main(void)
 {
+    Config composition_defaults;
+    config_defaults(&composition_defaults);
+    assert(composition_defaults.screen_width_percent == 78 &&
+           composition_defaults.screen_margin == 32 && composition_defaults.screen_radius == 0);
+    assert(!strcmp(composition_defaults.layout_order, "overlay,stage,split,screen,camera"));
+    assert(!strcmp(composition_defaults.background_source, "screen") &&
+           composition_defaults.gradient_from == 0x101827 &&
+           composition_defaults.gradient_via_enabled && composition_defaults.gradient_angle == 135);
+    assert(!composition_defaults.logo_enabled && !composition_defaults.text_enabled &&
+           composition_defaults.logo_width_percent == 12 && composition_defaults.text_size == 28);
+    Config stage;
+    load_test("[composition]\nlayout=stage\nlayout_order=camera,stage,overlay\n"
+              "[screen]\nwidth_percent=65\nmargin=8\nradius=16\nborder_width=4\n"
+              "border_color=#123456\nbackground=gradient\nbackground_color=#010203\n"
+              "background_blur_radius=64\nbackground_brightness=0.5\n"
+              "[background]\nsource=camera\ngradient_from=#000000\ngradient_via=#112233\n"
+              "gradient_to=#ffffff\ngradient_via_enabled=false\ngradient_angle=360\n"
+              "gradient_waypoint=30\n[logo]\nenabled=true\npath=/tmp/logo.png\nanchor=top\n"
+              "width_percent=15\nmargin_x=20\nmargin_y=22\nopacity=0.7\n"
+              "[text]\nenabled=true\ncontent=café {literal}\nfont=monospace\nsize=24\n"
+              "color=#ffeedd\nanchor=right\nmargin_x=12\nmargin_y=14\nopacity=0.8\n",
+              true, &stage);
+    assert(!strcmp(stage.layout, "stage") && stage.screen_width_percent == 65 &&
+           stage.screen_border_color == 0x123456 && !strcmp(stage.background_source, "camera"));
+    assert(stage.logo_enabled && !strcmp(stage.logo_anchor, "top") && stage.text_enabled &&
+           !strcmp(stage.text_content, "café {literal}") && stage.text_color == 0xffeedd);
+    load_test("[output]\nwidth=64\nheight=64\n", true, &stage);
+    load_test("[screen]\nwidth_percent=0\n", false, &stage);
+    load_test("[screen]\nbackground=unknown\n", false, &stage);
+    load_test("[background]\ngradient_waypoint=100\n", false, &stage);
+    load_test("[background]\ngradient_angle=nan\n", false, &stage);
+    load_test("[logo]\nenabled=true\n", false, &stage);
+    load_test("[logo]\nanchor=free\n", false, &stage);
+    load_test("[logo]\nopacity=1.1\n", false, &stage);
+    load_test("[text]\ncontent=bad \xff\n", false, &stage);
+    load_test("[text]\nfont=\n", false, &stage);
+    load_test("[text]\nsize=7\n", false, &stage);
+    load_test("[text]\nmargin_x=-1\n", false, &stage);
     test_presentation_config();
     Config c;
     config_defaults(&c);

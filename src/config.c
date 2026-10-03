@@ -37,6 +37,9 @@ typedef struct {
 #define ANCHORS                                                                                    \
     "top-left,top-right,bottom-left,bottom-right,top,bottom,left,right,free,"                      \
     "top-center,bottom-center,center-left,center-right"
+#define FIXED_ANCHORS                                                                              \
+    "top-left,top-right,bottom-left,bottom-right,top,bottom,left,right,"                           \
+    "top-center,bottom-center,center-left,center-right"
 static const Setting settings[] = {
     E("output", "backend", backend, "xorg,wayland,synthetic", "xorg"),
     S("output", "device", output_device, "/dev/video10"),
@@ -81,14 +84,46 @@ static const Setting settings[] = {
     C("camera", "background_color", camera_background_color, "#20252b"),
     I("camera", "background_blur_radius", camera_background_blur_radius, 1, 128, "96"),
     D("camera", "background_brightness", camera_background_brightness, 0, 1, "0.25"),
+    D("screen", "width_percent", screen_width_percent, 1, 100, "78"),
+    I("screen", "margin", screen_margin, 0, 4096, "32"),
+    I("screen", "radius", screen_radius, 0, 2048, "0"),
+    I("screen", "border_width", screen_border_width, 0, 256, "0"),
+    C("screen", "border_color", screen_border_color, "#ffffff"),
+    E("screen", "background", screen_background, "blurred,gradient,solid", "blurred"),
+    C("screen", "background_color", screen_background_color, "#20252b"),
+    I("screen", "background_blur_radius", screen_background_blur_radius, 1, 128, "96"),
+    D("screen", "background_brightness", screen_background_brightness, 0, 1, "0.25"),
+    E("background", "source", background_source, "screen,camera", "screen"),
+    C("background", "gradient_from", gradient_from, "#101827"),
+    C("background", "gradient_via", gradient_via, "#26354a"),
+    C("background", "gradient_to", gradient_to, "#080b12"),
+    B("background", "gradient_via_enabled", gradient_via_enabled, "true"),
+    D("background", "gradient_angle", gradient_angle, 0, 360, "135"),
+    D("background", "gradient_waypoint", gradient_waypoint, 1, 99, "50"),
+    B("logo", "enabled", logo_enabled, "false"),
+    S("logo", "path", logo_path, ""),
+    E("logo", "anchor", logo_anchor, FIXED_ANCHORS, "bottom-right"),
+    D("logo", "width_percent", logo_width_percent, 1, 100, "12"),
+    I("logo", "margin_x", logo_margin_x, 0, 7680, "24"),
+    I("logo", "margin_y", logo_margin_y, 0, 4320, "24"),
+    D("logo", "opacity", logo_opacity, 0, 1, "1"),
+    B("text", "enabled", text_enabled, "false"),
+    S("text", "content", text_content, ""),
+    S("text", "font", text_font, "Noto Sans"),
+    I("text", "size", text_size, 8, 256, "28"),
+    C("text", "color", text_color, "#ffffff"),
+    E("text", "anchor", text_anchor, FIXED_ANCHORS, "bottom-left"),
+    I("text", "margin_x", text_margin_x, 0, 7680, "24"),
+    I("text", "margin_y", text_margin_y, 0, 4320, "24"),
+    D("text", "opacity", text_opacity, 0, 1, "1"),
     I("camera", "x", camera_x, -7680, 7680, "0"),
     I("camera", "y", camera_y, -4320, 4320, "0"),
     I("camera", "crop_x", crop_x, -16384, 16384, "0"),
     I("camera", "crop_y", crop_y, -16384, 16384, "0"),
     B("camera", "mirror", mirror, "true"),
     S("camera", "corner_order", corner_order, "bottom-right,bottom-left,top-left,top-right"),
-    E("composition", "layout", layout, "overlay,split,screen,camera", "overlay"),
-    S("composition", "layout_order", layout_order, "overlay,split,screen,camera"),
+    E("composition", "layout", layout, "overlay,stage,split,screen,camera", "overlay"),
+    S("composition", "layout_order", layout_order, "overlay,stage,split,screen,camera"),
     E("composition", "split_side", split_side, "left,right", "left"),
     D("composition", "split_ratio", split_ratio, 5, 95, "25"),
     E("composition", "fit", fit, "contain,cover", "contain"),
@@ -200,6 +235,37 @@ static bool template_setting(const Setting *setting)
            setting->offset == offsetof(Config, blur_subtitle) ||
            setting->offset == offsetof(Config, blur_footer);
 }
+static int static_text_validate(const char *text, char *error, size_t n)
+{
+    const unsigned char *p = (const unsigned char *)text;
+    while (*p) {
+        if (*p < 128) {
+            if ((*p < 32 && *p != '\n' && *p != '\t') || *p == 127) {
+                return fail(error, n, "text contains an unsupported control character");
+            }
+            p++;
+            continue;
+        }
+        unsigned bytes = *p >= 0xc2 && *p <= 0xdf   ? 2
+                         : *p >= 0xe0 && *p <= 0xef ? 3
+                         : *p >= 0xf0 && *p <= 0xf4 ? 4
+                                                    : 0;
+        if (!bytes) {
+            return fail(error, n, "text must be valid UTF-8");
+        }
+        for (unsigned i = 1; i < bytes; i++) {
+            if ((p[i] & 0xc0) != 0x80) {
+                return fail(error, n, "text must be valid UTF-8");
+            }
+        }
+        if ((*p == 0xe0 && p[1] < 0xa0) || (*p == 0xed && p[1] >= 0xa0) ||
+            (*p == 0xf0 && p[1] < 0x90) || (*p == 0xf4 && p[1] >= 0x90)) {
+            return fail(error, n, "text must be valid UTF-8");
+        }
+        p += bytes;
+    }
+    return 0;
+}
 static int assign(void *base, const Setting *s, const char *v, char *err, size_t n)
 {
     char *p = (char *)base + s->offset, *end;
@@ -216,6 +282,9 @@ static int assign(void *base, const Setting *s, const char *v, char *err, size_t
         }
         if (!strcmp(s->section, "output") && template_setting(s) &&
             presentation_template_validate(v, err, n)) {
+            return -1;
+        }
+        if (!strcmp(s->section, "text") && static_text_validate(v, err, n)) {
             return -1;
         }
         strcpy(p, v);
@@ -352,6 +421,11 @@ int config_validate(const Config *c, char *err, size_t n)
         if (template_setting(setting) && presentation_template_validate(value, err, n)) {
             return -1;
         }
+        if (!strcmp(setting->section, "text") &&
+            (setting->type == T_STRING || setting->type == T_ENUM) &&
+            static_text_validate(value, err, n)) {
+            return -1;
+        }
         if (setting->type == T_INT) {
             int number = *(const int *)value;
             if (number < setting->min || number > setting->max) {
@@ -371,6 +445,12 @@ int config_validate(const Config *c, char *err, size_t n)
         !c->audio_codec[0] || !c->record_container[0]) {
         return fail(err, n,
                     "device paths, recording directory, codecs and container cannot be empty");
+    }
+    if (!c->text_font[0]) {
+        return fail(err, n, "text.font cannot be empty");
+    }
+    if (c->logo_enabled && !c->logo_path[0]) {
+        return fail(err, n, "logo needs an image path; use cast logo path PATH before enabling it");
     }
     if (c->width % 2 || c->height % 2) {
         return fail(err, n, "output dimensions must be even for video formats");
@@ -400,7 +480,7 @@ int config_validate(const Config *c, char *err, size_t n)
         return fail(err, n, "output.pause_font and output.blur_font cannot be empty");
     }
     if (valid_list(c->corner_order, ANCHORS, err, n) ||
-        valid_list(c->layout_order, "overlay,split,screen,camera", err, n)) {
+        valid_list(c->layout_order, "overlay,stage,split,screen,camera", err, n)) {
         return -1;
     }
     if (c->preset_order[0]) {
@@ -442,7 +522,7 @@ static int preset_assign(Preset *p, const char *key, const char *value, char *e,
     if (!strcmp(key, "layout")) {
         s.offset = offsetof(Preset, layout);
         s.size = sizeof p->layout;
-        s.choices = "overlay,split,screen,camera";
+        s.choices = "overlay,stage,split,screen,camera";
         bit = 1;
     } else if (!strcmp(key, "camera_shape")) {
         s.offset = offsetof(Preset, camera_shape);

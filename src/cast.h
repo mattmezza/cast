@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#define CAST_VERSION "0.5.0"
+#define CAST_VERSION "0.6.0"
 #define CAST_TEXT 256
 #define CAST_ERR 1024
 #define CAST_MAX_PRESETS 24
@@ -34,6 +34,26 @@ typedef struct {
     uint32_t camera_background_color;
     int camera_background_blur_radius;
     double camera_background_brightness;
+    double screen_width_percent;
+    int screen_margin, screen_radius, screen_border_width;
+    uint32_t screen_border_color;
+    char screen_background[16];
+    uint32_t screen_background_color;
+    int screen_background_blur_radius;
+    double screen_background_brightness;
+    char background_source[16];
+    uint32_t gradient_from, gradient_via, gradient_to;
+    bool gradient_via_enabled;
+    double gradient_angle, gradient_waypoint;
+    bool logo_enabled;
+    char logo_path[PATH_MAX], logo_anchor[24];
+    double logo_width_percent, logo_opacity;
+    int logo_margin_x, logo_margin_y;
+    bool text_enabled;
+    char text_content[256], text_font[256], text_anchor[24];
+    int text_size, text_margin_x, text_margin_y;
+    uint32_t text_color;
+    double text_opacity;
     int camera_x, camera_y, crop_x, crop_y;
     bool camera_visible, mirror;
     char corner_order[128], layout_order[128], preset_order[256], monitor[128];
