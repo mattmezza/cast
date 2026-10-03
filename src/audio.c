@@ -39,9 +39,9 @@ struct CastAudio {
     struct spa_hook core_listener, registry_listener, metadata_listener;
     struct AudioNode nodes[AUDIO_NODES];
     int count, seq;
-    uint64_t accept_after, live_accept_after, record_accept_after;
-    uint64_t live_epoch_after, record_epoch_after;
-    bool done, server_dead, started, live_silent;
+    uint64_t accept_after, virtual_accept_after, record_accept_after, stream_accept_after;
+    uint64_t virtual_epoch_after, record_epoch_after, stream_epoch_after;
+    bool done, server_dead, started, virtual_silent;
     char default_mic[256], error[CAST_ERR];
     Config cfg;
     struct AudioLane lane[2], virtual_lane;
@@ -244,11 +244,14 @@ static void put_samples(struct AudioLane *l, uint64_t ns, const float *src, int 
     /* A late callback can deliver a chunk captured before one lane's boundary.
      * Retire that entire chunk for this lane, while retaining the other mix. */
     uint64_t end = start + (uint64_t)count;
-    if (captured_at < l->owner->live_epoch_after && end > l->owner->live_accept_after) {
-        l->owner->live_accept_after = end;
+    if (captured_at < l->owner->virtual_epoch_after && end > l->owner->virtual_accept_after) {
+        l->owner->virtual_accept_after = end;
     }
     if (captured_at < l->owner->record_epoch_after && end > l->owner->record_accept_after) {
         l->owner->record_accept_after = end;
+    }
+    if (captured_at < l->owner->stream_epoch_after && end > l->owner->stream_accept_after) {
+        l->owner->stream_accept_after = end;
     }
     if (!l->end || start > l->end || start + (uint64_t)count < l->begin) {
         l->begin = start;
@@ -312,14 +315,14 @@ static void read_locked(CastAudio *a, uint64_t ns, float *dst, int count)
         dst[i] = fmaxf(-1.f, fminf(1.f, dst[i]));
     }
 }
-static void read_live_locked(CastAudio *a, uint64_t ns, float *dst, int count)
+static void read_virtual_locked(CastAudio *a, uint64_t ns, float *dst, int count)
 {
-    if (a->live_silent || a->virtual_lane.dead) {
+    if (a->virtual_silent || a->virtual_lane.dead) {
         memset(dst, 0, (size_t)count * 2 * sizeof(float));
     } else {
         read_locked(a, ns, dst, count);
         uint64_t start = sample_time(ns);
-        uint64_t stale = a->live_accept_after > start ? a->live_accept_after - start : 0;
+        uint64_t stale = a->virtual_accept_after > start ? a->virtual_accept_after - start : 0;
         if (stale > (uint64_t)count) {
             stale = (uint64_t)count;
         }
@@ -346,7 +349,7 @@ static void virtual_process(void *data)
         if (now < span) {
             memset(p, 0, (size_t)count * 2 * sizeof(float));
         } else {
-            read_live_locked(a, now - span, p, (int)count);
+            read_virtual_locked(a, now - span, p, (int)count);
         }
         d->chunk->offset = 0;
         d->chunk->size = count * sizeof(float) * 2;
@@ -510,7 +513,7 @@ CastAudio *audio_open(const Config *cfg, char *e, size_t n)
         return NULL;
     }
     a->cfg = *cfg;
-    a->live_silent = true;
+    a->virtual_silent = true;
     for (int i = 0; i < 2; i++) {
         a->lane[i].owner = a;
         a->lane[i].samples = calloc(AUDIO_RING * 2, sizeof(float));
@@ -707,10 +710,10 @@ void audio_barrier(CastAudio *a, bool silent)
     if (a->started) {
         pw_thread_loop_lock(a->loop);
     }
-    a->live_silent = silent;
+    a->virtual_silent = silent;
     a->accept_after = sample_time(cast_now_ns());
-    a->live_accept_after = a->record_accept_after = a->accept_after;
-    a->live_epoch_after = a->record_epoch_after = a->accept_after;
+    a->virtual_accept_after = a->record_accept_after = a->stream_accept_after = a->accept_after;
+    a->virtual_epoch_after = a->record_epoch_after = a->stream_epoch_after = a->accept_after;
     for (int i = 0; i < 2; i++) {
         clear_lane(&a->lane[i]);
         if (a->lane[i].stream) {
@@ -740,14 +743,14 @@ static uint64_t privacy_after(CastAudio *a, uint64_t after)
     }
     return after;
 }
-void audio_live_privacy(CastAudio *a, bool silent)
+void audio_virtual_privacy(CastAudio *a, bool silent)
 {
     if (a->started) {
         pw_thread_loop_lock(a->loop);
     }
-    a->live_silent = silent;
-    a->live_epoch_after = sample_time(cast_now_ns());
-    a->live_accept_after = privacy_after(a, a->live_epoch_after);
+    a->virtual_silent = silent;
+    a->virtual_epoch_after = sample_time(cast_now_ns());
+    a->virtual_accept_after = privacy_after(a, a->virtual_epoch_after);
     if (a->virtual_lane.stream) {
         pw_stream_flush(a->virtual_lane.stream, false);
     }
@@ -774,6 +777,33 @@ void audio_read(CastAudio *a, uint64_t ns, float *dst, int count)
     read_locked(a, ns, dst, count);
     uint64_t start = sample_time(ns);
     uint64_t stale = a->record_accept_after > start ? a->record_accept_after - start : 0;
+    if (stale > (uint64_t)count) {
+        stale = (uint64_t)count;
+    }
+    memset(dst, 0, (size_t)stale * 2 * sizeof(float));
+    if (a->started) {
+        pw_thread_loop_unlock(a->loop);
+    }
+}
+void audio_stream_privacy(CastAudio *a)
+{
+    if (a->started) {
+        pw_thread_loop_lock(a->loop);
+    }
+    a->stream_epoch_after = sample_time(cast_now_ns());
+    a->stream_accept_after = privacy_after(a, a->stream_epoch_after);
+    if (a->started) {
+        pw_thread_loop_unlock(a->loop);
+    }
+}
+void audio_stream_read(CastAudio *a, uint64_t ns, float *dst, int count)
+{
+    if (a->started) {
+        pw_thread_loop_lock(a->loop);
+    }
+    read_locked(a, ns, dst, count);
+    uint64_t start = sample_time(ns);
+    uint64_t stale = a->stream_accept_after > start ? a->stream_accept_after - start : 0;
     if (stale > (uint64_t)count) {
         stale = (uint64_t)count;
     }
@@ -822,7 +852,7 @@ void audio_status(CastAudio *a, char *out, size_t n)
              a->lane[0].stream && !a->lane[0].dead ? "true" : "false",
              a->lane[1].stream && !a->lane[1].dead ? "true" : "false",
              a->virtual_lane.stream && !a->virtual_lane.dead ? "true" : "false",
-             a->live_silent ? "true" : "false");
+             a->virtual_silent ? "true" : "false");
     if (a->started) {
         pw_thread_loop_unlock(a->loop);
     }
@@ -847,7 +877,7 @@ void audio_test_virtual_read(CastAudio *a, uint64_t ns, float *dst, int count)
     if (a->started) {
         pw_thread_loop_lock(a->loop);
     }
-    read_live_locked(a, ns, dst, count);
+    read_virtual_locked(a, ns, dst, count);
     if (a->started) {
         pw_thread_loop_unlock(a->loop);
     }

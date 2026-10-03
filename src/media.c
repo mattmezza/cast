@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #endif
 #include "media_internal.h"
+#include "stream.h"
 #include <errno.h>
 #include <libavcodec/avcodec.h>
 #include <math.h>
@@ -15,9 +16,10 @@ struct Media {
     CastOutput *output;
     CastAudio *audio;
     CastRecorder *recorder;
-    bool live_silent, record_silent, record_cut;
-    uint64_t live_drops;
-    char camera_error[CAST_ERR], live_error[CAST_ERR];
+    CastStream *stream;
+    bool virtual_silent, record_silent, record_cut;
+    uint64_t virtual_drops;
+    char camera_error[CAST_ERR], virtual_error[CAST_ERR];
 };
 Media *media_open(const Config *cfg, char *e, size_t n)
 {
@@ -27,7 +29,7 @@ Media *media_open(const Config *cfg, char *e, size_t n)
         return NULL;
     }
     m->cfg = *cfg;
-    m->live_silent = true;
+    m->virtual_silent = true;
     m->output = output_open(cfg, e, n);
     if (!m->output) {
         goto fail;
@@ -44,6 +46,11 @@ Media *media_open(const Config *cfg, char *e, size_t n)
         snprintf(e, n, "recording worker creation failed");
         goto fail;
     }
+    m->stream = stream_open(m->audio);
+    if (!m->stream) {
+        snprintf(e, n, "streaming supervisor creation failed");
+        goto fail;
+    }
     return m;
 fail:
     media_close(m);
@@ -54,6 +61,7 @@ void media_close(Media *m)
     if (!m) {
         return;
     }
+    stream_close(m->stream);
     recorder_close(m->recorder);
     audio_close(m->audio);
     camera_close(m->camera);
@@ -88,20 +96,62 @@ int media_camera(Media *m, Frame *f, char *e, size_t n)
     }
     return rc;
 }
-int media_live(Media *m, const Frame *f, bool silent, char *e, size_t n)
+int media_virtual(Media *m, const Frame *f, bool silent, char *e, size_t n)
 {
-    if (silent != m->live_silent) {
-        audio_live_privacy(m->audio, silent);
-        m->live_silent = silent;
+    if (silent != m->virtual_silent) {
+        audio_virtual_privacy(m->audio, silent);
+        m->virtual_silent = silent;
     }
     int rc = output_frame(m->output, f, e, n);
     if (rc != 0) {
-        m->live_drops++;
-        snprintf(m->live_error, sizeof(m->live_error), "%s", e);
+        m->virtual_drops++;
+        snprintf(m->virtual_error, sizeof(m->virtual_error), "%s", e);
         return -1;
     }
-    m->live_error[0] = 0;
+    m->virtual_error[0] = 0;
     return 0;
+}
+int media_virtual_enabled(Media *m, const Config *cfg, bool enabled, char *error, size_t n)
+{
+    if (enabled == m->cfg.virtual_enabled) {
+        return 0;
+    }
+    Config candidate = *cfg;
+    candidate.virtual_enabled = enabled;
+    CastOutput *output = output_open(&candidate, error, n);
+    if (!output) {
+        return -1;
+    }
+    output_close(m->output);
+    m->output = output;
+    m->cfg.virtual_enabled = enabled;
+    m->virtual_silent = true;
+    audio_virtual_privacy(m->audio, true);
+    return 0;
+}
+int media_stream_start(Media *m, const Config *cfg, char *error, size_t n)
+{
+    return stream_start(m->stream, cfg, error, n);
+}
+int media_stream_stop(Media *m, char *error, size_t n)
+{
+    return stream_stop(m->stream, error, n);
+}
+int media_stream_frame(Media *m, const Frame *frame, bool silent, char *error, size_t n)
+{
+    return stream_frame(m->stream, frame, silent, error, n);
+}
+void media_stream_privacy(Media *m, bool silent)
+{
+    stream_privacy(m->stream, silent);
+}
+void media_stream_barrier(Media *m)
+{
+    stream_barrier(m->stream);
+}
+void media_stream_status(Media *m, StreamSnapshot *status)
+{
+    stream_status(m->stream, status);
 }
 int media_record_start(Media *m, const Config *cfg, const char *path, char *e, size_t n)
 {
@@ -150,20 +200,21 @@ int media_record_silence(Media *m, bool silent, char *e, size_t n)
 void media_barrier(Media *m)
 {
     camera_barrier(m->camera);
-    audio_barrier(m->audio, m->live_silent);
+    audio_barrier(m->audio, m->virtual_silent);
     recorder_barrier(m->recorder);
+    stream_barrier(m->stream);
 }
 void media_record_barrier(Media *m)
 {
     audio_record_privacy(m->audio);
     recorder_barrier(m->recorder);
 }
-int media_privacy(Media *m, bool live_silent, bool record_silent, bool record_cut, char *error,
+int media_privacy(Media *m, bool virtual_silent, bool record_silent, bool record_cut, char *error,
                   size_t n)
 {
-    if (live_silent != m->live_silent) {
-        audio_live_privacy(m->audio, live_silent);
-        m->live_silent = live_silent;
+    if (virtual_silent != m->virtual_silent) {
+        audio_virtual_privacy(m->audio, virtual_silent);
+        m->virtual_silent = virtual_silent;
     }
     bool active, cut;
     uint64_t dropped;
@@ -193,8 +244,16 @@ int media_reconfigure(Media *m, const Config *cfg, bool recording, char *e, size
 {
     if (m->cfg.width != cfg->width || m->cfg.height != cfg->height || m->cfg.fps != cfg->fps ||
         strcmp(m->cfg.output_device, cfg->output_device) ||
-        m->cfg.live_enabled != cfg->live_enabled) {
+        m->cfg.virtual_enabled != cfg->virtual_enabled) {
         snprintf(e, n, "output device/dimensions/fps changes require restart");
+        return -1;
+    }
+    StreamSnapshot streaming;
+    stream_status(m->stream, &streaming);
+    if (streaming.active && stream_settings_changed(&m->cfg.stream, &cfg->stream)) {
+        snprintf(
+            e, n,
+            "stream connection/encoder settings are locked while active; cast stream stop first");
         return -1;
     }
     if (recording && encoding_changed(&m->cfg, cfg)) {
@@ -320,15 +379,15 @@ int media_audio_command(Media *m, Config *cfg, int argc, char **argv, char *repl
 void media_status(Media *m, bool *active, bool *paused, uint64_t *drops, char *error, size_t n)
 {
     recorder_status(m->recorder, active, paused, drops, error, n);
-    *drops += m->live_drops;
+    *drops += m->virtual_drops;
     if (!error[0]) {
         audio_error(m->audio, error, n);
     }
     if (!error[0] && m->camera_error[0]) {
         snprintf(error, n, "%s", m->camera_error);
     }
-    if (!error[0] && m->live_error[0]) {
-        snprintf(error, n, "%s", m->live_error);
+    if (!error[0] && m->virtual_error[0]) {
+        snprintf(error, n, "%s", m->virtual_error);
     }
 }
 void media_record_error(Media *m, char *out, size_t n)
@@ -356,6 +415,7 @@ void media_audio_status(Media *m, char *out, size_t n)
 void media_doctor(const Config *cfg, char *out, size_t n)
 {
     camera_doctor(cfg, out, n);
+    stream_doctor(cfg, out, n);
     size_t used = strlen(out);
     snprintf(
         out + used, n - used,
