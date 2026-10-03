@@ -1078,8 +1078,7 @@ static void settings_area(Panel *p)
                    true, false, A_GROUP, group);
             if (p->groups[p->tab][group]) {
                 if (p->tab == TAB_SOURCE && group == 3) {
-                    text_wrapped("Stage places the screen beside the camera. Adjust each layer's "
-                                 "width independently.",
+                    text_wrapped("Adjust the screen and camera widths independently in Stage.",
                                  secondary);
                 } else if (p->tab == TAB_SOURCE && group == 5) {
                     text_wrapped("Shared gradient for Screen and Camera backgrounds. Turn the "

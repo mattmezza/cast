@@ -11,6 +11,8 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import struct
+import zlib
 import tempfile
 import time
 
@@ -36,6 +38,15 @@ def exercise():
                    CAST_PANEL_UI_STATE=str(root / "ui.json"))
         config = root / "cast.conf"
         config.write_text("[record]\ndirectory=" + directory + "\ncountdown=0\n")
+        # A local RGBA fixture exercises the logo path without user images/hardware.
+        logo_path = root / "logo.png"
+        def png_chunk(kind, data):
+            return (struct.pack("!I", len(data)) + kind + data +
+                    struct.pack("!I", zlib.crc32(kind + data) & 0xffffffff))
+        rgba = b"".join(b"\0" + bytes((80, 160, 220, 128))*16 for _ in range(16))
+        logo_path.write_bytes(b"\x89PNG\r\n\x1a\n" +
+                              png_chunk(b"IHDR", struct.pack("!2I5B", 16, 16, 8, 6, 0, 0, 0)) +
+                              png_chunk(b"IDAT", zlib.compress(rgba)) + png_chunk(b"IEND", b""))
         common = ["--config", str(config), "--socket", str(root / "daemon.sock")]
         daemon = None
         panel = None
@@ -165,7 +176,7 @@ def exercise():
                     item = widget(identifier)
                     x, y, w, h = item["box"]
                     area = ui()["scroll"]
-                    inside_scroll = (item["id"] >= 1000 or 40 <= item["id"] < 90 or
+                    inside_scroll = (item["id"] >= 1000 or 40 <= item["id"] < 99 or
                                      100 <= item["id"] < 105 or 200 <= item["id"] < 300 or
                                      (ui()["tab"] < 0 and item["id"] in (31, 33, 36, 37, 38, 39)))
                     if not inside_scroll or (y >= area[1] and y+h <= area[1]+area[3]):
@@ -286,6 +297,103 @@ def exercise():
             time.sleep(.15)
             click_widget(50)
             wait_until(lambda: state()["layout"] == "overlay", "CLI/UI layout synchronization failed")
+
+            # Cycles use daemon order in both directions, including Stage.
+            cli("settings", "composition.layout_order", "overlay,stage,camera")
+            click_widget(91)
+            wait_until(lambda: state()["layout"] == "stage", "Next layout ignored configured order")
+            click_widget(90)
+            wait_until(lambda: state()["layout"] == "overlay", "Previous layout ignored configured order")
+            click_widget(54)
+            wait_until(lambda: state()["layout"] == "stage", "Stage composition button failed")
+            click_widget(203)
+
+            def edit_value(key, value):
+                click_widget(key)
+                xdo("key", "--clearmodifiers", "ctrl+a")
+                if value:
+                    xdo("type", "--clearmodifiers", value)
+                else:
+                    xdo("key", "--clearmodifiers", "BackSpace")
+                expected = ui()["command_queued"] + 1
+                xdo("key", "--clearmodifiers", "Return")
+                for attempt in range(3):
+                    wait_until(lambda: ui()["command_queued"] >= expected or bool(ui()["error"]),
+                               f"No submit result for {key}")
+                    if ui()["command_queued"] >= expected:
+                        break
+                    assert ui()["error"] == "panel busy; retry", (key, ui()["error"])
+                    # A rejected enqueue leaves the draft and Apply action intact.
+                    # Retry only the unaccepted command; never duplicate an ACK.
+                    click_widget(widget(key)["id"] + 1)
+                await_panel_ack(expected)
+                assert not ui()["error"], (key, ui()["error"])
+                wait_until(lambda: widget(key)["value"] == value, f"Acknowledged {key} value differs")
+
+            edit_value("screen.width_percent", "70")
+            capture("stage-size")
+            click_widget(203)
+            click_widget(204)
+            edit_value("screen.radius", "24")
+            edit_value("screen.border_width", "2")
+            click_widget("screen.background")
+            click_widget(401)
+            edit_value("screen.background_brightness", "0.2")
+            capture("screen-appearance")
+            click_widget(204)
+            click_widget(205)
+            click_widget("background.source")
+            click_widget(401)
+            click_widget("background.gradient_via_enabled")
+            wait_until(lambda: widget("background.gradient_via_enabled")["value"] == "false", "Two-stop gradient toggle failed")
+            edit_value("background.gradient_angle", "120")
+            edit_value("background.gradient_waypoint", "60")
+            capture("background-gradient")
+            click_widget("background.gradient_from")
+            capture("background-gradient-colors")
+            click_widget(205)
+            cli("settings", "composition.preset_order", "coding,conversation")
+            cli("preset", "coding")
+            click_widget(92)
+            wait_until(lambda: state()["layout"] == "camera", "Previous preset ignored configured order")
+            click_widget(41)
+            wait_until(lambda: state()["layout"] == "screen", "Next preset ignored configured order")
+            navigate(1)
+            cli("settings", "camera.corner_order", "top,left,bottom")
+            cli("camera", "anchor", "top")
+            wait_until(lambda: ui()["camera_anchor"] == "top", "CLI anchor did not synchronize")
+            click_widget(96)
+            wait_until(lambda: ui()["camera_anchor"] == "bottom", "Previous anchor ignored configured order")
+            click_widget(97)
+            wait_until(lambda: ui()["camera_anchor"] == "top", "Next anchor ignored configured order")
+            cli("camera", "shape", "rectangle")
+            click_widget(94)
+            wait_until(lambda: widget("camera.shape")["value"] == "circle", "Previous shape failed")
+            click_widget(95)
+            wait_until(lambda: widget("camera.shape")["value"] == "rectangle", "Next shape failed")
+            cli("camera", "aspect", "native")
+            click_widget(87)
+            wait_until(lambda: widget("camera.aspect")["value"] == "1:1", "Previous aspect failed")
+            click_widget(88)
+            wait_until(lambda: widget("camera.aspect")["value"] == "native", "Next aspect failed")
+            navigate(3)
+            click_widget(228)
+            edit_value("logo.path", str(logo_path))
+            click_widget("logo.enabled")
+            edit_value("logo.width_percent", "16")
+            edit_value("logo.opacity", "0.5")
+            capture("logo-controls")
+            click_widget(228)
+            click_widget(229)
+            edit_value("text.content", "Static session title")
+            edit_value("text.font", "Noto Sans")
+            edit_value("text.size", "30")
+            edit_value("text.opacity", "0.8")
+            click_widget("text.enabled")
+            capture("text-overlay")
+            click_widget(229)
+            cli("settings", "text.enabled", "false", "logo.enabled", "false")
+            cli("layout", "overlay")
 
             # Independent freeze/blur, solid pause, and omitted-time cut retain the same file.
             cli("settings", "record.countdown", "2")
@@ -483,6 +591,19 @@ def exercise():
             navigate(1)
             assert_preview()
             capture("narrow-camera")
+            navigate(0)
+            click_widget(205)
+            click_widget("background.source")
+            xdo("key", "--clearmodifiers", "Escape")
+            capture("narrow-background-gradient")
+            click_widget(205)
+            navigate(3)
+            click_widget(229)
+            click_widget("text.font")
+            capture("narrow-text-overlay")
+            xdo("key", "--clearmodifiers", "Escape")
+            click_widget(229)
+            navigate(1)
             click_widget(30)
             wait_until(lambda: state()["live"]["state"] == "paused", "Narrow pause control failed")
             click_widget(99)
@@ -567,10 +688,12 @@ def exercise_floating_preview():
                 return result.stdout
 
             def ui():
-                try:
-                    return json.loads((root / "ui.json").read_text())
-                except (FileNotFoundError, json.JSONDecodeError):
-                    return {}
+                for attempt in range(20):
+                    try:
+                        return json.loads((root / "ui.json").read_text())
+                    except (FileNotFoundError, json.JSONDecodeError):
+                        time.sleep(.03)
+                return {}
 
             def windows(name):
                 result = subprocess.run(["xdotool", "search", "--onlyvisible", "--class", name],
@@ -584,7 +707,19 @@ def exercise_floating_preview():
                             any(w["id"] == identifier and w["enabled"] for w in current.get("widgets", [])))
                 wait_until(ready, f"Native control {identifier} unavailable")
                 item = next(w for w in ui()["widgets"] if w["id"] == identifier)
-                x, y, w, h = item["box"]
+                for attempt in range(70):
+                    item = next(w for w in ui()["widgets"] if w["id"] == identifier)
+                    x, y, w, h = item["box"]
+                    area = ui()["scroll"]
+                    if not (40 <= identifier < 99 or 100 <= identifier < 105) or (y >= area[1] and y+h <= area[1]+area[3]):
+                        break
+                    subprocess.run(["xdotool", "mousemove", "--window", windows("CastPanel")[0],
+                                    str(round((area[0]+area[2]/2)*scale)),
+                                    str(round((area[1]+area[3]/2)*scale)), "click",
+                                    "4" if y < area[1] else "5"], env=env, check=True, timeout=3)
+                    time.sleep(.08)
+                else:
+                    raise AssertionError(f"Native control {identifier} could not be scrolled into view")
                 subprocess.run(["xdotool", "mousemove", "--window", windows("CastPanel")[0],
                                 str(round((x+w/2)*scale)), str(round((y+h/2)*scale)), "click", "1"],
                                env=env, check=True, timeout=3)
@@ -610,6 +745,11 @@ def exercise_floating_preview():
                 wait_until(lambda: ui()["preview_target"] == "record", "Floating target did not acknowledge record")
                 click(20)
                 wait_until(lambda: ui()["preview_target"] == "live", "Floating target did not acknowledge live")
+                click(100)
+                wait_until(lambda: ui()["tab"] == 0, "Native Source navigation failed")
+                click(93)
+                click(74)
+                click(99)
                 # Open Camera; toolbar stays reachable on section screens.
                 click(101)
                 wait_until(lambda: ui()["tab"] == 1, "Camera navigation failed")
@@ -638,8 +778,9 @@ if __name__ == "__main__":
             raise SystemExit(f"native panel check requires {dependency}")
     if "--inside" not in sys.argv:
         result = subprocess.run(["xvfb-run", "-a", "-s", "-screen 0 2048x2048x24",
-                                 sys.executable, __file__, "--inside"], timeout=180)
+                                 sys.executable, __file__, "--inside"], timeout=300)
         raise SystemExit(result.returncode)
-    exercise()
+    if "--floating-only" not in sys.argv:
+        exercise()
     exercise_floating_preview()
-    print("native panel: utility identity, edge anchors, navigation, separate preview controls, Xorg On/Off/target/countdown lock, accelerated wheel, independent freeze/blur, solid pause/cut/resume, countdown/cancel/privacy, live/record, drafts, UTF-8, keyboard, 360px resize, reconnect passed")
+    print("native panel: utility identity, edge anchors, navigation, stage/gradient/logo/text fields, reverse cycles, separate preview controls, Xorg On/Off/target/countdown lock, accelerated wheel, independent freeze/blur, solid pause/cut/resume, countdown/cancel/privacy, live/record, drafts, UTF-8, keyboard, 360px resize, reconnect passed")
