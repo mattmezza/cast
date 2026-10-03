@@ -607,6 +607,19 @@ static void countdown_tests(Display *d, Platform *p, Config *cfg, Compositor *co
     assert(platform_countdown(p, 1000000000ULL, error, sizeof error) == 0);
     XSync(d, false);
     window = named_window(d, "cast output preview");
+    /* X clients may override fixed size hints. Repaint both smaller and larger
+     * guides before cancellation to exercise image and pixmap reallocation. */
+    const int sizes[][2] = {{400, 289}, {720, 480}};
+    for (unsigned i = 0; i < sizeof sizes / sizeof sizes[0]; i++) {
+        XResizeWindow(d, window, (unsigned)sizes[i][0], (unsigned)sizes[i][1]);
+        pump(d, p, cfg, comp, false);
+        assert(platform_countdown(p, 1000000000ULL, error, sizeof error) == 0);
+        XSync(d, false);
+        image = XGetImage(d, window, 0, 0, (unsigned)sizes[i][0], (unsigned)sizes[i][1], AllPlanes,
+                          ZPixmap);
+        assert(image && XGetPixel(image, 0, 0) == 0x101113);
+        XDestroyImage(image);
+    }
     memset(&cancel, 0, sizeof cancel);
     cancel.xkey.type = KeyPress;
     cancel.xkey.window = window;

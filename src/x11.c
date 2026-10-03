@@ -2112,6 +2112,11 @@ static void countdown_event(Xorg *p, const XEvent *event)
         p->countdown_cancelled = true;
     } else if (event->type == Expose) {
         p->countdown_dirty = true;
+    } else if (event->type == ConfigureNotify) {
+        p->preview_w = event->xconfigure.width;
+        p->preview_h = event->xconfigure.height;
+        p->preview_border = event->xconfigure.border_width;
+        p->countdown_dirty = true;
     }
 }
 
@@ -2159,6 +2164,23 @@ static bool countdown_hidden(Xorg *p)
 static int countdown_paint(Xorg *p, uint64_t remaining_ns, char *error, size_t n)
 {
     int w = p->preview_w, h = p->preview_h;
+    /* Size hints are advisory. A WM or another X client can resize the guide,
+     * so its pixel storage must follow the actual window dimensions. */
+    if (p->countdown_image && (p->countdown_image->width != w || p->countdown_image->height != h)) {
+        XDestroyImage(p->countdown_image);
+        p->countdown_image = NULL;
+        XFreeGC(p->d, p->countdown_gc);
+        XFreePixmap(p->d, p->countdown_buffer);
+        p->countdown_gc = NULL;
+        p->countdown_buffer = None;
+        begin(p);
+        p->countdown_buffer = XCreatePixmap(p->d, p->countdown, (unsigned)w, (unsigned)h,
+                                            (unsigned)DefaultDepth(p->d, p->screen));
+        p->countdown_gc = XCreateGC(p->d, p->countdown_buffer, 0, NULL);
+        if (!end(p)) {
+            return fail(error, n, "cannot resize recording countdown preview");
+        }
+    }
     Frame *canvas = &p->countdown_canvas;
     if (frame_alloc(canvas, w, h)) {
         return fail(error, n, "cannot allocate countdown canvas");
