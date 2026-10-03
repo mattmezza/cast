@@ -113,7 +113,7 @@ int main(void)
     app->config.zoom_follow = false;
     app->config.zoom_factor = 1;
     app->zoom_last = 2;
-    app->state.live_paused = true;
+    app->state.virtual_paused = true;
     app->defaults = app->config;
     char error[CAST_ERR];
     app->compositor = compositor_create();
@@ -265,56 +265,57 @@ int main(void)
     assert(app->config.radius == 40);
     assert(!memcmp(&initial_state, &app->state, sizeof initial_state));
 
-    /* Preview follows only successful acknowledgements; a failed command or a
-     * replaced daemon leaves the user's selected preview unchanged. */
-    PanelSnapshot ack = {.connected = true, .daemon_generation = 7, .command_completed = 3};
-    panel->preview_pending = 3;
-    panel->preview_pending_generation = 7;
-    panel->preview_pending_record = true;
-    ack.command_failed = true;
-    acknowledge_preview(panel, &ack);
-    assert(!strcmp(app->config.preview_target, "live") && !panel->preview_pending);
-    panel->preview_pending = 3;
-    ack.command_failed = false;
-    acknowledge_preview(panel, &ack);
-    assert(!strcmp(app->config.preview_target, "record") && !panel->preview_pending);
-    ack.config = app->config;
-    panel->preview_pending = 4;
-    panel->preview_pending_record = false;
-    ack.daemon_generation = 8;
-    ack.command_completed = 4;
-    acknowledge_preview(panel, &ack);
-    assert(!strcmp(app->config.preview_target, "record") && !panel->preview_pending);
-    panel->preview_pending = 4;
-    panel->preview_pending_generation = 8;
-    acknowledge_preview(panel, &ack);
-    assert(!strcmp(app->config.preview_target, "live") && !panel->preview_pending);
-
-    panel->preview_pending = 5;
-    panel->preview_pending_record = false;
-    Widget manual_preview = {.enabled = true, .action = A_PREVIEW, .index = 1};
+    /* Drafts stage locally, validate as a batch, then clear only for their own ack. */
+    panel->snapshot.config = app->config;
+    panel->snapshot.state = app->state;
+    int shape_index = find_field("camera.shape");
+    int mirror_index = find_field("camera.mirror");
+    assert(shape_index >= 0 && mirror_index >= 0);
+    stage_field(panel, shape_index, "rounded");
+    stage_field(panel, mirror_index, "true");
+    assert(!strcmp(app->config.shape, "circle") && !app->config.mirror);
+    apply_section(panel, 1);
+    assert(!panel->error[0] && !strcmp(app->config.shape, "rounded") && app->config.mirror);
+    acknowledge_edit(&panel->edit[shape_index], false);
+    acknowledge_edit(&panel->edit[mirror_index], false);
+    assert(!section_dirty(panel, 1));
+    panel->snapshot.config = app->config;
+    stage_field(panel, shape_index, "circle");
+    Widget revert = {.enabled = true, .action = A_REVERT, .index = 1};
+    activate(panel, &revert);
+    assert(!section_dirty(panel, 1) && !strcmp(app->config.shape, "rounded"));
+    panel->snapshot.state.stream_active = true;
+    assert(!writable(panel, &fields[find_field("stream.server_url")]));
+    assert(writable(panel, &fields[find_field("output.blur_title")]));
+    panel->snapshot.state.stream_active = false;
+    /* Successful daemon commands own target selection; navigation never emits one. */
+    const char *resume_virtual[] = {"virtual", "resume"};
+    assert(!route_command(panel->client, 2, resume_virtual, error, sizeof error));
+    assert(!strcmp(app->config.preview_target, "virtual"));
+    Widget manual_preview = {.enabled = true, .action = A_PREVIEW, .index = 2};
     activate(panel, &manual_preview);
-    assert(!strcmp(app->config.preview_target, "record") && !panel->preview_pending);
-    ack.command_completed = 5;
-    acknowledge_preview(panel, &ack);
-    assert(!strcmp(app->config.preview_target, "record"));
+    assert(!strcmp(app->config.preview_target, "stream"));
+    /* Failed actions retain the manually chosen target. */
+    const char *invalid_resume[] = {"stream", "resume"};
+    assert(route_command(panel->client, 2, invalid_resume, error, sizeof error));
+    assert(!strcmp(app->config.preview_target, "stream"));
 
     panel->snapshot.connected = true;
-    panel->snapshot.config.live_enabled = true;
-    panel->snapshot.state.live_paused = false;
-    panel->snapshot.state.live_frozen = panel->snapshot.state.live_blurred = true;
-    assert(!strcmp(live_status(&panel->snapshot), "Live blurred"));
-    panel->snapshot.state.live_paused = true;
-    assert(!strcmp(live_status(&panel->snapshot), "Live paused"));
+    panel->snapshot.config.virtual_enabled = true;
+    panel->snapshot.state.virtual_paused = false;
+    panel->snapshot.state.virtual_frozen = panel->snapshot.state.virtual_blurred = true;
+    assert(!strcmp(virtual_status(&panel->snapshot), "Blurred"));
+    panel->snapshot.state.virtual_paused = true;
+    assert(!strcmp(virtual_status(&panel->snapshot), "Paused"));
     panel->snapshot.state.recording = true;
     panel->snapshot.state.record_frozen = panel->snapshot.state.record_blurred = true;
-    assert(!strcmp(record_status(&panel->snapshot), "Recording blurred"));
+    assert(!strcmp(record_status(&panel->snapshot), "Blurred"));
     panel->snapshot.state.record_paused = true;
-    assert(!strcmp(record_status(&panel->snapshot), "Recording paused"));
+    assert(!strcmp(record_status(&panel->snapshot), "Paused"));
     panel->snapshot.state.record_cut = true;
-    assert(!strcmp(record_status(&panel->snapshot), "Recording cut"));
+    assert(!strcmp(record_status(&panel->snapshot), "Cut"));
     panel->snapshot.countdown = true;
-    assert(!strcmp(record_status(&panel->snapshot), "Resume countdown"));
+    assert(!strcmp(record_status(&panel->snapshot), "Countdown"));
 
     /* Native controls cancel the controller's actual countdown without starting
      * a recording; the independent live pause command does not cancel it. */
@@ -322,9 +323,9 @@ int main(void)
     const char *start[] = {"record", "start"};
     assert(!route_command(panel->client, 2, start, error, sizeof error));
     assert(app->countdown && !app->state.recording);
-    const char *pause_live[] = {"live", "pause"};
+    const char *pause_live[] = {"virtual", "pause"};
     assert(!route_command(panel->client, 2, pause_live, error, sizeof error));
-    assert(app->countdown && app->state.live_paused);
+    assert(app->countdown && app->state.virtual_paused);
     Widget cancel = {.enabled = true, .action = A_COMMAND, .argc = 2, .arg = {"record", "stop"}};
     activate(panel, &cancel);
     assert(!panel->error[0] && !app->countdown && !app->state.recording);
@@ -334,7 +335,7 @@ int main(void)
     Widget pause = {.enabled = true, .action = A_COMMAND, .argc = 1, .arg = {"pause"}};
     activate(panel, &pause);
     assert(!panel->error[0] && !app->countdown && !app->state.recording);
-    assert(app->state.live_paused && !app->countdown_path[0]);
+    assert(app->state.virtual_paused && !app->countdown_path[0]);
 
     media_close(app->media);
     platform_close(app->platform);

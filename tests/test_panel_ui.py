@@ -1,786 +1,345 @@
 #!/usr/bin/env python3
-"""Exercise the native panel on a private Xvfb with synthetic media only.
+"""Native pointer/keyboard workflows on a private Xvfb, using synthetic media.
 
-Requires an optional PANEL=1 build, Xvfb, xdotool, xprop, and xclip. No desktop or hardware device
-is captured. UI actions are checked through the daemon's ordinary CLI status.
+No user desktop, webcam, real credential, or public ingest is used. Screenshots
+are opt-in and collected together so design review stays bounded.
 """
 import json
 import os
-import re
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 import sys
-import struct
-import zlib
 import tempfile
 import time
-
 
 PROJECT = Path(__file__).resolve().parent.parent
 BINARY = str(Path(os.environ.get("CAST_PANEL_TEST_BINARY", PROJECT / "cast")).resolve())
 
 
-def wait_until(predicate, description, timeout=8):
+def wait_until(predicate, description, timeout=10):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():
             return
-        time.sleep(0.04)
+        time.sleep(.04)
     raise AssertionError(description)
 
 
 def exercise():
-    with tempfile.TemporaryDirectory(prefix="cast-panel-ui-") as directory:
+    with tempfile.TemporaryDirectory(prefix="cast-panel-redesign-") as directory:
         root = Path(directory)
-        env = os.environ.copy()
-        env.update(XDG_RUNTIME_DIR=directory, SDL_VIDEODRIVER="x11",
-                   CAST_PANEL_UI_STATE=str(root / "ui.json"))
+        environment = os.environ.copy()
+        environment.update(XDG_RUNTIME_DIR=directory, SDL_VIDEODRIVER="x11",
+                           CAST_PANEL_UI_STATE=str(root / "ui.json"))
+        scale = float(environment.get("SDL_VIDEO_X11_SCALING_FACTOR", "1"))
         config = root / "cast.conf"
-        config.write_text("[record]\ndirectory=" + directory + "\ncountdown=0\n")
-        # A local RGBA fixture exercises the logo path without user images/hardware.
-        logo_path = root / "logo.png"
-        def png_chunk(kind, data):
-            return (struct.pack("!I", len(data)) + kind + data +
-                    struct.pack("!I", zlib.crc32(kind + data) & 0xffffffff))
-        rgba = b"".join(b"\0" + bytes((80, 160, 220, 128))*16 for _ in range(16))
-        logo_path.write_bytes(b"\x89PNG\r\n\x1a\n" +
-                              png_chunk(b"IHDR", struct.pack("!2I5B", 16, 16, 8, 6, 0, 0, 0)) +
-                              png_chunk(b"IDAT", zlib.compress(rgba)) + png_chunk(b"IEND", b""))
+        config.write_text(f"[record]\ndirectory={directory}\ncountdown=0\n")
         common = ["--config", str(config), "--socket", str(root / "daemon.sock")]
-        daemon = None
-        panel = None
-        clipboard = None
-        wm = None
+        processes = []
         log = (root / "native.log").open("w+")
+        window = None
+        last_ui = {"frame": 0, "connected": False, "widgets": []}
 
-        def cli(*args):
-            result = subprocess.run([BINARY, *common, *args], env=env, text=True,
-                                    capture_output=True, timeout=8)
-            assert result.returncode == 0, (args, result.stdout, result.stderr)
+        def cli(*arguments, success=True):
+            result = subprocess.run([BINARY, *common, *arguments], env=environment,
+                                    text=True, capture_output=True, timeout=8)
+            assert (result.returncode == 0) == success, (arguments, result.stdout, result.stderr)
             return result.stdout
 
         def state():
             return json.loads(cli("status", "--json"))
 
-        scale = float(env.get("SDL_VIDEO_X11_SCALING_FACTOR", "1"))
+        def ui():
+            nonlocal last_ui
+            try:
+                last_ui = json.loads((root / "ui.json").read_text())
+            except (FileNotFoundError, json.JSONDecodeError):
+                pass
+            return last_ui
 
-        def xdo(*args):
-            args = list(args)
-            for index, arg in enumerate(args):
-                if arg == "mousemove" and args[index+1] == "--window":
-                    args[index+3] = round(float(args[index+3])*scale)
-                    args[index+4] = round(float(args[index+4])*scale)
-                elif arg == "windowsize":
-                    args[index+2] = round(float(args[index+2])*scale)
-                    args[index+3] = round(float(args[index+3])*scale)
-            return subprocess.run(["xdotool", *map(str, args)], env=env, check=True,
-                                  text=True, capture_output=True, timeout=8).stdout.strip()
+        def spawn(*arguments):
+            child = subprocess.Popen(arguments, env=environment, stdout=log, stderr=log)
+            processes.append(child)
+            return child
 
         def start_daemon():
-            return subprocess.Popen([BINARY, *common, "--backend", "synthetic",
-                                     "--camera-device", "synthetic", "--output-device", "none",
-                                     "--width", "320", "--height", "240", "--fps", "20"],
-                                    env=env, stdout=log, stderr=log)
+            return spawn(BINARY, *common, "--backend", "synthetic", "--camera-device",
+                         "synthetic", "--output-device", "none", "--width", "320",
+                         "--height", "240", "--fps", "20")
+
+        def xdo(*arguments):
+            return subprocess.run(["xdotool", *map(str, arguments)], env=environment,
+                                  check=True, text=True, capture_output=True, timeout=8).stdout.strip()
+
+        def widget(identifier):
+            return next((item for item in ui()["widgets"]
+                         if item["id"] == identifier or item["key"] == identifier), None)
+
+        def acknowledge():
+            wait_until(lambda: not ui().get("command_pending", True), "daemon did not acknowledge panel command")
+
+        def click_widget(identifier):
+            acknowledge()
+            wait_until(lambda: widget(identifier) and widget(identifier)["enabled"], f"control {identifier} unavailable")
+            for _ in range(80):
+                item = widget(identifier)
+                x, y, width, height = item["box"]
+                area = ui()["scroll"]
+                pinned = item["id"] in (5, 6, 10, 11, 12, 22, 34) or 400 <= item["id"] < 500
+                if pinned or y >= area[1] and y+height <= area[1]+area[3]:
+                    xdo("mousemove", "--window", window, round((x+width/2)*scale),
+                        round((y+height/2)*scale), "click", 1)
+                    time.sleep(.08)
+                    return
+                xdo("mousemove", "--window", window, round((area[0]+area[2]/2)*scale),
+                    round((area[1]+area[3]/2)*scale), "click", 4 if y < area[1] else 5)
+                time.sleep(.06)
+            raise AssertionError(f"control {identifier} could not be reached by scrolling")
+
+        def navigate(section):
+            if ui()["tab"] != 1:
+                click_widget(6)
+            if ui()["open_section"] != section:
+                click_widget(100+section)
+            wait_until(lambda: ui()["tab"] == 1 and ui()["open_section"] == section,
+                       "Compose disclosure did not open")
+
+        def operate(lane):
+            if ui()["tab"] != 0:
+                click_widget(5)
+            if ui()["open_lane"] != lane:
+                click_widget(10+lane if lane < 3 else 123)
+            wait_until(lambda: ui()["tab"] == 0 and ui()["open_lane"] == lane,
+                       "Operate lane did not open")
+
+        def edit(key, value, apply=False):
+            click_widget(key)
+            xdo("key", "--clearmodifiers", "ctrl+a")
+            if value:
+                xdo("type", "--clearmodifiers", value)
+            else:
+                xdo("key", "--clearmodifiers", "BackSpace")
+            wait_until(lambda: ui().get("edit_text") == value, "typing did not update local draft")
+            if apply:
+                xdo("key", "--clearmodifiers", "Return")
+                acknowledge()
+
+        def capture(name):
+            destination = os.environ.get("CAST_PANEL_TEST_SCREENSHOTS")
+            if destination:
+                Path(destination).mkdir(parents=True, exist_ok=True)
+                subprocess.run(["import", "-window", window,
+                                str(Path(destination) / (name+".png"))], env=environment, check=True)
+
+        def pinned_accessible():
+            bounds = dict(line.split("=", 1) for line in
+                          xdo("getwindowgeometry", "--shell", window).splitlines() if "=" in line)
+            width, height = int(bounds["WIDTH"])/scale, int(bounds["HEIGHT"])/scale
+            for identifier in (5, 6, 10, 11, 12, 22, 34):
+                item = widget(identifier)
+                assert item, identifier
+                x, y, w, h = item["box"]
+                assert x >= 0 and y >= 0 and x+w <= width+1 and y+h <= height+1, (identifier, item, bounds)
+            assert "has_preview" not in ui() and "preview_panel" not in ui()
 
         try:
-            if os.environ.get("CAST_PANEL_TEST_MWM"):
-                wm = subprocess.Popen(["mwm"], env=env, stdout=log, stderr=log)
-                def wm_ready():
-                    result = subprocess.run(["mwmc", "query", "monitors"], env=env,
-                                            text=True, capture_output=True, timeout=3)
-                    return result.returncode == 0 and "mon 0" in result.stdout
-                wait_until(wm_ready, "private mwm did not initialize")
             daemon = start_daemon()
             wait_until(lambda: (root / "daemon.sock").exists(), "synthetic daemon did not start")
-            panel = subprocess.Popen([BINARY, *common, "panel"], env=env, stdout=log, stderr=log)
-            windows = []
-
-            def renderer_ready():
-                assert panel.poll() is None, "panel exited before renderer initialization"
-                try:
-                    ready = json.loads((root / "ui.json").read_text())
-                except (FileNotFoundError, json.JSONDecodeError):
-                    return False
-                return ready["frame"] > 0 and ready["connected"] and bool(ready["widgets"])
-
-            # SDL_CreateRenderer may replace the initial X11 window for a GL visual.
-            # A rendered connected frame proves renderer/font/layout initialization finished.
-            wait_until(renderer_ready, "panel did not render its first connected frame")
-
-            def find_window():
-                result = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(panel.pid),
-                                         "--class", "CastPanel"], env=env, text=True,
-                                        capture_output=True, timeout=3)
-                windows[:] = result.stdout.splitlines()
-                return bool(windows)
-
-            wait_until(find_window, "native panel window did not open")
-            window = windows[0]
-            properties = subprocess.run(["xprop", "-id", window, "WM_CLASS",
-                                         "_NET_WM_WINDOW_TYPE"], env=env, check=True,
-                                        text=True, capture_output=True).stdout
-            assert '"cast-panel", "CastPanel"' in properties, properties
-            assert "_NET_WM_WINDOW_TYPE_UTILITY" in properties, properties
-            if wm:
-                managed = subprocess.run(["mwmc", "query", "windows"], env=env, check=True,
-                                         text=True, capture_output=True).stdout
-                assert re.search(r"class=CastPanel .*float=1", managed), managed
-                geometry = dict(line.split("=", 1) for line in
-                                xdo("getwindowgeometry", "--shell", window).splitlines()
-                                if "=" in line)
-                # mwm centers floating clients at first management. Its bottom bar
-                # shifts the available work area slightly up from the screen midpoint.
-                assert abs(int(geometry["X"]) + int(geometry["WIDTH"])/2 - 1024) < 8, geometry
-                assert abs(int(geometry["Y"]) + int(geometry["HEIGHT"])/2 - 1024) < 64, geometry
+            initial = state()
+            panel = spawn(BINARY, *common, "panel")
+            wait_until(lambda: ui()["frame"] and ui()["connected"], "native renderer did not initialize")
+            window = xdo("search", "--onlyvisible", "--pid", panel.pid, "--class", "CastPanel").splitlines()[0]
             xdo("windowfocus", "--sync", window)
-            if not wm:
-                # SDL resizes its initially centered hidden window for display
-                # scaling. Without a WM, its old physical position may put part
-                # of a 2x window outside Xvfb and crop screenshots. Use a complete
-                # private viewport; the mwm path above verifies real placement.
-                xdo("windowmove", window, "0", "0")
+            xdo("windowmove", window, 0, 0)
+            assert state()["virtual"] == initial["virtual"]
+            assert state()["record"] == initial["record"] and state()["stream"]["state"] == "stopped"
+            assert ui()["density"] == scale and ui()["raster_font_size"] == 16*scale
+            properties = subprocess.run(["xprop", "-id", window, "WM_CLASS", "_NET_WM_WINDOW_TYPE"],
+                                        env=environment, text=True, capture_output=True, check=True).stdout
+            assert '"cast-panel", "CastPanel"' in properties and "_NET_WM_WINDOW_TYPE_UTILITY" in properties
+            pinned_accessible()
+            capture("operate-collapsed")
 
-            def click(x, y):
-                xdo("mousemove", "--window", window, x, y, "click", 1)
-                time.sleep(0.12)
-
-            def ui():
-                for attempt in range(20):
-                    try:
-                        return json.loads((root / "ui.json").read_text())
-                    except (FileNotFoundError, json.JSONDecodeError):
-                        time.sleep(.03)
-                raise AssertionError("No native layout diagnostics")
-
-            def widget(identifier):
-                return next((w for w in ui()["widgets"]
-                             if w["id"] == identifier or w["key"] == identifier), None)
-
-            def await_panel_ack(expected=None):
-                # Verify a new rendered frame after the acknowledged command generation.
-                before = ui()
-                expected = before["command_queued"] if expected is None else expected
-                def acknowledged():
-                    current = ui()
-                    return (current["frame"] > before["frame"] and
-                            current["command_completed"] >= expected and
-                            current["command_queued"] == current["command_completed"])
-                wait_until(acknowledged, "Panel command was not acknowledged in a new frame")
-
-            def click_widget(identifier):
-                await_panel_ack()
-                wait_until(lambda: widget(identifier) and widget(identifier)["enabled"],
-                           f"Control {identifier} is unavailable")
-                for attempt in range(60):
-                    item = widget(identifier)
-                    x, y, w, h = item["box"]
-                    area = ui()["scroll"]
-                    inside_scroll = (item["id"] >= 1000 or 40 <= item["id"] < 99 or
-                                     100 <= item["id"] < 105 or 200 <= item["id"] < 300 or
-                                     (ui()["tab"] < 0 and item["id"] in (31, 33, 36, 37, 38, 39)))
-                    if not inside_scroll or (y >= area[1] and y+h <= area[1]+area[3]):
-                        click(x+w/2, y+h/2)
-                        return
-                    xdo("mousemove", "--window", window, int(area[0]+area[2]/2),
-                        int(area[1]+area[3]/2), "click", 4 if y < area[1] else 5)
-                    time.sleep(.10)
-                raise AssertionError(f"Control {identifier} could not be reached by scrolling")
-
-            def navigate(tab):
-                if ui()["tab"] >= 0:
-                    click_widget(99)
-                    wait_until(lambda: ui()["tab"] == -1, "Back did not reach home")
-                click_widget(100+tab)
-                wait_until(lambda: ui()["tab"] == tab, "Section did not open")
-
-            def home():
-                if ui()["tab"] >= 0:
-                    click_widget(99)
-                    wait_until(lambda: ui()["tab"] == -1, "Home did not open")
-
-            def assert_preview():
-                current = ui()
-                assert "has_preview" not in current and "preview_panel" not in current
-                assert not current["preview_available"], "Synthetic backend claimed native preview"
-                assert not widget(22)["enabled"], "Unsupported floating preview toggle enabled"
-                assert widget(20)["enabled"] and widget(21)["enabled"]
-                assert_output_accessible()
-
-            def assert_output_accessible():
-                dimensions = dict(line.split("=", 1) for line in
-                                  xdo("getwindowgeometry", "--shell", window).splitlines() if "=" in line)
-                width, height = int(dimensions["WIDTH"])/scale, int(dimensions["HEIGHT"])/scale
-                for identifier in (99, 20, 21, 22, 30, 32, 34, 35):
-                    item = widget(identifier)
-                    if item:
-                        x, y, w, h = item["box"]
-                        assert x >= 0 and y >= 0 and x+w <= width+1 and y+h <= height+1, \
-                            f"Persistent control {identifier} was outside the window"
-
-            def capture(name):
-                destination = os.environ.get("CAST_PANEL_TEST_SCREENSHOTS")
-                if destination:
-                    Path(destination).mkdir(parents=True, exist_ok=True)
-                    subprocess.run(["import", "-window", window,
-                                    str(Path(destination) / (name+".png"))], env=env, check=True)
-
-            # Home contains navigation and only currently relevant output actions.
-            assert ui()["tab"] == -1
-            assert ui()["density"] == scale
-            assert ui()["raster_font_size"] == 16*scale
-            assert state()["live"]["state"] == "paused"
-            assert widget(31) and widget(33) and not widget(33)["enabled"]
-            assert_preview()
+            # Call join: explicit reveal, independent freeze/blur/pause precedence.
+            operate(0)
             click_widget(30)
-            wait_until(lambda: state()["live"]["state"] == "live", "Resume live did not apply")
-            capture("home")
-            home()
-            capture("home-modes")
+            wait_until(lambda: not state()["virtual"]["paused"], "Resume virtual camera failed")
             click_widget(31)
-            wait_until(lambda: state()["live"]["state"] == "frozen", "Freeze did not apply")
             click_widget(36)
-            wait_until(lambda: state()["live"]["state"] == "blurred", "Live blur did not apply")
-            assert state()["live"]["frozen"] and state()["live"]["blurred"]
-            capture("home-live-blurred")
+            wait_until(lambda: state()["virtual"]["frozen"] and state()["virtual"]["blurred"], "stacked effects failed")
             click_widget(30)
-            wait_until(lambda: state()["live"]["state"] == "paused", "Solid pause did not override blur")
-            assert state()["live"]["frozen"] and state()["live"]["blurred"]
-            click_widget(21)
-            wait_until(lambda: (ui()["preview_target"] == "record"), "Manual recording preview failed")
+            wait_until(lambda: state()["virtual"]["paused"], "solid pause failed")
+            capture("operate-virtual-paused")
             click_widget(30)
-            wait_until(lambda: state()["live"]["state"] == "blurred" and not (ui()["preview_target"] == "record"),
-                       "Resume live did not restore blur and select the live preview")
+            assert state()["virtual"]["frozen"] and state()["virtual"]["blurred"]
             click_widget(36)
-            wait_until(lambda: state()["live"]["state"] == "frozen", "Freeze underneath blur was lost")
             click_widget(31)
-            wait_until(lambda: state()["live"]["state"] == "live", "Unfreeze did not apply")
 
-            # Every screen keeps the floating preview controls and output actions accessible.
-            for tab in range(5):
-                navigate(tab)
-                assert_preview()
-                assert widget(30) and widget(32)
-                assert_output_accessible()
-            navigate(1)
-            capture("camera")
-            for choice, anchor in ((1, "top"), (6, "bottom"), (3, "left"), (4, "right")):
-                click_widget("camera.anchor")
-                click_widget(400+choice)
-                wait_until(lambda: ui()["camera_anchor"] == anchor, "Camera middle-edge anchor did not apply")
-            click_widget(210)
-            click_widget("camera.background")
-            click_widget(401)
-            wait_until(lambda: ui()["camera_background"] == "gradient", "Camera backdrop did not apply")
-            capture("camera-appearance")
-            click_widget("camera.background")
-            click_widget(400)
-            wait_until(lambda: ui()["camera_background"] == "blurred", "Blurred camera backdrop did not apply")
-            click_widget(210)
-            click_widget(21)
-            wait_until(lambda: (ui()["preview_target"] == "record"), "Record preview was not selected")
-            assert_preview()
-            navigate(0)
-            capture("source")
-            # One physical wheel notch moves 30px; up reverses the same delta.
-            area = ui()["scroll"]
-            assert abs(ui()["scroll_offset"]) < .5
-            xdo("mousemove", "--window", window, area[0]+area[2]/2, area[1]+area[3]/2, "click", 5)
-            wait_until(lambda: abs(ui()["scroll_offset"]+30) < 1, "Wheel notch did not move 30px")
-            xdo("click", 4)
-            wait_until(lambda: abs(ui()["scroll_offset"]) < 1, "Wheel direction was not reversible")
-            assert (ui()["preview_target"] == "record"), "Preview target reset during navigation"
-            click_widget(20)
-            click_widget(51)
-            wait_until(lambda: state()["layout"] == "split", "Split layout did not apply")
-            cli("layout", "camera")
-            time.sleep(.15)
-            click_widget(50)
-            wait_until(lambda: state()["layout"] == "overlay", "CLI/UI layout synchronization failed")
-
-            # Cycles use daemon order in both directions, including Stage.
-            cli("settings", "composition.layout_order", "overlay,stage,camera")
-            click_widget(91)
-            wait_until(lambda: state()["layout"] == "stage", "Next layout ignored configured order")
-            click_widget(90)
-            wait_until(lambda: state()["layout"] == "overlay", "Previous layout ignored configured order")
-            click_widget(54)
-            wait_until(lambda: state()["layout"] == "stage", "Stage composition button failed")
-            click_widget(203)
-
-            def edit_value(key, value):
-                click_widget(key)
-                xdo("key", "--clearmodifiers", "ctrl+a")
-                if value:
-                    xdo("type", "--clearmodifiers", value)
-                else:
-                    xdo("key", "--clearmodifiers", "BackSpace")
-                expected = ui()["command_queued"] + 1
-                xdo("key", "--clearmodifiers", "Return")
-                for attempt in range(3):
-                    wait_until(lambda: ui()["command_queued"] >= expected or bool(ui()["error"]),
-                               f"No submit result for {key}")
-                    if ui()["command_queued"] >= expected:
-                        break
-                    assert ui()["error"] == "panel busy; retry", (key, ui()["error"])
-                    # A rejected enqueue leaves the draft and Apply action intact.
-                    # Retry only the unaccepted command; never duplicate an ACK.
-                    click_widget(widget(key)["id"] + 1)
-                await_panel_ack(expected)
-                assert not ui()["error"], (key, ui()["error"])
-                wait_until(lambda: widget(key)["value"] == value, f"Acknowledged {key} value differs")
-
-            edit_value("screen.width_percent", "70")
-            capture("stage-size")
-            click_widget(203)
-            click_widget(204)
-            edit_value("screen.radius", "24")
-            edit_value("screen.border_width", "2")
-            click_widget("screen.background")
-            click_widget(401)
-            edit_value("screen.background_brightness", "0.2")
-            capture("screen-appearance")
-            click_widget(204)
-            click_widget(205)
-            click_widget("background.source")
-            click_widget(401)
-            click_widget("background.gradient_via_enabled")
-            wait_until(lambda: widget("background.gradient_via_enabled")["value"] == "false", "Two-stop gradient toggle failed")
-            edit_value("background.gradient_angle", "120")
-            edit_value("background.gradient_waypoint", "60")
-            capture("background-gradient")
-            click_widget("background.gradient_from")
-            capture("background-gradient-colors")
-            click_widget(205)
-            cli("settings", "composition.preset_order", "coding,conversation")
-            cli("preset", "coding")
-            click_widget(92)
-            wait_until(lambda: state()["layout"] == "camera", "Previous preset ignored configured order")
-            click_widget(41)
-            wait_until(lambda: state()["layout"] == "screen", "Next preset ignored configured order")
-            navigate(1)
-            cli("settings", "camera.corner_order", "top,left,bottom")
-            cli("camera", "anchor", "top")
-            wait_until(lambda: ui()["camera_anchor"] == "top", "CLI anchor did not synchronize")
-            click_widget(96)
-            wait_until(lambda: ui()["camera_anchor"] == "bottom", "Previous anchor ignored configured order")
-            click_widget(97)
-            wait_until(lambda: ui()["camera_anchor"] == "top", "Next anchor ignored configured order")
-            cli("camera", "shape", "rectangle")
-            click_widget(94)
-            wait_until(lambda: widget("camera.shape")["value"] == "circle", "Previous shape failed")
-            click_widget(95)
-            wait_until(lambda: widget("camera.shape")["value"] == "rectangle", "Next shape failed")
-            cli("camera", "aspect", "native")
-            click_widget(87)
-            wait_until(lambda: widget("camera.aspect")["value"] == "1:1", "Previous aspect failed")
-            click_widget(88)
-            wait_until(lambda: widget("camera.aspect")["value"] == "native", "Next aspect failed")
-            navigate(3)
-            click_widget(228)
-            edit_value("logo.path", str(logo_path))
-            click_widget("logo.enabled")
-            edit_value("logo.width_percent", "16")
-            edit_value("logo.opacity", "0.5")
-            capture("logo-controls")
-            click_widget(228)
-            click_widget(229)
-            edit_value("text.content", "Static session title")
-            edit_value("text.font", "Noto Sans")
-            edit_value("text.size", "30")
-            edit_value("text.opacity", "0.8")
-            click_widget("text.enabled")
-            capture("text-overlay")
-            click_widget(229)
-            cli("settings", "text.enabled", "false", "logo.enabled", "false")
-            cli("layout", "overlay")
-
-            # Independent freeze/blur, solid pause, and omitted-time cut retain the same file.
-            cli("settings", "record.countdown", "2")
+            # Recording start/finish, cut/resume, and countdown cancellation.
+            operate(1)
             click_widget(32)
-            wait_until(lambda: state()["record"]["state"] == "recording", "Record did not start")
-            wait_until(lambda: (ui()["preview_target"] == "record"), "Start record did not select recording preview")
-            record_path = state()["record"]["path"]
-            home()
-            click_widget(37)
-            wait_until(lambda: state()["record"]["state"] == "frozen", "Record freeze did not apply")
-            click_widget(38)
-            wait_until(lambda: state()["record"]["state"] == "blurred", "Record blur did not apply")
-            assert state()["record"]["frozen"] and state()["record"]["blurred"]
-            assert not state()["live"]["blurred"] and not state()["live"]["frozen"]
-            click_widget(33)
-            wait_until(lambda: state()["record"]["state"] == "paused", "Pause record did not override blur")
-            capture("home-record-paused")
-            click_widget(33)
-            wait_until(lambda: state()["record"]["state"] == "blurred", "Resume record did not restore blur")
-            click_widget(38)
-            wait_until(lambda: state()["record"]["state"] == "frozen", "Record freeze underneath blur was lost")
-            click_widget(37)
-            wait_until(lambda: state()["record"]["state"] == "recording", "Record unfreeze did not apply")
+            wait_until(lambda: state()["record"]["state"] == "recording", "Start recording failed")
+            path = state()["record"]["path"]
             click_widget(39)
-            wait_until(lambda: state()["record"]["state"] == "cut", "Record cut did not apply")
-            click_widget(20)
+            wait_until(lambda: state()["record"]["cut"], "Cut time failed")
+            capture("operate-record-cut")
             click_widget(33)
-            wait_until(lambda: ui()["countdown"] and (ui()["preview_target"] == "record"),
-                       "Cut resume did not show countdown and recording preview")
-            capture("home-cut-resume")
+            wait_until(lambda: not state()["record"]["cut"], "same-file resume failed")
+            assert state()["record"]["path"] == path
+            click_widget(140)
+            wait_until(lambda: state()["record"]["state"] == "stopped" and not state()["record"]["finalizing"], "recording finalization failed")
+            cli("settings", "record.countdown", "3")
+            click_widget(32)
+            wait_until(lambda: ui()["countdown"], "countdown not visible")
+            capture("operate-countdown")
             click_widget(35)
-            wait_until(lambda: not ui()["countdown"] and state()["record"]["state"] == "cut",
-                       "Cancel resume did not keep the recording cut")
-            assert state()["record"]["path"] == record_path
-            click_widget(33)
-            wait_until(lambda: state()["record"]["state"] == "recording" and not ui()["countdown"],
-                       "Cut resume did not continue recording after its countdown")
-            assert state()["record"]["path"] == record_path
-            click_widget(34)
-            wait_until(lambda: state()["live"]["state"] == "paused" and
-                       state()["record"]["state"] == "paused", "Pause all did not apply")
-            click_widget(34)
-            wait_until(lambda: state()["record"]["state"] == "recording", "Resume all did not apply")
-            click_widget(32)
-            wait_until(lambda: state()["record"]["state"] == "stopped" and not state()["record"]["finalizing"],
-                       "Stop record did not finalize")
-
-            # The plain countdown follows acknowledged state on every
-            # section. Cancel and the privacy pause action cancel before file creation.
-            cli("settings", "record.countdown", "12")
-            click_widget(32)
-            wait_until(lambda: ui()["countdown"] and ui()["countdown_seconds"] > 0,
-                       "Native recording countdown did not appear")
-            for tab in range(5):
-                navigate(tab)
-                assert ui()["countdown"] and widget(32) and widget(34)
-                assert_preview()
-                assert_output_accessible()
-            navigate(4)
-            capture("countdown-settings")
-            navigate(1)
-            capture("countdown-camera")
-            click_widget(32)
-            wait_until(lambda: not ui()["countdown"] and not state()["record"]["countdown"],
-                       "Cancel did not dismiss the native countdown")
-            assert state()["record"]["state"] == "stopped"
-            click_widget(99)
-            click_widget(32)
-            wait_until(lambda: ui()["countdown"], "Home countdown did not appear")
-            capture("countdown-home")
-            click_widget(34)
-            wait_until(lambda: not ui()["countdown"] and state()["live"]["state"] == "paused",
-                       "Privacy pause did not cancel the countdown")
-            click_widget(34)
-            wait_until(lambda: not state()["group_paused"], "Resume all did not clear group pause")
-            cli("settings", "record.countdown", "1")
-            click_widget(32)
-            wait_until(lambda: ui()["countdown"], "Short countdown did not appear")
-            wait_until(lambda: state()["record"]["state"] == "recording" and not ui()["countdown"],
-                       "Countdown did not transition into recording")
-            click_widget(32)
-            wait_until(lambda: state()["record"]["state"] == "stopped" and not state()["record"]["finalizing"],
-                       "Recording after countdown did not finalize")
+            wait_until(lambda: not ui()["countdown"], "Cancel did not cancel countdown")
             cli("settings", "record.countdown", "0")
 
-            # Drafts survive navigation and only Apply/Enter submits them.
-            navigate(4)
-            click_widget(236)
-            click_widget("output.pause_text")
-            capture("pause-style")
-            xdo("key", "--clearmodifiers", "ctrl+a")
-            xdo("type", "--clearmodifiers", "--delay", "12", "Private session")
-            assert state()["live"]["message"] != "Private session", "Editing applied a draft"
+            # Compose enum/boolean drafts stay local; Apply/Revert and validation.
             navigate(1)
-            navigate(4)
-            click_widget("output.pause_text")
-            submitted = ui()["command_queued"] + 1
-            xdo("key", "--clearmodifiers", "Return")
-            wait_until(lambda: state()["live"]["message"] == "Private session", "Draft did not survive navigation")
-            await_panel_ack(submitted)
-            click_widget("output.pause_text")
-            xdo("key", "--clearmodifiers", "Tab", "shift+Tab")
-            field_id = widget("output.pause_text")["id"]
-            wait_until(lambda: ui()["active_text"] == field_id and ui()["focus"] == field_id,
-                       "Tab/Shift+Tab did not return focus to the pause message")
-            # SDL may probe TARGETS repeatedly when clipboard ownership changes. Keep
-            # the UTF-8 owner alive until paste completes, independent of probe count.
-            clipboard = subprocess.Popen(["xclip", "-selection", "clipboard", "-target",
-                                          "UTF8_STRING", "-loops", "0", "-quiet"], env=env,
-                                         stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                                         stderr=log)
-            clipboard.stdin.write("Private café".encode("utf-8"))
-            clipboard.stdin.close()
-
-            def clipboard_ready():
-                assert clipboard.poll() is None, "Clipboard owner exited before paste"
-                result = subprocess.run(["xclip", "-selection", "clipboard", "-target",
-                                         "UTF8_STRING", "-o"], env=env, capture_output=True,
-                                        timeout=3)
-                return result.returncode == 0 and result.stdout == "Private café".encode("utf-8")
-
-            wait_until(clipboard_ready, "UTF-8 clipboard ownership was not established")
-            # X11 clipboard ownership precedes SDL's asynchronous TARGETS discovery.
-            wait_until(lambda: ui()["clipboard_text_available"],
-                       "SDL did not discover the clipboard's advertised text format")
-            submitted = ui()["command_queued"] + 1
-            xdo("key", "--clearmodifiers", "ctrl+v")
-            wait_until(lambda: ui()["active_text"] == field_id and ui()["edit_text"] == "Private café",
-                       "UTF-8 clipboard text did not reach the focused draft")
-            assert state()["live"]["message"] == "Private session", "Paste applied an unsubmitted draft"
-            xdo("key", "--clearmodifiers", "Return")
-            wait_until(lambda: state()["live"]["message"] == "Private café", "UTF-8 paste or keyboard focus failed")
-            await_panel_ack(submitted)
-            clipboard.terminate()
-            clipboard.wait(timeout=3)
-            clipboard = None
-            click_widget("output.pause_text")
-            xdo("key", "--clearmodifiers", "ctrl+a", "BackSpace", "Return")
-            wait_until(lambda: state()["live"]["message"] == "", "Optional pause title could not be blank")
-            click_widget("output.pause_text")
-            xdo("type", "--clearmodifiers", "Returns {date:%Y-%m-%d} at {time}")
-            xdo("key", "--clearmodifiers", "Return")
-            wait_until(lambda: state()["live"]["message"] == "Returns {date:%Y-%m-%d} at {time}",
-                       "Pause date/time template did not reach the daemon")
-            click_widget("output.pause_footer")
-            xdo("key", "--clearmodifiers", "ctrl+a")
-            xdo("type", "--clearmodifiers", "Recorded {date}")
-            submitted = ui()["command_queued"] + 1
-            xdo("key", "--clearmodifiers", "Return")
-            await_panel_ack(submitted)
-            assert not ui()["error"], "Footer template rejected"
-            click_widget("output.pause_text_gap")
-            xdo("key", "--clearmodifiers", "ctrl+a")
-            xdo("type", "--clearmodifiers", "0")
-            submitted = ui()["command_queued"] + 1
-            xdo("key", "--clearmodifiers", "Return")
-            await_panel_ack(submitted)
-            assert not ui()["error"], "Zero text gap rejected"
-            click_widget(236)
-            click_widget(237)
-            click_widget("output.blur_title")
-            capture("blur-style")
-            xdo("key", "--clearmodifiers", "ctrl+a")
-            xdo("type", "--clearmodifiers", "Private {datetime}")
-            submitted = ui()["command_queued"] + 1
-            xdo("key", "--clearmodifiers", "Return")
-            await_panel_ack(submitted)
-            assert not ui()["error"], "Blur title template was rejected"
-            xdo("key", "--clearmodifiers", "Escape")
-            wait_until(lambda: ui()["tab"] == -1, "Escape did not return home")
-
+            original_anchor = ui()["camera_anchor"]
+            click_widget("camera.anchor")
+            click_widget(401)
+            assert ui()["camera_anchor"] == original_anchor, "enum draft applied without Apply"
+            assert widget("camera.anchor")["dirty"]
+            click_widget(703)
+            assert not widget("camera.anchor")["dirty"]
+            click_widget("camera.anchor")
+            click_widget(401)
+            click_widget(702)
+            wait_until(lambda: ui()["camera_anchor"] == "top", "Apply did not commit camera anchor")
+            capture("compose-camera")
             navigate(0)
-            click_widget("composition.fit")
-            xdo("key", "--clearmodifiers", "Down", "Return")
             original_zoom = state()["zoom"]
-            click_widget("zoom.factor")
-            xdo("key", "--clearmodifiers", "ctrl+a")
-            xdo("type", "--clearmodifiers", "99")
-            xdo("key", "--clearmodifiers", "Return")
-            time.sleep(.2)
-            assert state()["zoom"] == original_zoom, "Invalid numeric value reached daemon"
-            click_widget("zoom.factor")
-            xdo("key", "--clearmodifiers", "ctrl+a")
-            xdo("type", "--clearmodifiers", "3.25")
-            xdo("key", "--clearmodifiers", "Return")
-            wait_until(lambda: state()["zoom"] == 3.25, "Valid numeric edit did not apply")
-
-            # Minimum width keeps state, preview, controls, and section back navigation.
-            xdo("windowsize", window, "360", "640")
-            time.sleep(.2)
-            home()
-            assert_preview()
-            assert_output_accessible()
-            capture("narrow-home-modes")
-            navigate(1)
-            assert_preview()
-            capture("narrow-camera")
-            navigate(0)
+            edit("zoom.factor", "99", apply=True)
+            assert state()["zoom"] == original_zoom and ui()["error"]
+            edit("zoom.factor", "3.25", apply=True)
+            wait_until(lambda: state()["zoom"] == 3.25, "Enter did not apply valid draft")
+            navigate(2)
             click_widget(205)
-            click_widget("background.source")
+            edit("background.gradient_from", "#153b52")
+            click_widget(704)
+            acknowledge()
+            capture("compose-background")
+            navigate(6)
+            click_widget(228)
+            edit("output.pause_text", "Private session")
+            assert state()["virtual"]["message"] != "Private session"
+            click_widget(712)
+            wait_until(lambda: state()["virtual"]["message"] == "Private session", "presentation draft Apply failed")
+            edit("output.pause_text", "", apply=True)
+            wait_until(lambda: state()["virtual"]["message"] == "", "optional title could not be blank")
+            edit("output.pause_footer", "Returns {date:%A, %d %B} at {time:%H:%M}", apply=True)
+            capture("compose-presentation")
+            # Keyboard navigation uses the same retained field draft.
+            edit("output.pause_text", "Keyboard draft")
+            xdo("key", "--clearmodifiers", "Tab", "shift+Tab")
+            assert panel.poll() is None
             xdo("key", "--clearmodifiers", "Escape")
-            capture("narrow-background-gradient")
-            click_widget(205)
-            navigate(3)
-            click_widget(229)
-            click_widget("text.font")
-            capture("narrow-text-overlay")
-            xdo("key", "--clearmodifiers", "Escape")
-            click_widget(229)
-            navigate(1)
-            click_widget(30)
-            wait_until(lambda: state()["live"]["state"] == "paused", "Narrow pause control failed")
-            click_widget(99)
-            capture("narrow-home")
-            assert_preview()
-            cli("settings", "record.countdown", "8")
-            click_widget(32)
-            wait_until(lambda: ui()["countdown"], "Narrow countdown did not appear")
-            capture("narrow-countdown-home")
-            navigate(4)
-            capture("narrow-countdown-settings")
-            assert ui()["countdown"] and widget(32)["enabled"] and widget(34)["enabled"]
-            assert_output_accessible()
-            click_widget(32)
-            wait_until(lambda: not ui()["countdown"], "Narrow Cancel did not dismiss countdown")
-            cli("settings", "record.countdown", "0")
 
-            # A lost daemon does not close the window; it reconnects to a new generation.
+            # Private ingest: setup sheet drafts, paused-start, reveal and stop.
+            listener = socket.socket()
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+            listener.close()
+            ingest = spawn("ffmpeg", "-hide_banner", "-loglevel", "quiet", "-listen", "1",
+                           "-i", f"rtmp://127.0.0.1:{port}/ingest", "-c", "copy", "-f", "flv", str(root / "stream.flv"))
+            time.sleep(.3)
+            key = root / "stream-key"
+            key.write_text("native-local-fixture\n")
+            key.chmod(0o600)
+            operate(2)
+            click_widget(150)
+            wait_until(lambda: ui()["stream_setup"], "Streaming setup did not open")
+            edit("stream.server_url", f"rtmp://127.0.0.1:{port}/ingest")
+            edit("stream.key_file", str(key))
+            assert not state()["stream"]["active"], "setup started a broadcast"
+            click_widget(714)
+            acknowledge()
+            capture("streaming-setup")
+            click_widget(152)
+            operate(2)
+            click_widget(130)
+            wait_until(lambda: state()["stream"]["state"] == "streaming", "local stream did not connect")
+            assert state()["stream"]["paused"] and ui()["preview_target"] == "stream"
+            capture("operate-stream-paused")
+            click_widget(130)
+            wait_until(lambda: not state()["stream"]["paused"], "Resume streaming failed")
+            # Three lanes, privacy restoration and one-lane blur.
+            cli("record", "start")
+            cli("stream", "blur", "on")
+            assert not state()["virtual"]["blurred"] and not state()["record"]["blurred"]
+            cli("virtual", "pause")
+            click_widget(34)
+            wait_until(lambda: state()["group_paused"], "global privacy failed")
+            click_widget(34)
+            wait_until(lambda: not state()["group_paused"], "global restore failed")
+            assert state()["virtual"]["paused"] and not state()["stream"]["paused"]
+            assert state()["stream"]["blurred"] and not state()["record"]["paused"]
+            click_widget(141)
+            wait_until(lambda: state()["stream"]["state"] == "stopped", "Stop streaming failed")
+            cli("record", "stop")
+            ingest.wait(timeout=8)
+
+            # Refused connection -> failed -> explicit retry, without revealing.
+            cli("settings", "stream.reconnect_attempts", "0")
+            click_widget(130)
+            wait_until(lambda: state()["stream"]["state"] == "failed", "refused connection did not fail")
+            capture("operate-stream-failed")
+            click_widget(130)
+            wait_until(lambda: state()["stream"]["state"] == "failed", "retry did not return failure")
+            cli("stream", "stop")
+            # Fluid width and pinned privacy controls at each shipped width.
+            for width in (360, 440, 520, 800):
+                xdo("windowsize", window, round(width*scale), round(760*scale))
+                time.sleep(.15)
+                navigate(3)
+                pinned_accessible()
+                capture(f"compose-overlays-{width}")
+            # Disconnection preserves last-known state; reconnect restores controls.
             cli("quit")
             daemon.wait(timeout=8)
-            time.sleep(0.4)
-            assert panel.poll() is None, "panel exited on daemon loss"
+            wait_until(lambda: not ui()["connected"], "disconnect banner state did not appear")
+            assert not widget(34)["enabled"]
+            capture("daemon-disconnected")
             daemon = start_daemon()
-            wait_until(lambda: (root / "daemon.sock").exists(), "daemon restart did not open socket")
-            time.sleep(0.9)
-            click_widget(30)
-            wait_until(lambda: state()["live"]["state"] == "live", "Panel did not reconnect")
+            wait_until(lambda: ui()["connected"], "panel did not reconnect")
+            before_close = state()
             xdo("key", "--clearmodifiers", "ctrl+q")
-            assert panel.wait(timeout=8) == 0, "panel window did not close cleanly"
-            assert daemon.poll() is None, "closing the panel stopped the daemon"
+            assert panel.wait(timeout=8) == 0
+            after_close = state()
+            for lane in ("virtual", "record"):
+                assert before_close[lane] == after_close[lane], "closing panel changed output state"
+            assert daemon.poll() is None and after_close["stream"]["state"] == "stopped"
             cli("quit")
             daemon.wait(timeout=8)
         except Exception:
             log.flush()
-            try:
-                diagnostics = json.loads((root / "ui.json").read_text())
-                diagnostics.pop("widgets", None)
-                print("Panel diagnostics:", json.dumps(diagnostics, ensure_ascii=False), file=sys.stderr)
-            except (FileNotFoundError, json.JSONDecodeError) as diagnostic_error:
-                print("Panel diagnostics unavailable:", diagnostic_error, file=sys.stderr)
-            if daemon and daemon.poll() is None:
-                try:
-                    print("Daemon live state:", json.dumps(state()["live"], ensure_ascii=False), file=sys.stderr)
-                except Exception as diagnostic_error:
-                    print("Daemon status unavailable:", diagnostic_error, file=sys.stderr)
-            print("Native log tail:\n" + "\n".join((root / "native.log").read_text().splitlines()[-60:]),
-                  file=sys.stderr)
+            print("Panel evidence:", json.dumps(ui(), ensure_ascii=False), file=sys.stderr)
+            print("Native log tail:\n" + "\n".join((root / "native.log").read_text().splitlines()[-50:]), file=sys.stderr)
             raise
         finally:
-            if clipboard and clipboard.poll() is None:
-                clipboard.terminate()
-                clipboard.wait(timeout=3)
-            if panel and panel.poll() is None:
-                panel.terminate()
-                panel.wait(timeout=8)
-            if daemon and daemon.poll() is None:
-                daemon.terminate()
-                daemon.wait(timeout=8)
-            if wm and wm.poll() is None:
-                wm.terminate()
-                wm.wait(timeout=8)
+            for child in reversed(processes):
+                if child.poll() is None:
+                    child.terminate()
+                try:
+                    child.wait(timeout=8)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.wait(timeout=3)
             log.close()
 
 
-def exercise_floating_preview():
-    """Click real panel controls against Xorg on this private Xvfb only."""
-    with tempfile.TemporaryDirectory(prefix="cast-panel-floating-") as directory:
-        root = Path(directory)
-        env = os.environ.copy()
-        env.update(XDG_RUNTIME_DIR=directory, SDL_VIDEODRIVER="x11",
-                   CAST_PANEL_UI_STATE=str(root / "ui.json"))
-        scale = float(env.get("SDL_VIDEO_X11_SCALING_FACTOR", "1"))
-        config = root / "cast.conf"
-        config.write_text("[record]\ndirectory=" + directory + "\ncountdown=4\n")
-        common = ["--config", str(config), "--socket", str(root / "daemon.sock")]
-        processes = []
-        with (root / "native.log").open("w+") as log:
-            def cli(*args):
-                result = subprocess.run([BINARY, *common, *args], env=env, text=True,
-                                        capture_output=True, timeout=8)
-                assert not result.returncode, (args, result.stdout, result.stderr)
-                return result.stdout
-
-            def ui():
-                for attempt in range(20):
-                    try:
-                        return json.loads((root / "ui.json").read_text())
-                    except (FileNotFoundError, json.JSONDecodeError):
-                        time.sleep(.03)
-                return {}
-
-            def windows(name):
-                result = subprocess.run(["xdotool", "search", "--onlyvisible", "--class", name],
-                                        env=env, text=True, capture_output=True, timeout=3)
-                return result.stdout.splitlines()
-
-            def click(identifier):
-                def ready():
-                    current = ui()
-                    return (current.get("command_queued") == current.get("command_completed") and
-                            any(w["id"] == identifier and w["enabled"] for w in current.get("widgets", [])))
-                wait_until(ready, f"Native control {identifier} unavailable")
-                item = next(w for w in ui()["widgets"] if w["id"] == identifier)
-                for attempt in range(70):
-                    item = next(w for w in ui()["widgets"] if w["id"] == identifier)
-                    x, y, w, h = item["box"]
-                    area = ui()["scroll"]
-                    if not (40 <= identifier < 99 or 100 <= identifier < 105) or (y >= area[1] and y+h <= area[1]+area[3]):
-                        break
-                    subprocess.run(["xdotool", "mousemove", "--window", windows("CastPanel")[0],
-                                    str(round((area[0]+area[2]/2)*scale)),
-                                    str(round((area[1]+area[3]/2)*scale)), "click",
-                                    "4" if y < area[1] else "5"], env=env, check=True, timeout=3)
-                    time.sleep(.08)
-                else:
-                    raise AssertionError(f"Native control {identifier} could not be scrolled into view")
-                subprocess.run(["xdotool", "mousemove", "--window", windows("CastPanel")[0],
-                                str(round((x+w/2)*scale)), str(round((y+h/2)*scale)), "click", "1"],
-                               env=env, check=True, timeout=3)
-
-            try:
-                processes.append(subprocess.Popen([BINARY, *common, "--backend", "xorg",
-                                  "--camera-device", "synthetic", "--output-device", "none",
-                                  "--width", "320", "--height", "240", "--fps", "20"],
-                                 env=env, stdout=log, stderr=log))
-                wait_until(lambda: (root / "daemon.sock").exists(), "Xorg daemon did not start")
-                processes.append(subprocess.Popen([BINARY, *common, "panel"], env=env,
-                                                  stdout=log, stderr=log))
-                wait_until(lambda: ui().get("connected") and windows("CastPanel"), "Xorg panel unavailable")
-                assert ui()["preview_available"] and not ui()["preview_enabled"]
-                panel_window = windows("CastPanel")[0]
-                subprocess.run(["xdotool", "windowmove", panel_window, "0", "0"], env=env, check=True)
-                click(22)
-                wait_until(lambda: ui()["preview_enabled"] and windows("CastPreview"), "Panel On did not map CastPreview")
-                preview = windows("CastPreview")[0]
-                subprocess.run(["xdotool", "windowmove", preview, "1200", "40"], env=env, check=True)
-                assert windows("CastPanel") and windows("CastPreview")
-                click(21)
-                wait_until(lambda: ui()["preview_target"] == "record", "Floating target did not acknowledge record")
-                click(20)
-                wait_until(lambda: ui()["preview_target"] == "live", "Floating target did not acknowledge live")
-                click(100)
-                wait_until(lambda: ui()["tab"] == 0, "Native Source navigation failed")
-                click(93)
-                click(74)
-                click(99)
-                # Open Camera; toolbar stays reachable on section screens.
-                click(101)
-                wait_until(lambda: ui()["tab"] == 1, "Camera navigation failed")
-                click(22)
-                wait_until(lambda: not ui()["preview_enabled"] and not windows("CastPreview"), "Panel Off did not unmap CastPreview")
-                click(32)
-                wait_until(lambda: ui()["countdown"] and windows("CastPreview"), "Attached countdown guide missing")
-                assert not next(w for w in ui()["widgets"] if w["id"] == 22)["enabled"]
-                click(32)
-                wait_until(lambda: not ui()["countdown"] and not windows("CastPreview"), "Panel Cancel did not remove guide")
-                cli("quit")
-            except Exception:
-                log.flush()
-                print("Floating fixture log:\n" + (root / "native.log").read_text(), file=sys.stderr)
-                raise
-            finally:
-                for process in reversed(processes):
-                    if process.poll() is None:
-                        process.terminate()
-                    process.wait(timeout=8)
-
-
 if __name__ == "__main__":
-    for dependency in ("xvfb-run", "xdotool", "xprop", "xclip"):
+    for dependency in ("xvfb-run", "xdotool", "xprop", "ffmpeg"):
         if not shutil.which(dependency):
             raise SystemExit(f"native panel check requires {dependency}")
     if "--inside" not in sys.argv:
         result = subprocess.run(["xvfb-run", "-a", "-s", "-screen 0 2048x2048x24",
                                  sys.executable, __file__, "--inside"], timeout=300)
         raise SystemExit(result.returncode)
-    if "--floating-only" not in sys.argv:
-        exercise()
-    exercise_floating_preview()
-    print("native panel: utility identity, edge anchors, navigation, stage/gradient/logo/text fields, reverse cycles, separate preview controls, Xorg On/Off/target/countdown lock, accelerated wheel, independent freeze/blur, solid pause/cut/resume, countdown/cancel/privacy, live/record, drafts, UTF-8, keyboard, 360px resize, reconnect passed")
+    exercise()
+    print("native panel: prototype lanes/tabs, nine workflows, atomic drafts, keyboard, privacy restore, private streaming, disconnect/reconnect, density and 360–800px pinned controls passed")

@@ -24,20 +24,21 @@ Preview is an independent floating window that can stay beside the panel.
 
 ## Operating context
 
-The daemon runs independently of its control clients. Live output starts paused.
-Live and recording have independent state machines; recording cut/resume removes interruption time from the same file. Solid recording
+The daemon runs independently of its control clients. Virtual camera and streaming start privacy-paused.
+Virtual camera, recording and streaming have independent state machines; recording cut/resume removes interruption time from the same file. Solid recording
 pause continues writing a styled screen with silence; freeze and blur are independent
 presentation effects, with blur over freeze and solid pause above both. Composition changes never implicitly resume either output. The panel
-must remain stable while live, paused or frozen, and closing it leaves cast running.
+must remain stable while an output is running, paused or frozen, and closing it leaves cast running.
 
 ## Capabilities and constraints
 
-The panel uses a compact Home screen with direct Live and Recording controls and
-reachable Source, Camera, Audio, Effects and Settings screens. Reveal settings
-progressively instead of displaying the whole control surface at once. A Preview
-button on every screen toggles the independent floating preview. Output state and
-privacy actions remain easy to reach. Render crisp text at native display
-density, with clear contrast and little wasted screen space.
+The panel follows the supplied three-lane header and Operate/Compose prototype.
+Operate exposes independent Virtual camera, Recording and Streaming controls plus
+Audio. Compose groups existing settings into focused progressive disclosures.
+Only the body scrolls; output state, global privacy, preview toggle and exclusion
+remain pinned. Drafts apply explicitly and commands use acknowledged IPC.
+Streaming is one configured RTMP/RTMPS destination, without OAuth or service APIs.
+Opening/closing the panel never changes any output state.
 Camera mirroring defaults on and affects only the webcam. A custom paused message
 must be editable through both CLI and panel. Runtime changes affect the session;
 the program never automatically writes user configuration.

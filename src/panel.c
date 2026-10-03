@@ -29,6 +29,7 @@ enum {
     TAB_AUDIO,
     TAB_EFFECTS,
     TAB_SETTINGS,
+    TAB_STREAM,
     TAB_COUNT
 };
 #define GROUP_COUNT 6
@@ -45,7 +46,8 @@ enum {
     REQUIRE_INPUT = 2,
     REQUIRE_REGION = 4,
     RECORD_LOCK = 8,
-    READ_ONLY = 16
+    READ_ONLY = 16,
+    STREAM_LOCK = 32
 };
 typedef struct {
     const char *key, *label, *choices;
@@ -70,6 +72,26 @@ typedef struct {
 #define FC(key, label, field, tab, group, flags)                                                   \
     FD(key, label, field, FIELD_COLOR, 0, 0, NULL, tab, group, flags)
 static const FieldSpec fields[] = {
+    FE("stream.service", "Service preset", stream.service, "custom,twitch,youtube", TAB_STREAM, 0,
+       STREAM_LOCK),
+    FT("stream.server_url", "Server URL (rtmp/rtmps)", stream.server_url, TAB_STREAM, 0,
+       STREAM_LOCK),
+    FT("stream.key_file", "Stream-key file — path only, never the secret", stream.key_file,
+       TAB_STREAM, 0, STREAM_LOCK),
+    FI("stream.video_bitrate_kbps", "Video bitrate (kbps)", stream.video_bitrate_kbps, 100, 50000,
+       TAB_STREAM, 0, STREAM_LOCK),
+    FI("stream.audio_bitrate_kbps", "Audio bitrate (kbps)", stream.audio_bitrate_kbps, 32, 320,
+       TAB_STREAM, 0, STREAM_LOCK),
+    FE("stream.encoder_preset", "Encoder preset", stream.encoder_preset,
+       "ultrafast,superfast,veryfast,faster,fast,medium,slow,slower,veryslow", TAB_STREAM, 0,
+       STREAM_LOCK),
+
+    FE("composition.layout", "Layout", layout, "overlay,stage,split,screen,camera", TAB_SOURCE, 0,
+       0),
+    FB("annotations.stream_keys", "Keystrokes in streaming", annotations_stream_keys, TAB_EFFECTS,
+       1, REQUIRE_INPUT),
+    FB("annotations.stream_clicks", "Clicks in streaming", annotations_stream_clicks, TAB_EFFECTS,
+       1, REQUIRE_INPUT),
     FT("capture.monitor", "Monitor name", monitor, TAB_SOURCE, 0, 0),
     FE("composition.fit", "Screen fit", fit, "contain,cover", TAB_SOURCE, 0, 0),
     FN("zoom.factor", "Zoom factor", zoom_factor, 1, 20, TAB_SOURCE, 0, 0),
@@ -152,10 +174,10 @@ static const FieldSpec fields[] = {
     FB("clicks.enabled", "Click rings", clicks, TAB_EFFECTS, 0, REQUIRE_INPUT),
     FB("keys.enabled", "Keystrokes", keys, TAB_EFFECTS, 0, REQUIRE_INPUT),
     FE("keys.mode", "Keystroke mode", keys_mode, "shortcuts,all", TAB_EFFECTS, 0, REQUIRE_INPUT),
-    FB("annotations.live_keys", "Keystrokes in live output", annotations_live_keys, TAB_EFFECTS, 1,
-       REQUIRE_INPUT),
-    FB("annotations.live_clicks", "Clicks in live output", annotations_live_clicks, TAB_EFFECTS, 1,
-       REQUIRE_INPUT),
+    FB("annotations.virtual_keys", "Keystrokes in virtual camera", annotations_virtual_keys,
+       TAB_EFFECTS, 1, REQUIRE_INPUT),
+    FB("annotations.virtual_clicks", "Clicks in virtual camera", annotations_virtual_clicks,
+       TAB_EFFECTS, 1, REQUIRE_INPUT),
     FB("annotations.record_keys", "Keystrokes in recording", annotations_record_keys, TAB_EFFECTS,
        1, REQUIRE_INPUT),
     FB("annotations.record_clicks", "Clicks in recording", annotations_record_clicks, TAB_EFFECTS,
@@ -238,7 +260,7 @@ static const FieldSpec fields[] = {
     FT("composition.preset_order", "Preset cycle order", preset_order, TAB_SETTINGS, 2, 0),
     FT("output.backend", "Capture backend", backend, TAB_SETTINGS, 3, READ_ONLY),
     FT("output.device", "Virtual camera device", output_device, TAB_SETTINGS, 3, READ_ONLY),
-    FB("output.enabled", "Live output at start", live_enabled, TAB_SETTINGS, 3, READ_ONLY),
+    FB("output.enabled", "Virtual camera at start", virtual_enabled, TAB_SETTINGS, 3, READ_ONLY),
     FI("output.width", "Output width", width, 64, 7680, TAB_SETTINGS, 3, READ_ONLY),
     FI("output.height", "Output height", height, 64, 4320, TAB_SETTINGS, 3, READ_ONLY),
     FI("output.fps", "Frames per second", fps, 1, 120, TAB_SETTINGS, 3, READ_ONLY),
@@ -271,7 +293,13 @@ typedef enum {
     A_DROPDOWN,
     A_OPTION,
     A_PREVIEW,
-    A_DISMISS
+    A_DISMISS,
+    A_MAIN_TAB,
+    A_LANE,
+    A_SECTION,
+    A_REVERT,
+    A_APPLY_SECTION,
+    A_SETUP
 } Action;
 typedef enum {
     ICON_NONE,
@@ -292,7 +320,11 @@ typedef enum {
     ICON_SETTINGS,
     ICON_RESET,
     ICON_PLUS,
-    ICON_MINUS
+    ICON_MINUS,
+    ICON_STREAM,
+    ICON_INFO,
+    ICON_CHEVRON,
+    ICON_DOT
 } Icon;
 #define ICON_DATA_BASE 4096
 typedef struct {
@@ -301,6 +333,7 @@ typedef struct {
     Action action;
     bool enabled;
     int index, auxiliary;
+    bool draft;
     const char *arg[6];
     int argc;
     char value[PATH_MAX];
@@ -322,6 +355,8 @@ typedef struct {
     FieldEdit edit[FIELD_COUNT];
     Widget widgets[WIDGET_MAX];
     int widget_count, tab;
+    int main_tab, open_lane, open_section;
+    bool stream_setup;
     bool groups[TAB_COUNT][GROUP_COUNT], quit, mouse_down, click;
     uint32_t focus, active_text, dropdown;
     int dropdown_field, dropdown_choice;
@@ -331,8 +366,7 @@ typedef struct {
     float width, height;
     char error[CAST_ERR], reply[CAST_ERR];
     uint64_t command_seen, draw_frame;
-    uint64_t preview_pending, preview_pending_generation;
-    bool preview_pending_record;
+    bool draft_context;
     TextCache cache[TEXT_CACHE_MAX];
     char strings[49152];
     size_t string_used;
@@ -406,6 +440,16 @@ static void icon_slot(Icon icon, bool enabled, bool selected)
     {
     }
 }
+/* Status dots are local UI geometry; every dot also has an explicit text state. */
+static void state_marker(Clay_Color ink)
+{
+    uintptr_t data = ICON_DATA_BASE + ICON_DOT + ((uintptr_t)(unsigned)ink.r << 40) +
+                     ((uintptr_t)(unsigned)ink.g << 32) + ((uintptr_t)(unsigned)ink.b << 24);
+    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_FIXED(7), .height = CLAY_SIZING_FIXED(7)}},
+          .custom = {.customData = (void *)data}})
+    {
+    }
+}
 static Icon button_icon(const Panel *p, uint32_t id, Action action)
 {
     if (id == 99 || id == 90 || id == 92 || id == 93 || id == 94 || id == 96 || id == 87) {
@@ -414,8 +458,23 @@ static Icon button_icon(const Panel *p, uint32_t id, Action action)
     if (id == 22) {
         return ICON_SCREEN;
     }
+    if (id == 130) {
+        return ICON_STREAM;
+    }
+    if (id >= 139 && id <= 141) {
+        return ICON_STOP;
+    }
+    if (id == 137) {
+        return ICON_FREEZE;
+    }
+    if (id == 138) {
+        return ICON_BLUR;
+    }
+    if (id == 150) {
+        return ICON_SETTINGS;
+    }
     if (id == 30) {
-        return p->snapshot.state.live_paused ? ICON_PLAY : ICON_PAUSE;
+        return p->snapshot.state.virtual_paused ? ICON_PLAY : ICON_PAUSE;
     }
     if (id == 31 || id == 37) {
         return ICON_FREEZE;
@@ -487,7 +546,10 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
                                          : control;
     Clay_Color ink = enabled ? selected ? accent : foreground : muted;
     CLAY({.id = element_id(id),
-          .layout = {.sizing = {.height = CLAY_SIZING_FIXED(40)},
+          .layout = {.sizing = {.width = (id == 30 || id == 32 || id == 130 || id == 34)
+                                             ? CLAY_SIZING_GROW()
+                                             : CLAY_SIZING_FIT(),
+                                .height = CLAY_SIZING_FIXED(40)},
                      .padding = {10, action == A_DROPDOWN ? 26 : 10, 8, 8},
                      .childGap = 6,
                      .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}},
@@ -510,7 +572,7 @@ static void command_button(Panel *p, uint32_t id, const char *text, bool enabled
     const State *s = &p->snapshot.state;
     bool selected = (id == 22 && (p->snapshot.config.preview ||
                                   (p->snapshot.countdown && p->snapshot.capabilities.preview))) ||
-                    (id == 31 && s->live_frozen) || (id == 36 && s->live_blurred) ||
+                    (id == 31 && s->virtual_frozen) || (id == 36 && s->virtual_blurred) ||
                     (id == 37 && s->record_frozen) || (id == 38 && s->record_blurred) ||
                     (id == 39 && s->record_cut);
     button(p, id, text, enabled, selected, A_COMMAND, 0);
@@ -553,7 +615,8 @@ static bool supported(const Panel *p, const FieldSpec *f)
 }
 static bool writable(const Panel *p, const FieldSpec *f)
 {
-    return p->snapshot.connected && !(f->flags & READ_ONLY) &&
+    return p->snapshot.connected && supported(p, f) && !(f->flags & READ_ONLY) &&
+           (!(f->flags & STREAM_LOCK) || !p->snapshot.state.stream_active) &&
            (!(f->flags & RECORD_LOCK) ||
             (!p->snapshot.state.recording && !p->snapshot.finalizing && !p->snapshot.countdown));
 }
@@ -611,12 +674,10 @@ static int validate_field(const FieldSpec *f, const char *value, char *out, size
     }
     return 0;
 }
+static void text_wrapped(const char *, Clay_Color);
 static void field_row(Panel *p, size_t index)
 {
     const FieldSpec *f = &fields[index];
-    if (!supported(p, f)) {
-        return;
-    }
     bool enabled = writable(p, f);
     uint32_t id = 1000 + (uint32_t)index * 3;
     char current[PATH_MAX];
@@ -624,9 +685,12 @@ static void field_row(Panel *p, size_t index)
     if (!p->edit[index].dirty && p->active_text != id) {
         snprintf(p->edit[index].value, sizeof p->edit[index].value, "%s", current);
     }
+    if (p->edit[index].dirty) {
+        snprintf(current, sizeof current, "%s", p->edit[index].value);
+    }
     bool stacked = f->type != FIELD_BOOL && f->type != FIELD_ENUM;
     CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_FIT()},
-                     .padding = {0, 0, 8, 10},
+                     .padding = {0, 0, 5, 5},
                      .childGap = 8,
                      .layoutDirection = stacked ? CLAY_TOP_TO_BOTTOM : CLAY_LEFT_TO_RIGHT,
                      .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}},
@@ -634,7 +698,7 @@ static void field_row(Panel *p, size_t index)
     {
         CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}}})
         {
-            label(f->label, 1, foreground);
+            label(f->label, stacked ? 0 : 1, stacked ? muted : secondary);
         }
         CLAY({.layout = {.sizing = {.width = stacked ? CLAY_SIZING_GROW() : CLAY_SIZING_FIT()},
                          .childGap = 8,
@@ -644,14 +708,17 @@ static void field_row(Panel *p, size_t index)
                 bool on = !strcmp(current, "true");
                 button(p, id, on ? "On" : "Off", enabled, on, A_SETTING, (int)index);
                 Widget *w = &p->widgets[p->widget_count - 1];
+                w->draft = p->draft_context;
                 snprintf(w->value, sizeof w->value, "%s", on ? "false" : "true");
             } else if (f->type == FIELD_ENUM) {
                 button(p, id, format(p, "%s", current), enabled, false, A_DROPDOWN, (int)index);
                 p->widgets[p->widget_count - 1].type = W_SELECT;
+                p->widgets[p->widget_count - 1].draft = p->draft_context;
             } else {
                 Widget *w = widget(p, id, W_FIELD, A_FIELD, enabled);
                 if (w) {
                     w->index = (int)index;
+                    w->draft = p->draft_context;
                 }
                 CLAY({.id = element_id(id),
                       .layout = {.sizing = {.width = CLAY_SIZING_GROW(),
@@ -669,6 +736,12 @@ static void field_row(Panel *p, size_t index)
                 }
             }
         }
+        if (!supported(p, f)) {
+            text_wrapped("Unavailable with this capture backend.", secondary);
+        }
+        if ((f->flags & STREAM_LOCK) && !enabled && p->snapshot.state.stream_active) {
+            text_wrapped("Stop streaming first; presentation styling stays editable.", secondary);
+        }
         if (stacked && (f->flags & RECORD_LOCK) && !enabled && p->snapshot.connected) {
             label("Stop recording to edit", 0, secondary);
         }
@@ -682,489 +755,628 @@ static void text_wrapped(const char *text, Clay_Color color)
         CLAY_TEXT_CONFIG(
             {.fontId = 0, .fontSize = 13, .textColor = color, .wrapMode = CLAY_TEXT_WRAP_WORDS}));
 }
-static const char *const section_names[] = {"Source", "Camera", "Audio", "Effects", "Settings"};
-
-static const char *live_status(const PanelSnapshot *s)
+/* The header and tabs never scroll. Both bodies use one retained scroll container. */
+static const char *const lane_names[] = {"Virtual camera", "Recording", "Streaming", "Audio"};
+static const char *const section_names[] = {
+    "Source & layout", "Camera",  "Background & stage", "Overlays", "Annotations & pointer",
+    "Audio",           "Settings"};
+static const char *virtual_status(const PanelSnapshot *s)
 {
-    return !s->connected             ? "Disconnected"
-           : !s->config.live_enabled ? "Live output off"
-           : s->state.live_paused    ? "Live paused"
-           : s->state.live_blurred   ? "Live blurred"
-           : s->state.live_frozen    ? "Live frozen"
-                                     : "Live";
+    return !s->config.virtual_enabled ? "Off"
+           : s->state.virtual_paused  ? "Paused"
+           : s->state.virtual_blurred ? "Blurred"
+           : s->state.virtual_frozen  ? "Frozen"
+                                      : "Running";
 }
 static const char *record_status(const PanelSnapshot *s)
 {
-    return s->countdown          ? (s->state.recording ? "Resume countdown" : "Recording countdown")
-           : s->finalizing       ? "Saving recording"
-           : !s->state.recording ? "Not recording"
-           : s->state.record_cut ? "Recording cut"
-           : s->state.record_paused  ? "Recording paused"
-           : s->state.record_blurred ? "Recording blurred"
-           : s->state.record_frozen  ? "Recording frozen"
-                                     : "Recording";
+    return s->countdown              ? "Countdown"
+           : s->finalizing           ? "Finalizing…"
+           : !s->state.recording     ? "Off"
+           : s->state.record_cut     ? "Cut"
+           : s->state.record_paused  ? "Paused"
+           : s->state.record_blurred ? "Blurred"
+           : s->state.record_frozen  ? "Frozen"
+                                     : "Running";
 }
-
-static void status_line(Panel *p)
+static const char *panel_stream_status(const PanelSnapshot *s)
+{
+    switch (s->stream.state) {
+    case STREAM_CONNECTING:
+        return "Connecting";
+    case STREAM_RECONNECTING:
+        return "Retrying";
+    case STREAM_STOPPING:
+        return "Stopping";
+    case STREAM_FAILED:
+        return "Failed";
+    case STREAM_STREAMING:
+        return s->state.stream_paused    ? "Paused"
+               : s->state.stream_blurred ? "Blurred"
+               : s->state.stream_frozen  ? "Frozen"
+                                         : "Running";
+    case STREAM_STOPPED:
+        return s->config.stream.server_url[0] && s->config.stream.key_file[0] ? "Ready"
+                                                                              : "Not configured";
+    }
+    return "Off";
+}
+static const char *lane_status(Panel *p, int lane)
 {
     const PanelSnapshot *s = &p->snapshot;
-    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_FIXED(42)},
-                     .childGap = 12,
-                     .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
+    return lane == 0   ? virtual_status(s)
+           : lane == 1 ? record_status(s)
+           : lane == 2 ? panel_stream_status(s)
+                       : format(p, "Mic %s · desktop %s", s->config.mic ? "on" : "off",
+                                s->config.desktop ? "on" : "off");
+}
+static Clay_Color state_color(const PanelSnapshot *s, int lane)
+{
+    if (lane == 2 && s->stream.state == STREAM_FAILED) {
+        return danger;
+    }
+    if ((lane == 1 && (s->countdown || s->finalizing)) ||
+        (lane == 2 &&
+         (s->stream.state == STREAM_CONNECTING || s->stream.state == STREAM_RECONNECTING))) {
+        return accent;
+    }
+    bool active = lane == 0   ? s->config.virtual_enabled
+                  : lane == 1 ? s->state.recording
+                              : s->stream.active;
+    bool paused = lane == 0   ? s->state.virtual_paused
+                  : lane == 1 ? s->state.record_paused || s->state.record_cut
+                              : s->state.stream_paused;
+    return !active  ? secondary
+           : paused ? (Clay_Color){224, 197, 102, 255}
+                    : (Clay_Color){131, 221, 182, 255};
+}
+static void text_button(Panel *p, uint32_t id, const char *text, bool enabled, Action action,
+                        int index, bool selected)
+{
+    Widget *w = widget(p, id, W_BUTTON, action, enabled);
+    if (w) {
+        w->index = index;
+    }
+    CLAY({.id = element_id(id),
+          .layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_FIXED(42)},
+                     .padding = {0, 0, 8, 8},
+                     .childAlignment = {.x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER}},
+          .backgroundColor = hot(id) ? surface : background,
+          .border = {.color = p->focus == id ? accent
+                              : selected     ? accent
+                                             : line,
+                     .width = p->focus == id ? outline_width
+                                             : (Clay_BorderWidth){.bottom = selected ? 2 : 1}}})
     {
-        if (p->tab >= 0) {
-            button(p, 99, "Back", true, false, A_TAB, -1);
-        }
-        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}}})
+        label(text, 1, enabled ? foreground : muted);
+    }
+}
+static void pinned_header(Panel *p)
+{
+    const PanelSnapshot *s = &p->snapshot;
+    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
+                     .padding = {16, 16, 12, 0},
+                     .childGap = 10,
+                     .layoutDirection = CLAY_TOP_TO_BOTTOM}})
+    {
+        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
+                         .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
         {
-            label(p->tab < 0 ? "cast" : section_names[p->tab], 3, foreground);
-        }
-        if (s->state.recording || s->countdown || s->finalizing) {
-            uint64_t secs = s->duration_ns / 1000000000ULL;
-            label(
-                s->countdown ? format(p, "%s %us", s->state.recording ? "Resume in" : "Start in",
-                                      (unsigned)(s->countdown_remaining_ns / 1000000000ULL +
-                                                 (s->countdown_remaining_ns % 1000000000ULL != 0)))
-                : s->finalizing
-                    ? "Saving…"
-                    : format(p, "%02llu:%02llu:%02llu", (unsigned long long)(secs / 3600),
-                             (unsigned long long)(secs / 60 % 60), (unsigned long long)(secs % 60)),
-                1, danger);
-        }
-    }
-    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 12}})
-    {
-        label(live_status(s), 0,
-              s->connected && s->config.live_enabled && !s->state.live_paused &&
-                      !s->state.live_frozen && !s->state.live_blurred
-                  ? (Clay_Color){131, 221, 182, 255}
-                  : secondary);
-        if (s->connected) {
-            label(record_status(s), 0, s->state.recording || s->countdown ? danger : secondary);
-        }
-    }
-}
-
-static void output_controls(Panel *p)
-{
-    const PanelSnapshot *s = &p->snapshot;
-    bool live = s->connected && s->config.live_enabled;
-    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 8}})
-    {
-        command_button(p, 30, s->state.live_paused ? "Start live" : "Pause live", live, "live",
-                       s->state.live_paused ? "resume" : "pause", NULL);
-    }
-    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 8}})
-    {
-        if (!s->state.recording && !s->countdown) {
-            command_button(p, 32, s->finalizing ? "Saving…" : "Start recording",
-                           s->connected && !s->finalizing, "record", "start", NULL);
-        } else {
-            if (s->state.recording || s->countdown) {
-                command_button(p, 32,
-                               s->countdown && !s->state.recording ? "Cancel" : "Stop record",
-                               s->connected, "record", "stop", NULL);
+            CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
+                             .childGap = 8,
+                             .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
+            {
+                label("Cast", 3, foreground);
+                label("panel", 0, muted);
             }
-            if (s->countdown && s->state.recording) {
-                command_button(p, 35, "Cancel resume", s->connected, "record", "cut", NULL);
+            label(s->connected ? "Connected" : "Disconnected", 0,
+                  s->connected ? secondary : danger);
+        }
+        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 6}})
+        {
+            for (int lane = 0; lane < 3; lane++) {
+                uint32_t id = 10 + (uint32_t)lane;
+                Widget *w = widget(p, id, W_BUTTON, A_LANE, true);
+                if (w) {
+                    w->index = lane;
+                }
+                CLAY({.id = element_id(id),
+                      .layout = {.sizing = {.width = CLAY_SIZING_GROW(),
+                                            .height = CLAY_SIZING_FIXED(54)},
+                                 .padding = {8, 8, 6, 6},
+                                 .childGap = 3,
+                                 .layoutDirection = CLAY_TOP_TO_BOTTOM},
+                      .backgroundColor = hot(id)                                    ? hovered
+                                         : p->main_tab == 0 && p->open_lane == lane ? surface
+                                                                                    : control,
+                      .border = {.color = p->focus == id ? accent : control,
+                                 .width = outline_width}})
+                {
+                    label(lane_names[lane], 0, muted);
+                    CLAY({.layout = {.childGap = 5, .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
+                    {
+                        state_marker(state_color(s, lane));
+                        label(lane_status(p, lane), 0, state_color(s, lane));
+                    }
+                }
             }
         }
-    }
-    if (s->state.recording || s->countdown || s->state.group_paused) {
         CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 8}})
         {
-            command_button(p, 34, s->state.group_paused ? "Resume all" : "Pause all", s->connected,
-                           s->state.group_paused ? "resume" : "pause", NULL, NULL);
-        }
-    }
-}
-
-static void preview_controls(Panel *p)
-{
-    const PanelSnapshot *s = &p->snapshot;
-    bool available = s->connected && s->capabilities.preview;
-    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
-                     .childGap = 8,
-                     .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
-    {
-        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}}})
-        {
-            label("Floating preview", 0, secondary);
-        }
-        command_button(p, 22,
-                       s->countdown && available  ? "Countdown preview"
-                       : !s->capabilities.preview ? "Unavailable"
-                       : s->config.preview        ? "On"
-                                                  : "Off",
-                       available && !s->countdown, "preview", s->config.preview ? "off" : "on",
-                       NULL);
-    }
-    CLAY({.layout = {.childGap = 8}})
-    {
-        button(p, 20, "Live", s->connected, !strcmp(s->config.preview_target, "live"), A_PREVIEW,
-               0);
-        button(p, 21, "Recording", s->connected, !strcmp(s->config.preview_target, "record"),
-               A_PREVIEW, 1);
-    }
-    if (s->connected && !s->capabilities.preview) {
-        text_wrapped("This backend has no floating preview. The target selection is saved.",
-                     secondary);
-    }
-}
-static void home_output_modes(Panel *p)
-{
-    const PanelSnapshot *s = &p->snapshot;
-    bool live = s->connected && s->config.live_enabled;
-    bool record = s->connected && s->state.recording && !s->countdown;
-    label("Live output", 2, foreground);
-    CLAY({.layout = {.childGap = 8}})
-    {
-        command_button(p, 31, s->state.live_frozen ? "Unfreeze" : "Freeze", live, "live",
-                       s->state.live_frozen ? "unfreeze" : "freeze", NULL);
-        command_button(p, 36, s->state.live_blurred ? "Blur off" : "Blur on", live, "live", "blur",
-                       s->state.live_blurred ? "off" : "on");
-    }
-    CLAY({.layout = {.padding = {0, 0, 12, 0}}})
-    {
-        label("Recording", 2, foreground);
-    }
-    CLAY({.layout = {.childGap = 8}})
-    {
-        bool resume = s->state.record_paused || s->state.record_cut;
-        command_button(p, 33, resume ? "Resume record" : "Pause record", record, "record",
-                       resume ? "resume" : "pause", NULL);
-        command_button(p, 39, "Cut time", record && !s->state.record_cut, "record", "cut", NULL);
-    }
-    CLAY({.layout = {.childGap = 8}})
-    {
-        command_button(p, 37, s->state.record_frozen ? "Unfreeze" : "Freeze", record, "record",
-                       s->state.record_frozen ? "unfreeze" : "freeze", NULL);
-        command_button(p, 38, s->state.record_blurred ? "Blur off" : "Blur on", record, "record",
-                       "blur", s->state.record_blurred ? "off" : "on");
-    }
-    text_wrapped(s->state.recording
-                     ? "Pause writes a solid screen and silence. Cut removes media time."
-                     : "Start recording to enable recording controls.",
-                 secondary);
-}
-static void home_navigation(Panel *p)
-{
-    CLAY({.id = CLAY_ID("SettingsScroll"),
-          .layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_GROW()},
-                     .layoutDirection = CLAY_TOP_TO_BOTTOM,
-                     .padding = {0, 0, 8, 0},
-                     .childGap = 8},
-          .clip = {.vertical = true, .childOffset = Clay_GetScrollOffset()}})
-    {
-        home_output_modes(p);
-        static const int order[] = {TAB_SOURCE, TAB_CAMERA, TAB_AUDIO, TAB_EFFECTS, TAB_SETTINGS};
-        for (int row = 0; row < TAB_COUNT; row++) {
-            int i = order[row];
-            uint32_t id = 100 + (uint32_t)i;
-            Widget *w = widget(p, id, W_BUTTON, A_TAB, true);
-            if (w) {
-                w->index = i;
-            }
-            CLAY({.id = element_id(id),
-                  .layout = {.sizing = {.width = CLAY_SIZING_GROW(),
-                                        .height = CLAY_SIZING_FIXED(46)},
-                             .padding = {10, 12, 0, 0},
-                             .childGap = 10,
-                             .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}},
-                  .backgroundColor = hot(id) ? control : background,
-                  .border = {.color = p->focus == id ? accent : line,
-                             .width =
-                                 p->focus == id ? outline_width : (Clay_BorderWidth){.bottom = 1}}})
+            CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}}})
             {
-                static const Icon icons[] = {ICON_SCREEN, ICON_CAMERA, ICON_AUDIO, ICON_EFFECTS,
-                                             ICON_SETTINGS};
-                icon_slot(icons[i], true, false);
-                CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}}})
+                command_button(p, 34, s->state.group_paused ? "Resume" : "Pause all", s->connected,
+                               s->state.group_paused ? "resume" : "pause", NULL, NULL);
+            }
+            command_button(p, 22,
+                           s->countdown        ? "Countdown"
+                           : s->config.preview ? "Preview on"
+                                               : "Preview off",
+                           s->connected && s->capabilities.preview && !s->countdown, "preview",
+                           s->config.preview ? "off" : "on", NULL);
+        }
+        text_wrapped(format(p, "source %s%s%s · layout %s · preset %s%s", s->config.capture_kind,
+                            s->config.monitor[0] ? " " : "", s->config.monitor, s->config.layout,
+                            s->config.preset_count ? "configured" : "—",
+                            s->config.zoom_factor > 1 ? " · zoom on" : ""),
+                     muted);
+        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
+                         .padding = {10, 10, 7, 7},
+                         .childGap = 7},
+              .backgroundColor = surface})
+        {
+            icon_slot(ICON_INFO, true, false);
+            text_wrapped(s->exclusion[0]
+                             ? s->exclusion
+                             : "Capture exclusion status is unavailable while disconnected.",
+                         muted);
+        }
+        if (!s->connected) {
+            CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .padding = {10, 10, 8, 8}},
+                  .backgroundColor = surface})
+            {
+                text_wrapped("Daemon disconnected — showing last known state. Commands are "
+                             "unavailable; outputs keep running per their last state and this "
+                             "window reconnects automatically.",
+                             danger);
+            }
+        }
+    }
+    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .padding = {0, 0, 12, 0}}})
+    {
+        text_button(p, 5, "Operate", true, A_MAIN_TAB, 0, p->main_tab == 0);
+        text_button(p, 6, "Compose", true, A_MAIN_TAB, 1, p->main_tab == 1);
+    }
+}
+static void disclosure(Panel *p, uint32_t id, const char *title, const char *detail, Action action,
+                       int index, bool open)
+{
+    Widget *w = widget(p, id, W_BUTTON, action, true);
+    if (w) {
+        w->index = index;
+    }
+    CLAY({.id = element_id(id),
+          .layout = {.sizing = {.width = CLAY_SIZING_GROW()},
+                     .padding = {16, 16, 12, 12},
+                     .childGap = 8,
+                     .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}},
+          .backgroundColor = hot(id) ? surface : background,
+          .border = {.color = p->focus == id ? accent : line,
+                     .width = p->focus == id ? outline_width : (Clay_BorderWidth){.bottom = 1}}})
+    {
+        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
+                         .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                         .childGap = 4}})
+        {
+            label(title, action == A_LANE ? 3 : 2, foreground);
+            if (detail && detail[0]) {
+                text_wrapped(detail, secondary);
+            }
+        }
+        icon_slot(open ? ICON_MINUS : ICON_PLUS, true, false);
+    }
+}
+static int find_field(const char *key)
+{
+    for (size_t i = 0; i < FIELD_COUNT; i++) {
+        if (!strcmp(fields[i].key, key)) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+static void named_field(Panel *p, const char *key)
+{
+    int index = find_field(key);
+    if (index >= 0) {
+        field_row(p, (size_t)index);
+    }
+}
+static void lane_annotations(Panel *p, int lane)
+{
+    const char *names[] = {"virtual", "record", "stream"};
+    p->draft_context = false;
+    named_field(p, format(p, "annotations.%s_keys", names[lane]));
+    named_field(p, format(p, "annotations.%s_clicks", names[lane]));
+}
+static void effect_buttons(Panel *p, int lane)
+{
+    const State *s = &p->snapshot.state;
+    const char *commands[] = {"virtual", "record", "stream"};
+    bool frozen = lane == 0 ? s->virtual_frozen : lane == 1 ? s->record_frozen : s->stream_frozen;
+    bool blurred = lane == 0   ? s->virtual_blurred
+                   : lane == 1 ? s->record_blurred
+                               : s->stream_blurred;
+    uint32_t freeze_id = lane == 0 ? 31 : lane == 1 ? 37 : 137;
+    uint32_t blur_id = lane == 0 ? 36 : lane == 1 ? 38 : 138;
+    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 6}})
+    {
+        command_button(p, freeze_id, frozen ? "Unfreeze" : "Freeze", p->snapshot.connected,
+                       commands[lane], frozen ? "unfreeze" : "freeze", NULL);
+        command_button(p, blur_id, blurred ? "Blur off" : "Blur", p->snapshot.connected,
+                       commands[lane], "blur", blurred ? "off" : "on");
+        command_button(p, 139 + (uint32_t)lane, "Stop", p->snapshot.connected, commands[lane],
+                       "stop", NULL);
+    }
+}
+static void lane_body(Panel *p, int lane)
+{
+    const PanelSnapshot *s = &p->snapshot;
+    bool connected = s->connected;
+    if (lane == 0) {
+        text_wrapped(
+            !s->config.virtual_enabled ? "Starts privacy-paused — Resume reveals the composition."
+            : s->state.virtual_paused
+                ? "Privacy pause: solid screen, silence. Freeze/blur remembered underneath."
+            : s->state.virtual_blurred
+                ? "Blurred above the composition · silence. Conference sees this tile."
+            : s->state.virtual_frozen ? "Frozen — held frame, silence. Conference sees this tile."
+                                      : "Transmitting the composition. Conference sees this tile.",
+            muted);
+        command_button(p, 30,
+                       !s->config.virtual_enabled ? "Start virtual camera"
+                       : s->state.virtual_paused  ? "Resume virtual camera"
+                                                  : "Pause virtual camera",
+                       connected, "virtual",
+                       !s->config.virtual_enabled ? "start"
+                       : s->state.virtual_paused  ? "resume"
+                                                  : "pause",
+                       NULL);
+        if (s->config.virtual_enabled) {
+            effect_buttons(p, lane);
+            lane_annotations(p, lane);
+        }
+    } else if (lane == 1) {
+        if (s->countdown) {
+            unsigned seconds =
+                (unsigned)((s->countdown_remaining_ns + 999999999ULL) / 1000000000ULL);
+            text_wrapped(s->state.recording ? "Resuming the same file — Cancel available."
+                                            : "Recording starts — Cancel available.",
+                         muted);
+            command_button(p, 35, format(p, "Cancel — %u s", seconds), connected, "record",
+                           "cancel", NULL);
+        } else if (s->finalizing) {
+            text_wrapped("Closing the recording file.", muted);
+            command_button(p, 32, "Finalizing…", false, "record", "start", NULL);
+        } else if (!s->state.recording) {
+            text_wrapped("Start begins the configured countdown; cut removes media time.", muted);
+            command_button(p, 32, "Start recording", connected, "record", "start", NULL);
+        } else {
+            uint64_t seconds = s->duration_ns / 1000000000ULL;
+            text_wrapped(format(p, "%02llu:%02llu · %s", (unsigned long long)(seconds / 60),
+                                (unsigned long long)(seconds % 60), s->state.record_path),
+                         muted);
+            if (s->state.record_cut) {
+                text_wrapped("Media clock stopped · file kept. Resume continues the same file.",
+                             muted);
+                command_button(p, 33,
+                               format(p, "Resume — %d s countdown", s->config.record_countdown),
+                               connected, "record", "resume", NULL);
+                command_button(p, 32, "Stop recording", connected, "record", "stop", NULL);
+            } else {
+                CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 6}})
                 {
-                    label(section_names[i], 1, foreground);
+                    command_button(p, 33, s->state.record_paused ? "Resume" : "Pause", connected,
+                                   "record", s->state.record_paused ? "resume" : "pause", NULL);
+                    command_button(p, 39, "Cut time", connected, "record", "cut", NULL);
                 }
-                icon_slot(ICON_FORWARD, true, false);
+                effect_buttons(p, lane);
+                text_wrapped("Pause writes a styled screen and silence. Cut removes media time.",
+                             muted);
             }
         }
-    }
-}
-static void selection_row(Panel *p)
-{
-    label("Composition", 2, foreground);
-    static const char *const layouts[] = {"overlay", "split", "screen", "camera", "stage"};
-    static const char *const names[] = {"Overlay", "Split", "Screen", "Camera", "Stage"};
-    for (int row = 0; row < 3; row++) {
-        CLAY({.layout = {.childGap = 8}})
-        {
-            for (int col = 0; col < 2; col++) {
-                int i = row * 2 + col;
-                if (i >= 5) {
-                    break;
-                }
-                button(p, 50 + (uint32_t)i, names[i], p->snapshot.connected,
-                       !strcmp(p->snapshot.config.layout, layouts[i]), A_COMMAND, 0);
-                Widget *w = &p->widgets[p->widget_count - 1];
-                w->arg[0] = "layout";
-                w->arg[1] = layouts[i];
-                w->argc = 2;
+        lane_annotations(p, lane);
+        named_field(p, "record.countdown");
+    } else if (lane == 2) {
+        if (s->stream.active) {
+            const char *destination = !strcmp(s->config.stream.service, "custom")
+                                          ? "Custom RTMP destination"
+                                          : s->config.stream.service;
+            text_wrapped(format(p, "%s · mic %s · desktop %s", destination,
+                                s->config.mic ? "on" : "off", s->config.desktop ? "on" : "off"),
+                         muted);
+            if (s->stream.state == STREAM_RECONNECTING) {
+                text_wrapped(format(p, "Retrying %u · current privacy state retained.",
+                                    s->stream.retry_attempt),
+                             accent);
             }
+            if (s->state.stream_paused) {
+                text_wrapped("Connected sessions start privacy-paused. Resume streaming reveals "
+                             "the composition to viewers.",
+                             secondary);
+            }
+            command_button(p, 130, s->state.stream_paused ? "Resume streaming" : "Pause streaming",
+                           connected && s->stream.state == STREAM_STREAMING, "stream",
+                           s->state.stream_paused ? "resume" : "pause", NULL);
+            effect_buttons(p, lane);
+        } else {
+            if (s->stream.state == STREAM_FAILED) {
+                text_wrapped(s->stream.error, danger);
+            } else {
+                text_wrapped(s->config.stream.server_url[0]
+                                 ? "Start opens privacy-paused."
+                                 : "Set up a destination in Streaming setup…",
+                             muted);
+            }
+            command_button(p, 130,
+                           s->stream.state == STREAM_FAILED ? "Retry connection"
+                           : s->config.stream.server_url[0] && s->config.stream.key_file[0]
+                               ? "Start streaming"
+                               : "Start streaming — set up first",
+                           connected && s->config.stream.server_url[0] &&
+                               s->config.stream.key_file[0],
+                           "stream", "start", NULL);
         }
-    }
-    CLAY({.layout = {.childGap = 8}})
-    {
-        command_button(p, 90, "Previous layout", p->snapshot.connected, "layout", "prev", NULL);
-        command_button(p, 91, "Next layout", p->snapshot.connected, "layout", "next", NULL);
-    }
-    CLAY({.layout = {.childGap = 8}})
-    {
-        button(p, 40, "Preset", p->snapshot.connected && p->snapshot.config.preset_count > 0, false,
-               A_DROPDOWN, -1);
-        p->widgets[p->widget_count - 1].type = W_SELECT;
-        command_button(p, 92, "Previous", p->snapshot.connected, "preset", "prev", NULL);
-        command_button(p, 41, "Next", p->snapshot.connected, "preset", "next", NULL);
-    }
-    command_button(p, 42, "Reset composition", p->snapshot.connected, "reset", NULL, NULL);
-}
-static void source_actions(Panel *p)
-{
-    bool native = p->snapshot.connected && strcmp(p->snapshot.config.backend, "synthetic");
-    CLAY({.layout = {.childGap = 8}})
-    {
-        command_button(p, 70, "Monitor", native, "capture", "monitor", NULL);
-        if (p->snapshot.capabilities.region_selection) {
-            command_button(p, 71, "Select region", native, "capture", "region", "select");
-        }
-    }
-    CLAY({.layout = {.childGap = 8}})
-    {
-        if (p->snapshot.capabilities.window_selection) {
-            command_button(p, 72, "Select window", native, "capture", "window", "select");
-        }
-    }
-    CLAY({.layout = {.childGap = 8}})
-    {
-        command_button(p, 73, "List monitors", native, "screen", "list", NULL);
-    }
-    label("Monitor cycle", 0, secondary);
-    CLAY({.layout = {.childGap = 8}})
-    {
-        command_button(p, 93, "Previous", native, "screen", "prev", NULL);
-        command_button(p, 74, "Next", native, "screen", "next", NULL);
-    }
-    CLAY({.layout = {.childGap = 8}})
-    {
-        if (p->snapshot.capabilities.window_selection) {
-            command_button(p, 75, "Active window", native, "capture", "window", "active");
-        }
-    }
-    label(format(p, "Source: %s%s%s", p->snapshot.config.capture_kind,
-                 p->snapshot.config.monitor[0] ? " · " : "", p->snapshot.config.monitor),
-          0, secondary);
-    if (!p->snapshot.capabilities.region_selection || !p->snapshot.capabilities.window_selection) {
-        text_wrapped("Source selection is managed by the capture backend. Unsupported selection "
-                     "actions are hidden.",
-                     secondary);
-    }
-    CLAY({.layout = {.childGap = 8}})
-    {
-        command_button(p, 76, "Zoom out", p->snapshot.connected, "zoom", "out", NULL);
-        command_button(p, 77, "Zoom in", p->snapshot.connected, "zoom", "in", NULL);
-    }
-    CLAY({.layout = {.childGap = 8}})
-    {
-        command_button(p, 78, "Reset zoom", p->snapshot.connected, "zoom", "reset", NULL);
-        command_button(p, 79, "Toggle zoom", p->snapshot.connected, "zoom", "toggle", NULL);
-    }
-}
-static void tab_actions(Panel *p)
-{
-    if (p->tab == TAB_SOURCE) {
-        selection_row(p);
-        source_actions(p);
-    } else if (p->tab == TAB_CAMERA) {
-        CLAY({.layout = {.childGap = 8}})
-        {
-            command_button(p, 80, "List cameras", p->snapshot.connected, "camera", "list", NULL);
-        }
-    } else if (p->tab == TAB_AUDIO) {
-        command_button(p, 83, "List audio sources", p->snapshot.connected, "audio", "list", NULL);
-        text_wrapped("Use a PipeWire source name or node ID. An empty source follows the system "
-                     "default. Missing sources produce silence.",
-                     secondary);
-        if (p->snapshot.audio_status[0]) {
-            text_wrapped(p->snapshot.audio_status, secondary);
-        }
-    } else if (p->tab == TAB_EFFECTS) {
-        if (p->snapshot.capabilities.input) {
-            command_button(p, 84, "Clear keystrokes", p->snapshot.connected, "keys", "clear", NULL);
-        }
-        if (!p->snapshot.capabilities.cursor_metadata) {
-            text_wrapped(p->snapshot.capabilities.embedded_cursor
-                             ? "This backend embeds the cursor in capture. Cursor visibility and "
-                               "highlighting require a new capture session."
-                             : "This backend provides no pointer metadata. Cursor controls and "
-                               "pointer following are unavailable.",
-                         secondary);
-        }
-        if (!p->snapshot.capabilities.input) {
-            text_wrapped("This backend cannot observe global keys or clicks. Input annotations are "
-                         "unavailable.",
-                         secondary);
-        }
+        button(p, 150, "Streaming setup…", true, false, A_SETUP, 1);
+        lane_annotations(p, lane);
     } else {
-        command_button(p, 85, "Reload config file", p->snapshot.connected, "config", "reload",
-                       NULL);
-        text_wrapped("Applied changes affect this session. Edit your config file to keep settings "
-                     "across daemon restarts.",
-                     secondary);
+        text_wrapped("What the audience hears — check this before revealing anything.", muted);
+        p->draft_context = false;
+        named_field(p, "audio.mic");
+        named_field(p, "audio.desktop");
+        named_field(p, "audio.virtual");
+        button(p, 151, "Sources & gains", true, false, A_SECTION, 5);
+        text_wrapped("Gains in Compose → Audio · virtual source name is config-only.", muted);
     }
 }
-static const char *const group_names[TAB_COUNT][GROUP_COUNT] = {
-    {"", "Region geometry", "Zoom behavior", "Stage size", "Screen appearance",
-     "Background gradient"},
-    {"", "Position and crop", "Appearance", "Device"},
-    {"", "Virtual microphone", "", ""},
-    {"", "Output annotations", "Cursor and clicks", "Keystroke style", "Logo", "Text overlay"},
-    {"", "Recording format", "Cycle order", "Output and connection", "Pause screen",
-     "Blur screen"}};
-static void settings_area(Panel *p)
+/* Prototype sections regroup existing controls without discarding advanced fields. */
+static int field_section(const FieldSpec *f)
 {
-    CLAY({.id = CLAY_ID("SettingsScroll"),
-          .layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_GROW()},
-                     .padding = {0, 10, 0, 12},
-                     .childGap = 8,
-                     .layoutDirection = CLAY_TOP_TO_BOTTOM},
-          .clip = {.vertical = true, .childOffset = Clay_GetScrollOffset()}})
+    const char *key = f->key;
+    if (f->tab == TAB_STREAM) {
+        return 7;
+    }
+    if (f->tab == TAB_CAMERA) {
+        return 1;
+    }
+    if (f->tab == TAB_AUDIO) {
+        return 5;
+    }
+    if (f->tab == TAB_EFFECTS) {
+        return !strncmp(key, "logo.", 5) || !strncmp(key, "text.", 5) ? 3 : 4;
+    }
+    if (f->tab == TAB_SOURCE) {
+        return !strncmp(key, "screen.", 7) || !strncmp(key, "background.", 11) ||
+                       !strcmp(key, "camera.width_percent")
+                   ? 2
+                   : 0;
+    }
+    return 6;
+}
+static bool section_dirty(const Panel *p, int section)
+{
+    for (size_t i = 0; i < FIELD_COUNT; i++) {
+        if (field_section(&fields[i]) == section && p->edit[i].dirty) {
+            return true;
+        }
+    }
+    return false;
+}
+static void draft_actions(Panel *p, int section)
+{
+    bool dirty = section_dirty(p, section);
+    CLAY({.layout = {
+              .sizing = {.width = CLAY_SIZING_GROW()}, .padding = {0, 0, 8, 4}, .childGap = 8}})
     {
-        tab_actions(p);
-        for (size_t i = 0; i < FIELD_COUNT; i++) {
-            if (fields[i].tab == p->tab && !fields[i].group) {
-                field_row(p, i);
-                if (!strcmp(fields[i].key, "camera.shape") ||
-                    !strcmp(fields[i].key, "camera.anchor") ||
-                    !strcmp(fields[i].key, "camera.aspect")) {
-                    bool shape = !strcmp(fields[i].key, "camera.shape");
-                    bool anchor = !strcmp(fields[i].key, "camera.anchor");
-                    const char *kind = shape ? "shape" : anchor ? "anchor" : "aspect";
-                    uint32_t previous = shape ? 94 : anchor ? 96 : 87;
-                    uint32_t next = shape ? 95 : anchor ? 97 : 88;
-                    CLAY({.layout = {.childGap = 8}})
-                    {
-                        command_button(p, previous, "Previous", p->snapshot.connected, "camera",
-                                       kind, "prev");
-                        command_button(p, next, "Next", p->snapshot.connected, "camera", kind,
-                                       "next");
-                    }
-                }
-            }
+        button(p, 700 + (uint32_t)section * 2, section == 7 ? "Apply — session only" : "Apply",
+               dirty && p->snapshot.connected, false, A_APPLY_SECTION, section);
+        button(p, 701 + (uint32_t)section * 2, "Revert", dirty, false, A_REVERT, section);
+    }
+    text_wrapped("Session only — config file untouched.", muted);
+}
+static void section_actions(Panel *p, int section)
+{
+    bool connected = p->snapshot.connected;
+    if (section == 0) {
+        CLAY({.layout = {.childGap = 6}})
+        {
+            command_button(p, 70, "Monitor", connected, "capture", "monitor", NULL);
+            command_button(p, 71, "Select region…",
+                           connected && p->snapshot.capabilities.region_selection, "capture",
+                           "region", "select");
         }
-        for (int group = 1; group < GROUP_COUNT; group++) {
-            if (!group_names[p->tab][group] || !group_names[p->tab][group][0]) {
-                continue;
-            }
-            bool any = false;
+        command_button(p, 72, "Select window…",
+                       connected && p->snapshot.capabilities.window_selection, "capture", "window",
+                       "select");
+        text_wrapped("Interactive selection keeps the previous source on Esc.", muted);
+        CLAY({.layout = {.childGap = 6}})
+        {
+            command_button(p, 90, "Previous layout", connected, "layout", "prev", NULL);
+            command_button(p, 91, "Next layout", connected, "layout", "next", NULL);
+        }
+        CLAY({.layout = {.childGap = 6}})
+        {
+            button(p, 40, "Preset", connected && p->snapshot.config.preset_count > 0, false,
+                   A_DROPDOWN, -1);
+            p->widgets[p->widget_count - 1].type = W_SELECT;
+            command_button(p, 92, "Previous", connected, "preset", "prev", NULL);
+            command_button(p, 41, "Next", connected, "preset", "next", NULL);
+        }
+        text_wrapped("Composition only — never touches outputs.", muted);
+    } else if (section == 1) {
+        command_button(p, 80, "List cameras", connected, "camera", "list", NULL);
+        text_wrapped(
+            "Stage places the screen opposite the anchor. Mirror changes camera content only.",
+            muted);
+    } else if (section == 2) {
+        text_wrapped("Backdrop fills uncovered screen/stage area. Screen and camera sizes preserve "
+                     "their aspect ratios.",
+                     muted);
+    } else if (section == 3) {
+        text_wrapped("Overlays sit above sources; pause replaces them, freeze/blur include them. "
+                     "Static text is literal; placeholders are not expanded.",
+                     muted);
+    } else if (section == 4) {
+        command_button(p, 84, "Clear now", connected, "keys", "clear", NULL);
+    } else if (section == 5) {
+        command_button(p, 83, "List audio sources", connected, "audio", "list", NULL);
+        text_wrapped("Disappeared sources never fall back to a broad capture.", muted);
+        if (p->snapshot.audio_status[0]) {
+            text_wrapped(p->snapshot.audio_status, muted);
+        }
+    } else if (section == 6) {
+        button(p, 150, "Streaming setup…", true, false, A_SETUP, 1);
+        command_button(p, 85, "Reload config file", connected, "config", "reload", NULL);
+    }
+}
+static const char *section_summary(Panel *p, int section)
+{
+    const Config *c = &p->snapshot.config;
+    switch (section) {
+    case 0:
+        return format(p, "%s · %s · %s · %.2f×", c->capture_kind, c->layout, c->fit,
+                      c->zoom_factor);
+    case 1:
+        return format(p, "%s · %s · %.0f%%", c->shape, c->anchor, c->camera_width_percent);
+    case 2:
+        return format(p, "screen %s · gradient %d-stop · stage sizes", c->screen_background,
+                      c->gradient_via_enabled ? 3 : 2);
+    case 3:
+        return format(p, "Logo %s · Text %s", c->logo_enabled ? "on" : "off",
+                      c->text_enabled ? "on" : "off");
+    case 4:
+        return format(p, "cursor %s · clicks %s · keys %s", c->cursor ? "on" : "off",
+                      c->clicks ? "on" : "off", c->keys ? c->keys_mode : "off");
+    case 5:
+        return format(p, "mic %s · desktop %s", c->mic ? "on" : "off", c->desktop ? "on" : "off");
+    default:
+        return "pause & blur screens · recording · streaming";
+    }
+}
+static void compose_body(Panel *p)
+{
+    p->draft_context = true;
+    for (int section = 0; section < 7; section++) {
+        disclosure(p, 100 + (uint32_t)section, section_names[section], section_summary(p, section),
+                   A_SECTION, section, p->open_section == section);
+        if (p->open_section != section) {
+            continue;
+        }
+        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
+                         .padding = {16, 16, 2, 14},
+                         .childGap = 6,
+                         .layoutDirection = CLAY_TOP_TO_BOTTOM}})
+        {
+            section_actions(p, section);
             for (size_t i = 0; i < FIELD_COUNT; i++) {
-                if (fields[i].tab == p->tab && fields[i].group == group &&
-                    supported(p, &fields[i])) {
-                    any = true;
+                if (field_section(&fields[i]) != section) {
+                    continue;
                 }
+                if (fields[i].group > 0) {
+                    continue;
+                }
+                field_row(p, i);
             }
-            if (!any) {
-                continue;
-            }
-            button(p, 200 + (uint32_t)p->tab * 8 + (uint32_t)group,
-                   format(p, "%s  %s", p->groups[p->tab][group] ? "Hide" : "Show",
-                          group_names[p->tab][group]),
-                   true, false, A_GROUP, group);
-            if (p->groups[p->tab][group]) {
-                if (p->tab == TAB_SOURCE && group == 3) {
-                    text_wrapped("Adjust the screen and camera widths independently in Stage.",
-                                 secondary);
-                } else if (p->tab == TAB_SOURCE && group == 5) {
-                    text_wrapped("Shared gradient for Screen and Camera backgrounds. Turn the "
-                                 "middle stop off for a two-color gradient.",
-                                 secondary);
-                } else if (p->tab == TAB_EFFECTS && group == 4) {
-                    text_wrapped("Load a logo image from a local path. Image transparency is "
-                                 "preserved. Position uses insets from the selected anchor.",
-                                 secondary);
-                } else if (p->tab == TAB_EFFECTS && group == 5) {
-                    text_wrapped("Static text appears in the composition. Choose an installed font "
-                                 "family or font file path. Position uses anchor insets.",
-                                 secondary);
-                }
-                if (p->tab == TAB_SETTINGS && group >= 4) {
-                    text_wrapped(
-                        "Leave a title, subtitle or footer blank to hide it. Templates: {date}, "
-                        "{time}, {datetime}, or {date:%Y-%m-%d}.",
-                        secondary);
-                    text_wrapped(format(p, "Font: %s",
-                                        group == 4 ? p->snapshot.config.pause_font
-                                                   : p->snapshot.config.blur_font),
-                                 secondary);
-                    text_wrapped(
-                        format(p, "Change output.%s_font in your config, then Reload config file.",
-                               group == 4 ? "pause" : "blur"),
-                        secondary);
-                }
-                for (size_t i = 0; i < FIELD_COUNT; i++) {
-                    if (fields[i].tab == p->tab && fields[i].group == group) {
-                        field_row(p, i);
+            for (int tab = 0; tab < TAB_COUNT; tab++) {
+                for (int group = 1; group < GROUP_COUNT; group++) {
+                    bool any = false;
+                    for (size_t i = 0; i < FIELD_COUNT; i++) {
+                        if (fields[i].tab == tab && fields[i].group == group &&
+                            field_section(&fields[i]) == section) {
+                            any = true;
+                        }
+                    }
+                    if (!any) {
+                        continue;
+                    }
+                    const char *names[TAB_COUNT][GROUP_COUNT] = {
+                        {"", "Region geometry", "Zoom behavior", "Stage sizes", "Screen appearance",
+                         "Background gradient"},
+                        {"", "Position & crop", "Camera appearance", "Device"},
+                        {"", "Virtual microphone"},
+                        {"", "Output annotations", "Cursor & clicks", "Keystroke style", "Logo",
+                         "Static text"},
+                        {"", "Recording format", "Cycle order", "Output & connection",
+                         "Pause screen", "Blur screen"},
+                        {"", "Advanced network"}};
+                    disclosure(p, 200 + (uint32_t)tab * GROUP_COUNT + (uint32_t)group,
+                               names[tab][group] ? names[tab][group] : "Advanced", NULL, A_GROUP,
+                               group, p->groups[tab][group]);
+                    p->widgets[p->widget_count - 1].auxiliary = tab;
+                    if (!p->groups[tab][group]) {
+                        continue;
+                    }
+                    if (tab == TAB_SETTINGS && group >= 4) {
+                        text_wrapped("Title, subtitle and footer are optional. Templates: {date}, "
+                                     "{time}, {datetime:…}.",
+                                     muted);
+                        text_wrapped(
+                            format(
+                                p,
+                                "Font is config-only: output.%s_font = %s; reload the config file.",
+                                group == 4 ? "pause" : "blur",
+                                group == 4 ? p->snapshot.config.pause_font
+                                           : p->snapshot.config.blur_font),
+                            muted);
+                    }
+                    for (size_t i = 0; i < FIELD_COUNT; i++) {
+                        if (fields[i].tab == tab && fields[i].group == group &&
+                            field_section(&fields[i]) == section) {
+                            field_row(p, i);
+                        }
                     }
                 }
-                if (p->tab == TAB_SOURCE && group == 1) {
-                    button(p, 86, "Use region geometry", p->snapshot.connected, false, A_COMMAND,
-                           0);
-                    Widget *w = &p->widgets[p->widget_count - 1];
-                    w->argc = 6;
-                    w->arg[0] = "capture";
-                    w->arg[1] = "region";
-                    w->arg[2] = format(p, "%d", p->snapshot.config.region_x);
-                    w->arg[3] = format(p, "%d", p->snapshot.config.region_y);
-                    w->arg[4] = format(p, "%d", p->snapshot.config.region_w);
-                    w->arg[5] = format(p, "%d", p->snapshot.config.region_h);
-                }
             }
+            draft_actions(p, section);
         }
-        if (p->reply[0] && strchr(p->reply, '\n')) {
-            CLAY({
-                .layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .padding = {12, 12, 12, 12}},
-                .backgroundColor = background,
-            })
-            {
-                text_wrapped(p->reply, secondary);
-            }
+    }
+}
+static void operate_body(Panel *p)
+{
+    p->draft_context = false;
+    for (int lane = 0; lane < 4; lane++) {
+        disclosure(p, 120 + (uint32_t)lane, lane_names[lane], lane_status(p, lane), A_LANE, lane,
+                   p->open_lane == lane);
+        if (p->open_lane != lane) {
+            continue;
+        }
+        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
+                         .padding = {16, 16, 0, 12},
+                         .childGap = 8,
+                         .layoutDirection = CLAY_TOP_TO_BOTTOM}})
+        {
+            lane_body(p, lane);
         }
     }
 }
 static void footer(Panel *p)
 {
     const char *error = p->error[0] ? p->error : p->snapshot.error;
-    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_FIT()},
-                     .layoutDirection = CLAY_TOP_TO_BOTTOM,
-                     .childGap = 4}})
+    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .padding = {16, 16, 9, 9}},
+          .backgroundColor = background,
+          .border = {.color = line, .width = {.top = 1}}})
     {
-        if (!p->snapshot.connected) {
-            text_wrapped(error[0]
-                             ? error
-                             : "Daemon unavailable. Run cast; this panel reconnects automatically.",
-                         danger);
-        } else if (error[0]) {
+        if (error[0]) {
             text_wrapped(error, danger);
         } else if (p->snapshot.command_queued > p->snapshot.command_completed) {
-            label("Applying…", 0, accent);
+            text_wrapped("Pending — waiting for daemon acknowledgement…", accent);
         } else if (p->reply[0] && strcmp(p->reply, "ok")) {
-            text_wrapped(strchr(p->reply, '\n') ? "Command result appears in the settings area."
-                                                : p->reply,
-                         secondary);
-        } else if (p->tab == TAB_SETTINGS) {
-            text_wrapped(format(p, "%s · %d × %d · %d fps", p->snapshot.config.backend,
-                                p->snapshot.config.width, p->snapshot.config.height,
-                                p->snapshot.config.fps),
-                         secondary);
-        }
-        if (p->snapshot.connected && p->snapshot.exclusion[0]) {
-            text_wrapped(p->snapshot.exclusion, secondary);
+            text_wrapped(strchr(p->reply, '\n')
+                             ? "Acknowledged — command result appears in the body."
+                             : p->reply,
+                         (Clay_Color){131, 221, 182, 255});
+        } else {
+            text_wrapped("Ready — the daemon is running independently of this window.", muted);
         }
     }
 }
@@ -1219,24 +1431,52 @@ static Clay_RenderCommandArray layout(Panel *p)
     Clay_BeginLayout();
     CLAY({.id = CLAY_ID("Panel"),
           .layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_GROW()},
-                     .padding = {16, 16, 12, 12},
-                     .childGap = 10,
-                     .childAlignment = {.x = CLAY_ALIGN_X_CENTER},
-                     .layoutDirection = CLAY_TOP_TO_BOTTOM},
+                     .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                     .childAlignment = {.x = CLAY_ALIGN_X_CENTER}},
           .backgroundColor = background})
     {
-        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_FIXED(fminf(p->width - 32, 520)),
+        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_FIXED(fminf(p->width, 520)),
                                     .height = CLAY_SIZING_GROW()},
-                         .layoutDirection = CLAY_TOP_TO_BOTTOM,
-                         .childGap = 10}})
+                         .layoutDirection = CLAY_TOP_TO_BOTTOM}})
         {
-            status_line(p);
-            preview_controls(p);
-            output_controls(p);
-            if (p->tab < 0) {
-                home_navigation(p);
-            } else {
-                settings_area(p);
+            pinned_header(p);
+            CLAY({.id = CLAY_ID("SettingsScroll"),
+                  .layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_GROW()},
+                             .layoutDirection = CLAY_TOP_TO_BOTTOM},
+                  .clip = {.vertical = true, .childOffset = Clay_GetScrollOffset()}})
+            {
+                if (p->stream_setup) {
+                    disclosure(p, 152, "Streaming setup",
+                               "Service, destination and stream-key file", A_SETUP, 0, true);
+                    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
+                                     .padding = {16, 16, 0, 14},
+                                     .childGap = 6,
+                                     .layoutDirection = CLAY_TOP_TO_BOTTOM}})
+                    {
+                        p->draft_context = true;
+                        text_wrapped(
+                            "The key is the service-provided password for your channel. Keep it in "
+                            "a regular file only you can read (600). Cast reads this file when a "
+                            "stream starts and never displays or logs its contents.",
+                            muted);
+                        for (size_t i = 0; i < FIELD_COUNT; i++) {
+                            if (fields[i].tab == TAB_STREAM) {
+                                field_row(p, i);
+                            }
+                        }
+                        text_wrapped("Advanced network controls (timeouts, reconnect policy, queue "
+                                     "budget) are set in [stream] of the configuration file. While "
+                                     "a session is active, connection-affecting edits are rejected "
+                                     "— stop streaming first; presentation styling stays editable.",
+                                     muted);
+                        draft_actions(p, 7);
+                        button(p, 153, "Cancel", true, false, A_SETUP, 0);
+                    }
+                } else if (p->main_tab == 0) {
+                    operate_body(p);
+                } else {
+                    compose_body(p);
+                }
             }
             footer(p);
         }
@@ -1244,8 +1484,7 @@ static Clay_RenderCommandArray layout(Panel *p)
     dropdown_layout(p);
     Clay_RenderCommandArray commands = Clay_EndLayout();
     for (int i = 0; i < p->widget_count; i++) {
-        Clay_ElementData data = Clay_GetElementData(element_id(p->widgets[i].id));
-        p->widgets[i].box = data.boundingBox;
+        p->widgets[i].box = Clay_GetElementData(element_id(p->widgets[i].id)).boundingBox;
     }
     return commands;
 }
@@ -1413,6 +1652,25 @@ static void draw_icon(Panel *p, SDL_FRect box, uintptr_t data)
         break;
     case ICON_MINUS:
         L(3, 8, 13, 8);
+        break;
+    case ICON_STREAM:
+        L(2, 8, 2, 13);
+        L(7, 4, 7, 13);
+        L(12, 1, 12, 13);
+        break;
+    case ICON_INFO:
+        circle(p, box.x + 8, box.y + 8, 6, 1.4f);
+        L(8, 7, 8, 11);
+        L(8, 4, 8, 4.5f);
+        break;
+    case ICON_CHEVRON:
+        L(4, 6, 8, 10);
+        L(8, 10, 12, 6);
+        break;
+    case ICON_DOT:
+        color(p, (Clay_Color){(float)((data >> 40) & 255), (float)((data >> 32) & 255),
+                              (float)((data >> 24) & 255), 255});
+        circle(p, box.x + 3.5f, box.y + 3.5f, 2, 3);
         break;
     case ICON_NONE:
         break;
@@ -1725,9 +1983,9 @@ static Widget *find_widget(Panel *p, uint32_t id)
 }
 static bool widget_in_scroll(const Panel *p, const Widget *w)
 {
-    return w->id >= 1000 || (w->id >= 200 && w->id < 300) || (w->id >= 40 && w->id < 99) ||
-           (w->id >= 100 && w->id < 100 + TAB_COUNT) ||
-           (p->tab < 0 && (w->id == 31 || w->id == 33 || (w->id >= 36 && w->id <= 39)));
+    (void)p;
+    return w->id != 5 && w->id != 6 && w->id != 22 && w->id != 34 &&
+           !(w->id >= 10 && w->id <= 12) && w->type != W_OPTION;
 }
 static void stop_editing(Panel *p)
 {
@@ -1804,7 +2062,7 @@ static void apply_setting(Panel *p, int index, const char *value, bool draft)
     char parameter[128], other[32];
     int argc = 0;
     if (!strcmp(key, "output.pause_text")) {
-        args[0] = "live";
+        args[0] = "virtual";
         args[1] = "message";
         args[2] = value;
         argc = 3;
@@ -1869,20 +2127,81 @@ static void apply_setting(Panel *p, int index, const char *value, bool draft)
         p->edit[index].submitted_revision = p->edit[index].revision;
     }
 }
-static void acknowledge_preview(Panel *p, const PanelSnapshot *s)
+/* Local staging never changes output state or the authoritative configuration. */
+static void stage_field(Panel *p, int index, const char *value)
 {
-    if (!p->preview_pending) {
+    if (index < 0 || (size_t)index >= FIELD_COUNT || !writable(p, &fields[index])) {
         return;
     }
-    if (!s->connected || s->daemon_generation != p->preview_pending_generation) {
-        p->preview_pending = 0;
-    } else if (s->command_completed >= p->preview_pending) {
-        const char *target = p->preview_pending_record ? "record" : "live";
-        if (!s->command_failed && strcmp(s->config.preview_target, target)) {
-            const char *args[] = {"preview", "target", target};
-            panel_client_command(p->client, 3, args, p->error, sizeof p->error);
+    FieldEdit *edit = &p->edit[index];
+    snprintf(edit->value, sizeof edit->value, "%s", value);
+    edit->dirty = true;
+    edit->revision++;
+    p->error[0] = 0;
+    if (!strcmp(fields[index].key, "stream.service")) {
+        Config candidate = p->snapshot.config;
+        snprintf(candidate.stream.service, sizeof candidate.stream.service, "%s", value);
+        config_stream_preset(&candidate);
+        const char *keys[] = {"stream.video_bitrate_kbps", "stream.audio_bitrate_kbps",
+                              "stream.encoder_preset"};
+        for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++) {
+            int quality_index = find_field(keys[i]);
+            if (quality_index < 0) {
+                continue;
+            }
+            char selected[PATH_MAX];
+            field_value(&fields[quality_index], &candidate, selected, sizeof selected);
+            stage_field(p, quality_index, selected);
         }
-        p->preview_pending = 0;
+    }
+}
+static void reset_body_scroll(void)
+{
+    Clay_ScrollContainerData scroll = Clay_GetScrollContainerData(CLAY_ID("SettingsScroll"));
+    if (scroll.found) {
+        *scroll.scrollPosition = (Clay_Vector2){0, 0};
+    }
+}
+static void apply_section(Panel *p, int section)
+{
+    const char *arguments[CAST_MAX_ARGS] = {"settings"};
+    int count = 1;
+    size_t indexes[CAST_MAX_ARGS / 2], submitted = 0;
+    for (size_t i = 0; i < FIELD_COUNT; i++) {
+        if (field_section(&fields[i]) != section || !p->edit[i].dirty) {
+            continue;
+        }
+        if (!writable(p, &fields[i]) || p->edit[i].pending) {
+            snprintf(p->error, sizeof p->error,
+                     "Stop the affected output or wait for acknowledgement before applying %s.",
+                     fields[i].label);
+            return;
+        }
+        if (validate_field(&fields[i], p->edit[i].value, p->error, sizeof p->error)) {
+            return;
+        }
+        if (count + 2 > CAST_MAX_ARGS) {
+            snprintf(p->error, sizeof p->error,
+                     "Too many edited fields for one atomic Apply; apply smaller groups.");
+            return;
+        }
+        indexes[submitted++] = i;
+        arguments[count++] = fields[i].key;
+        arguments[count++] = p->edit[i].value;
+    }
+    if (!submitted) {
+        return;
+    }
+    p->error[0] = 0;
+    /* A settings batch validates and prepares every resource before daemon mutation. */
+    if (panel_client_command(p->client, count, arguments, p->error, sizeof p->error)) {
+        return;
+    }
+    p->reply[0] = 0;
+    for (size_t i = 0; i < submitted; i++) {
+        FieldEdit *edit = &p->edit[indexes[i]];
+        edit->pending = p->snapshot.command_queued + 1;
+        edit->submitted_revision = edit->revision;
     }
 }
 static void activate(Panel *p, Widget *w)
@@ -1895,17 +2214,14 @@ static void activate(Panel *p, Widget *w)
         p->error[0] = 0;
         if (!panel_client_command(p->client, w->argc, w->arg, p->error, sizeof p->error)) {
             p->reply[0] = 0;
-            bool record = w->argc >= 2 && !strcmp(w->arg[0], "record");
-            bool live = w->argc >= 2 && !strcmp(w->arg[0], "live") && !strcmp(w->arg[1], "resume");
-            if (record || live) {
-                p->preview_pending = p->snapshot.command_queued + 1;
-                p->preview_pending_generation = p->snapshot.daemon_generation;
-                p->preview_pending_record = record;
-            }
         }
         break;
     case A_SETTING:
-        apply_setting(p, w->index, w->value, false);
+        if (w->draft) {
+            stage_field(p, w->index, w->value);
+        } else {
+            apply_setting(p, w->index, w->value, false);
+        }
         break;
     case A_APPLY:
         apply_setting(p, w->index, p->edit[w->index].value, true);
@@ -1928,7 +2244,7 @@ static void activate(Panel *p, Widget *w)
         }
         break;
     case A_GROUP:
-        p->groups[p->tab][w->index] = !p->groups[p->tab][w->index];
+        p->groups[w->auxiliary][w->index] = !p->groups[w->auxiliary][w->index];
         break;
     case A_DROPDOWN:
         stop_editing(p);
@@ -1955,19 +2271,66 @@ static void activate(Panel *p, Widget *w)
             const char *args[] = {"preset", w->value};
             panel_client_command(p->client, 2, args, p->error, sizeof p->error);
         } else {
-            apply_setting(p, p->dropdown_field, w->value, false);
+            Widget *selector = find_widget(p, p->dropdown);
+            if (selector && selector->draft) {
+                stage_field(p, p->dropdown_field, w->value);
+            } else {
+                apply_setting(p, p->dropdown_field, w->value, false);
+            }
         }
         p->focus = p->dropdown;
         p->dropdown = 0;
         break;
-    case A_PREVIEW:
-        p->preview_pending = 0;
-        {
-            const char *args[] = {"preview", "target", w->index ? "record" : "live"};
-            p->error[0] = 0;
-            panel_client_command(p->client, 3, args, p->error, sizeof p->error);
+    case A_MAIN_TAB:
+        stop_editing(p);
+        p->main_tab = w->index;
+        p->stream_setup = false;
+        p->dropdown = 0;
+        reset_body_scroll();
+        break;
+    case A_LANE:
+        stop_editing(p);
+        p->main_tab = 0;
+        p->stream_setup = false;
+        p->open_lane = p->open_lane == w->index ? -1 : w->index;
+        reset_body_scroll();
+        break;
+    case A_SECTION:
+        stop_editing(p);
+        p->main_tab = 1;
+        p->stream_setup = false;
+        p->open_section = p->open_section == w->index ? -1 : w->index;
+        reset_body_scroll();
+        break;
+    case A_SETUP:
+        stop_editing(p);
+        p->stream_setup = w->index != 0;
+        p->dropdown = 0;
+        reset_body_scroll();
+        break;
+    case A_APPLY_SECTION:
+        apply_section(p, w->index);
+        stop_editing(p);
+        break;
+    case A_REVERT:
+        stop_editing(p);
+        for (size_t i = 0; i < FIELD_COUNT; i++) {
+            if (field_section(&fields[i]) == w->index) {
+                field_value(&fields[i], &p->snapshot.config, p->edit[i].value,
+                            sizeof p->edit[i].value);
+                p->edit[i].dirty = false;
+                p->edit[i].revision++;
+            }
         }
         break;
+    case A_PREVIEW: {
+        const char *args[] = {"preview", "target",
+                              w->index == 2   ? "stream"
+                              : w->index == 1 ? "record"
+                                              : "virtual"};
+        p->error[0] = 0;
+        panel_client_command(p->client, 3, args, p->error, sizeof p->error);
+    } break;
     default:
         break;
     }
@@ -2069,9 +2432,11 @@ static void key_event(Panel *p, const SDL_KeyboardEvent *event)
             edit->dirty = false;
         }
         stop_editing(p);
-        if (!edit && p->tab >= 0) {
-            p->tab = -1;
-            p->focus = 100;
+        if (!edit) {
+            p->stream_setup = false;
+            p->open_lane = -1;
+            p->open_section = -1;
+            p->focus = p->main_tab ? 6 : 5;
         }
         return;
     }
@@ -2255,7 +2620,7 @@ static void poll_client(Panel *p)
                 }
             }
         }
-        acknowledge_preview(p, &fresh);
+
         if (!fresh.connected) {
             p->dropdown = 0;
             stop_editing(p);
@@ -2341,8 +2706,8 @@ static void write_ui_state(Panel *p, const char *path)
             "\"command_pending\":%s,\"command_queued\":%llu,\"command_completed\":%llu,"
             "\"density\":%.3f,\"input_scale\":%.3f,\"raster_font_size\":%.3f,"
             "\"scroll\":[%.1f,%.1f,%.1f,%.1f],\"scroll_offset\":%.3f,\"widgets\":[",
-            p->tab, (unsigned long long)p->draw_frame, p->snapshot.connected ? "true" : "false",
-            p->snapshot.config.preview ? "true" : "false",
+            p->main_tab, (unsigned long long)p->draw_frame,
+            p->snapshot.connected ? "true" : "false", p->snapshot.config.preview ? "true" : "false",
             p->snapshot.capabilities.preview ? "true" : "false", p->snapshot.config.preview_target,
             p->snapshot.command_queued > p->snapshot.command_completed ? "true" : "false",
             (unsigned long long)p->snapshot.command_queued,
@@ -2364,6 +2729,10 @@ static void write_ui_state(Panel *p, const char *path)
             field_value(&fields[w->index], &p->snapshot.config, value, sizeof value);
         }
         json_string(file, value);
+        bool is_field = key[0] && w->index >= 0 && (size_t)w->index < FIELD_COUNT;
+        fprintf(file,
+                ",\"dirty\":%s,\"draft\":", is_field && p->edit[w->index].dirty ? "true" : "false");
+        json_string(file, is_field ? p->edit[w->index].value : "");
         fputc('}', file);
     }
     fprintf(file,
@@ -2381,8 +2750,12 @@ static void write_ui_state(Panel *p, const char *path)
     json_string(file, p->snapshot.config.anchor);
     fputs(",\"camera_background\":", file);
     json_string(file, p->snapshot.config.camera_background);
-    fputs(",\"live_status\":", file);
-    json_string(file, live_status(&p->snapshot));
+    fputs(",\"virtual_status\":", file);
+    json_string(file, virtual_status(&p->snapshot));
+    fprintf(file, ",\"open_lane\":%d,\"open_section\":%d,\"stream_setup\":%s", p->open_lane,
+            p->open_section, p->stream_setup ? "true" : "false");
+    fputs(",\"stream_status\":", file);
+    json_string(file, panel_stream_status(&p->snapshot));
     fputs(",\"record_status\":", file);
     json_string(file, record_status(&p->snapshot));
     fputs(",\"error\":", file);
@@ -2401,6 +2774,8 @@ int panel_run(const Config *config, char *error, size_t n)
     }
     p->snapshot.config = *config;
     p->tab = -1;
+    p->open_lane = -1;
+    p->open_section = -1;
     p->density = 1;
     p->input_scale = 1;
     SDL_SetHint(SDL_HINT_APP_ID, "org.cast.Panel");
