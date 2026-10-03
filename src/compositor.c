@@ -1,5 +1,6 @@
 /* Shared RGBA composition. Original bitmap glyphs below are part of cast's license. */
 #include "cast.h"
+#include "composition_assets.h"
 #include "presentation_text.h"
 #include <errno.h>
 #include <limits.h>
@@ -19,6 +20,18 @@ typedef struct {
     unsigned repeats;
     uint64_t at;
 } Key;
+typedef struct {
+    Frame pixels;
+    uint64_t at;
+    int source_w, source_h, radius, area_w, area_h;
+    bool mirror;
+    uint32_t color;
+    double brightness;
+    int type, source_kind;
+    uint32_t gradient_from, gradient_via, gradient_to;
+    bool gradient_via_enabled;
+    double gradient_angle, gradient_waypoint;
+} Backdrop;
 struct Compositor {
     double zoom, from, target, cx, cy;
     uint64_t transition, last;
@@ -29,12 +42,9 @@ struct Compositor {
     Key keys[KEY_MAX];
     unsigned key_count;
     PresentationText *presentation;
-    Frame camera_backdrop;
-    uint64_t camera_backdrop_at;
-    int camera_backdrop_sw, camera_backdrop_sh, camera_backdrop_radius;
-    bool camera_backdrop_mirror;
-    uint32_t camera_backdrop_color;
-    double camera_backdrop_brightness;
+    Backdrop camera_backdrop, screen_backdrop;
+    Frame logo, logo_scaled;
+    char logo_path[PATH_MAX];
 };
 typedef struct {
     double sx, sy, sw, sh, dx, dy, dw, dh;
@@ -106,7 +116,10 @@ void compositor_destroy(Compositor *c)
 {
     if (c) {
         presentation_text_destroy(c->presentation);
-        frame_free(&c->camera_backdrop);
+        frame_free(&c->camera_backdrop.pixels);
+        frame_free(&c->screen_backdrop.pixels);
+        frame_free(&c->logo);
+        frame_free(&c->logo_scaled);
     }
     free(c);
 }
@@ -117,8 +130,9 @@ void compositor_clear(Compositor *c)
         c->next = 0;
         memset(c->keys, 0, sizeof(c->keys));
         c->key_count = 0;
-        frame_free(&c->camera_backdrop);
-        c->camera_backdrop_at = 0;
+        frame_free(&c->camera_backdrop.pixels);
+        frame_free(&c->screen_backdrop.pixels);
+        c->camera_backdrop.at = c->screen_backdrop.at = 0;
     }
 }
 void compositor_click(Compositor *c, int x, int y, int button, uint64_t at)
@@ -349,6 +363,16 @@ static void keys_draw(Compositor *c, const Config *cfg, Frame *out, uint64_t now
         text(out, label, x + padding, row_y + padding, scale, cfg->keys_color);
     }
 }
+static void logo_size(const Config *cfg, const Frame *logo, int *w, int *h)
+{
+    int available_w = (int)fmax(1, cfg->width - 2 * cfg->logo_margin_x);
+    int available_h = (int)fmax(1, cfg->height - 2 * cfg->logo_margin_y);
+    double width = fmax(1, cfg->width * cfg->logo_width_percent / 100);
+    double scale = fmin(width / logo->width, fmin((double)available_w / logo->width,
+                                                  (double)available_h / logo->height));
+    *w = (int)fmax(1, lround(logo->width * scale));
+    *h = (int)fmax(1, lround(logo->height * scale));
+}
 int compositor_prepare(Compositor *c, const Config *cfg, char *error, size_t n)
 {
     if (!c || !cfg) {
@@ -360,7 +384,39 @@ int compositor_prepare(Compositor *c, const Config *cfg, char *error, size_t n)
             return fail(error, n, "cannot initialize FreeType presentation text renderer");
         }
     }
-    return presentation_text_prepare(c->presentation, cfg, error, n);
+    bool replace_logo = strcmp(c->logo_path, cfg->logo_path) != 0;
+    Frame candidate = {0};
+    if (replace_logo && cfg->logo_path[0] &&
+        composition_logo_load(cfg->logo_path, &candidate, error, n)) {
+        return -1;
+    }
+    const Frame *logo = replace_logo ? &candidate : &c->logo;
+    int w = 0, h = 0;
+    if (logo->data) {
+        logo_size(cfg, logo, &w, &h);
+    }
+    bool replace_scaled = replace_logo || w != c->logo_scaled.width || h != c->logo_scaled.height;
+    Frame scaled = {0};
+    if (replace_scaled && logo->data && composition_image_scale(logo, &scaled, w, h, error, n)) {
+        frame_free(&candidate);
+        frame_free(&scaled);
+        return -1;
+    }
+    if (presentation_text_prepare(c->presentation, cfg, error, n)) {
+        frame_free(&candidate);
+        frame_free(&scaled);
+        return -1;
+    }
+    if (replace_logo) {
+        frame_free(&c->logo);
+        c->logo = candidate;
+        snprintf(c->logo_path, sizeof c->logo_path, "%s", cfg->logo_path);
+    }
+    if (replace_scaled) {
+        frame_free(&c->logo_scaled);
+        c->logo_scaled = scaled;
+    }
+    return 0;
 }
 int compositor_neutral(Compositor *c, const Config *cfg, Frame *f, char *error, size_t n)
 {
@@ -627,6 +683,101 @@ static bool mask_at(Mask mask, double x, double y)
     }
     return true;
 }
+typedef struct {
+    Mask mask;
+    double x, y;
+} Clip;
+static void clipped_pixel(Frame *out, const Clip *clip, int x, int y, uint32_t color,
+                          double opacity)
+{
+    if (!clip || mask_at(clip->mask, x + .5 - clip->x, y + .5 - clip->y)) {
+        pixel(out, x, y, color, opacity);
+    }
+}
+static bool mask_span(Mask mask, double origin_x, double origin_y, int y, int limit_left,
+                      int limit_right, int *left, int *right)
+{
+    double local_y = y + .5 - origin_y;
+    if (local_y < 0 || local_y >= mask.h || mask.w <= 0 || mask.h <= 0) {
+        return false;
+    }
+    double first = 0, last = mask.w;
+    if (mask.kind == 1 && mask.radius > 0 &&
+        (local_y < mask.radius || local_y > mask.h - mask.radius)) {
+        double vertical = fmax(mask.radius - local_y, local_y - (mask.h - mask.radius));
+        double reach = sqrt(fmax(0, mask.radius * mask.radius - vertical * vertical));
+        first = mask.radius - reach;
+        last = mask.w - mask.radius + reach;
+    }
+    int begin = (int)fmax(limit_left, ceil(origin_x + first - .5));
+    int end = (int)fmin(limit_right, floor(origin_x + last - .5) + 1);
+    end = (int)fmin(end, ceil(origin_x + mask.w - .5));
+    /* Correct rounding against the shared predicate at the two boundaries.
+     * The row interior needs no per-pixel mask calculations. */
+    while (begin > limit_left && mask_at(mask, begin - .5 - origin_x, local_y)) {
+        begin--;
+    }
+    while (begin < end && !mask_at(mask, begin + .5 - origin_x, local_y)) {
+        begin++;
+    }
+    while (end < limit_right && mask_at(mask, end + .5 - origin_x, local_y)) {
+        end++;
+    }
+    while (end > begin && !mask_at(mask, end - .5 - origin_x, local_y)) {
+        end--;
+    }
+    *left = begin;
+    *right = end;
+    return begin < end;
+}
+static void border_span(Frame *out, int y, int left, int right, uint32_t color)
+{
+    uint8_t rgba[] = {(uint8_t)(color >> 16), (uint8_t)(color >> 8), (uint8_t)color, 255};
+    uint8_t *dest = out->data + (size_t)y * out->stride + left * 4;
+    for (int x = left; x < right; x++, dest += 4) {
+        memcpy(dest, rgba, 4);
+    }
+}
+static Clip screen_layer_draw(Frame *out, const Frame *source, const Config *cfg, Transform t)
+{
+    double radius = clampd(cfg->screen_radius, 0, fmin(t.dw, t.dh) / 2);
+    int border = (int)clampd(cfg->screen_border_width, 0, fmax(0, (fmin(t.dw, t.dh) - 1) / 2));
+    Mask outer = {radius > 0, t.dw, t.dh, radius};
+    Mask inner = {radius > 0, t.dw - 2 * border, t.dh - 2 * border, fmax(0, radius - border)};
+    Clip clip = {inner, t.dx + border, t.dy + border};
+    if (!radius && !border) {
+        screen_blit(out, source, t);
+        return clip;
+    }
+    int left = (int)fmax(0, ceil(t.dx)), right = (int)fmin(out->width, ceil(t.dx + t.dw));
+    int top = (int)fmax(0, ceil(t.dy)), bottom = (int)fmin(out->height, ceil(t.dy + t.dh));
+    int columns[16384];
+    for (int x = left; x < right; x++) {
+        columns[x] = (int)clampd(floor(t.sx + (x + .5 - t.dx) * t.sw / t.dw), 0, source->width - 1);
+    }
+    for (int y = top; y < bottom; y++) {
+        int outer_left, outer_right;
+        if (!mask_span(outer, t.dx, t.dy, y, left, right, &outer_left, &outer_right)) {
+            continue;
+        }
+        int inner_left, inner_right;
+        if (!mask_span(inner, clip.x, clip.y, y, outer_left, outer_right, &inner_left,
+                       &inner_right)) {
+            border_span(out, y, outer_left, outer_right, cfg->screen_border_color);
+            continue;
+        }
+        border_span(out, y, outer_left, inner_left, cfg->screen_border_color);
+        border_span(out, y, inner_right, outer_right, cfg->screen_border_color);
+        int row = (int)clampd(floor(t.sy + (y + .5 - t.dy) * t.sh / t.dh), 0, source->height - 1);
+        uint8_t *dest = out->data + (size_t)y * out->stride + inner_left * 4;
+        const uint8_t *source_row = source->data + (size_t)row * source->stride;
+        for (int x = inner_left; x < inner_right; x++, dest += 4) {
+            memcpy(dest, source_row + columns[x] * 4, 4);
+            dest[3] = 255;
+        }
+    }
+    return clip;
+}
 static void camera_blit(Frame *dst, const Frame *src, const Config *cfg, int x, int y, int w, int h)
 {
     double aspect = camera_aspect(cfg, src->width, src->height), cw = src->width, ch = src->height;
@@ -675,96 +826,137 @@ static void camera_blit(Frame *dst, const Frame *src, const Config *cfg, int x, 
         }
     }
 }
-static void camera_static_background(Frame *out, const Config *cfg, int x, int y, int w, int h)
+static void gradient_fill(Frame *out, const Config *cfg)
 {
-    if (!strcmp(cfg->camera_background, "solid")) {
-        uint8_t color[4] = {(uint8_t)(cfg->camera_background_color >> 16),
-                            (uint8_t)(cfg->camera_background_color >> 8),
-                            (uint8_t)cfg->camera_background_color, 255};
-        for (int j = 0; j < h; j++) {
-            uint8_t *row = out->data + (size_t)(y + j) * out->stride + x * 4;
-            for (int i = 0; i < w; i++) {
-                memcpy(row + i * 4, color, 4);
-            }
-        }
-        return;
+    double angle = cfg->gradient_angle * M_PI / 180;
+    double dx = cos(angle), dy = sin(angle);
+    if (fabs(dx) < 1e-10) {
+        dx = 0;
     }
-    for (int j = 0; j < h; j++) {
-        double v = h > 1 ? (double)j / (h - 1) : .5;
-        for (int i = 0; i < w; i++) {
-            uint8_t *pixel = out->data + (size_t)(y + j) * out->stride + (x + i) * 4;
-            double u = w > 1 ? (double)i / (w - 1) : .5;
-            for (int ch = 0; ch < 3; ch++) {
-                unsigned base = (cfg->camera_background_color >> (16 - ch * 8)) & 255;
-                double glow = ch == 0   ? 16 * (1 - u) * (1 - v)
-                              : ch == 1 ? 12 * (1 - v) + 4 * u * v
-                                        : 18 * (1 - v) + 12 * u * v;
-                pixel[ch] = (uint8_t)lround(clampd(base * (1.1 - .45 * v) + glow, 0, 255));
+    if (fabs(dy) < 1e-10) {
+        dy = 0;
+    }
+    double origin = fmin(0, dx * (out->width - 1)) + fmin(0, dy * (out->height - 1));
+    double extent = fabs(dx) * (out->width - 1) + fabs(dy) * (out->height - 1);
+    double waypoint = clampd(cfg->gradient_waypoint / 100, .01, .99);
+    for (int y = 0; y < out->height; y++) {
+        for (int x = 0; x < out->width; x++) {
+            double position = extent > 0 ? (dx * x + dy * y - origin) / extent : 0;
+            uint32_t from = cfg->gradient_from, to = cfg->gradient_to;
+            if (cfg->gradient_via_enabled) {
+                if (position <= waypoint) {
+                    to = cfg->gradient_via;
+                    position /= waypoint;
+                } else {
+                    from = cfg->gradient_via;
+                    position = (position - waypoint) / (1 - waypoint);
+                }
+            }
+            position = clampd(position, 0, 1);
+            uint8_t *pixel = out->data + (size_t)y * out->stride + x * 4;
+            for (int channel = 0; channel < 3; channel++) {
+                int shift = 16 - channel * 8;
+                double first = (from >> shift) & 255, last = (to >> shift) & 255;
+                pixel[channel] = (uint8_t)lround(first + (last - first) * position);
             }
             pixel[3] = 255;
         }
     }
 }
-static int camera_background_draw(Compositor *c, const Config *cfg, const Frame *camera, Frame *out,
-                                  int x, int y, int w, int h, char *error, size_t n)
+static int background_draw(Backdrop *cache, const Config *cfg, const Frame *source, int source_kind,
+                           bool mirror, const char *mode, uint32_t color, int blur_radius,
+                           double brightness, Frame *out, int x, int y, int w, int h, char *error,
+                           size_t n)
 {
-    bool dynamic = !strcmp(cfg->camera_background, "blurred") && cfg->camera_visible && camera &&
-                   camera->data && camera->width > 0 && camera->height > 0;
-    if (!dynamic) {
-        /* Hidden, disabled or missing cameras never reuse the last webcam backdrop. */
-        frame_free(&c->camera_backdrop);
-        c->camera_backdrop_at = 0;
-        camera_static_background(out, cfg, x, y, w, h);
+    bool dynamic = !strcmp(mode, "blurred") && source && source->data && source->width > 0 &&
+                   source->height > 0;
+    if (!mode[0] || !strcmp(mode, "solid")) {
+        if (!mode[0]) {
+            color = cfg->pause_color; /* Preserve zero-initialized embedding configurations. */
+        }
+        frame_free(&cache->pixels);
+        memset(cache, 0, sizeof *cache);
+        uint8_t rgba[] = {(uint8_t)(color >> 16), (uint8_t)(color >> 8), (uint8_t)color, 255};
+        for (int j = 0; j < h; j++) {
+            uint8_t *row = out->data + (size_t)(y + j) * out->stride + x * 4;
+            for (int i = 0; i < w; i++) {
+                memcpy(row + i * 4, rgba, 4);
+            }
+        }
         return 0;
     }
-    int step = (int)fmax(1, ceil(fmax((double)w / 320, (double)h / 180)));
+    int type = dynamic ? 2 : 1;
+    int step = dynamic ? (int)fmax(1, ceil(fmax((double)w / 320, (double)h / 180))) : 1;
     int width = (w + step - 1) / step, height = (h + step - 1) / step;
-    bool reuse = camera->ts_ns && camera->ts_ns == c->camera_backdrop_at &&
-                 camera->width == c->camera_backdrop_sw &&
-                 camera->height == c->camera_backdrop_sh && width == c->camera_backdrop.width &&
-                 height == c->camera_backdrop.height && cfg->mirror == c->camera_backdrop_mirror &&
-                 cfg->camera_background_color == c->camera_backdrop_color &&
-                 cfg->camera_background_blur_radius == c->camera_backdrop_radius &&
-                 cfg->camera_background_brightness == c->camera_backdrop_brightness;
+    bool reuse =
+        cache->pixels.data && cache->type == type && cache->area_w == w && cache->area_h == h;
+    if (dynamic) {
+        reuse = reuse && source->ts_ns && cache->at == source->ts_ns &&
+                cache->source_kind == source_kind && cache->source_w == source->width &&
+                cache->source_h == source->height && cache->mirror == mirror &&
+                cache->color == color && cache->radius == blur_radius &&
+                cache->brightness == brightness;
+    } else {
+        reuse = reuse && cache->gradient_from == cfg->gradient_from &&
+                cache->gradient_via == cfg->gradient_via &&
+                cache->gradient_to == cfg->gradient_to &&
+                cache->gradient_via_enabled == cfg->gradient_via_enabled &&
+                cache->gradient_angle == cfg->gradient_angle &&
+                cache->gradient_waypoint == cfg->gradient_waypoint;
+    }
     if (!reuse) {
-        if (frame_alloc(&c->camera_backdrop, width, height)) {
-            return fail(error, n, "cannot allocate bounded camera backdrop");
+        /* A missing source replaces its reduced image with a fresh static gradient. */
+        if (frame_alloc(&cache->pixels, width, height)) {
+            return fail(error, n, "cannot allocate composition background");
         }
-        Transform cover = fit(0, 0, camera->width, camera->height, 0, 0, width, height, true);
-        screen_blit(&c->camera_backdrop, camera, cover);
-        for (int j = 0; j < height; j++) {
-            uint8_t *row = c->camera_backdrop.data + (size_t)j * c->camera_backdrop.stride;
-            if (cfg->mirror) {
-                for (int i = 0; i < width / 2; i++) {
-                    uint8_t swap[4];
-                    memcpy(swap, row + i * 4, 4);
-                    memcpy(row + i * 4, row + (width - 1 - i) * 4, 4);
-                    memcpy(row + (width - 1 - i) * 4, swap, 4);
+        if (dynamic) {
+            Transform cover = fit(0, 0, source->width, source->height, 0, 0, width, height, true);
+            screen_blit(&cache->pixels, source, cover);
+            for (int j = 0; j < height; j++) {
+                uint8_t *row = cache->pixels.data + (size_t)j * cache->pixels.stride;
+                if (mirror) {
+                    for (int i = 0; i < width / 2; i++) {
+                        uint8_t swap[4];
+                        memcpy(swap, row + i * 4, 4);
+                        memcpy(row + i * 4, row + (width - 1 - i) * 4, 4);
+                        memcpy(row + (width - 1 - i) * 4, swap, 4);
+                    }
+                }
+                for (int i = 0; i < width; i++) {
+                    for (int channel = 0; channel < 3; channel++) {
+                        row[i * 4 + channel] = (uint8_t)lround(row[i * 4 + channel] * brightness);
+                    }
                 }
             }
-            for (int i = 0; i < width; i++) {
-                for (int ch = 0; ch < 3; ch++) {
-                    row[i * 4 + ch] =
-                        (uint8_t)lround(row[i * 4 + ch] * cfg->camera_background_brightness);
-                }
+            int radius = (int)fmax(1, lround((double)blur_radius / step));
+            if (image_blur(&cache->pixels, radius, color, .25, error, n)) {
+                frame_free(&cache->pixels);
+                cache->type = 0;
+                return -1;
             }
+        } else {
+            gradient_fill(&cache->pixels, cfg);
         }
-        int radius = (int)fmax(1, lround((double)cfg->camera_background_blur_radius / step));
-        if (image_blur(&c->camera_backdrop, radius, cfg->camera_background_color, .25, error, n)) {
-            frame_free(&c->camera_backdrop);
-            c->camera_backdrop_at = 0;
-            return -1;
-        }
-        c->camera_backdrop_at = camera->ts_ns;
-        c->camera_backdrop_sw = camera->width;
-        c->camera_backdrop_sh = camera->height;
-        c->camera_backdrop_mirror = cfg->mirror;
-        c->camera_backdrop_color = cfg->camera_background_color;
-        c->camera_backdrop_radius = cfg->camera_background_blur_radius;
-        c->camera_backdrop_brightness = cfg->camera_background_brightness;
+        cache->type = type;
+        cache->area_w = w;
+        cache->area_h = h;
+        cache->at = dynamic ? source->ts_ns : 0;
+        cache->source_w = dynamic ? source->width : 0;
+        cache->source_h = dynamic ? source->height : 0;
+        cache->source_kind = source_kind;
+        cache->mirror = mirror;
+        cache->color = color;
+        cache->radius = blur_radius;
+        cache->brightness = brightness;
+        cache->gradient_from = cfg->gradient_from;
+        cache->gradient_via = cfg->gradient_via;
+        cache->gradient_to = cfg->gradient_to;
+        cache->gradient_via_enabled = cfg->gradient_via_enabled;
+        cache->gradient_angle = cfg->gradient_angle;
+        cache->gradient_waypoint = cfg->gradient_waypoint;
     }
     Transform enlarged = fit(0, 0, width, height, x, y, w, h, true);
-    screen_blit(out, &c->camera_backdrop, enlarged);
+    screen_blit(out, &cache->pixels, enlarged);
     return 0;
 }
 static bool transform_point(Transform t, int x, int y, double *ox, double *oy)
@@ -777,7 +969,7 @@ static bool transform_point(Transform t, int x, int y, double *ox, double *oy)
     return true;
 }
 static void ring(Frame *f, double x, double y, double r, double thickness, uint32_t color,
-                 double opacity)
+                 double opacity, const Clip *clip)
 {
     int x0 = (int)fmax(0, floor(x - r - thickness)),
         x1 = (int)fmin(f->width, ceil(x + r + thickness));
@@ -788,12 +980,12 @@ static void ring(Frame *f, double x, double y, double r, double thickness, uint3
             double d = hypot(i + .5 - x, j + .5 - y);
             double a = clampd(thickness / 2 + .5 - fabs(d - r), 0, 1);
             if (a > 0) {
-                pixel(f, i, j, color, a * opacity);
+                clipped_pixel(f, clip, i, j, color, a * opacity);
             }
         }
     }
 }
-static void cursor_draw(Frame *f, double x, double y, int size, uint32_t color)
+static void cursor_draw(Frame *f, double x, double y, int size, uint32_t color, const Clip *clip)
 {
     if (size < 4) {
         size = 4;
@@ -803,7 +995,8 @@ static void cursor_draw(Frame *f, double x, double y, int size, uint32_t color)
             bool tip = i <= j / 2 && j < size * 3 / 4;
             bool stem = j >= size / 2 && j < size && i >= size / 4 && i <= size / 4 + size / 6;
             if (tip || stem) {
-                pixel(f, (int)x + i, (int)y + j, (i == 0 || i == j / 2) ? 0x111111 : color, 1);
+                clipped_pixel(f, clip, (int)x + i, (int)y + j,
+                              (i == 0 || i == j / 2) ? 0x111111 : color, 1);
             }
         }
     }
@@ -866,11 +1059,98 @@ static Transform screen_transform(Compositor *c, const Config *cfg, const Frame 
     return fit(center_x - vw / 2, center_y - vh / 2, vw, vh, dx, dy, dw, dh,
                !strcmp(cfg->fit, "cover"));
 }
+static void anchor_position(const char *anchor, int canvas_w, int canvas_h, int w, int h,
+                            int margin_x, int margin_y, int *x, int *y)
+{
+    *x = strstr(anchor, "left")    ? margin_x
+         : strstr(anchor, "right") ? canvas_w - margin_x - w
+                                   : (canvas_w - w) / 2;
+    *y = strstr(anchor, "top")      ? margin_y
+         : strstr(anchor, "bottom") ? canvas_h - margin_y - h
+                                    : (canvas_h - h) / 2;
+    *x = (int)clampd(*x, 0, canvas_w - w);
+    *y = (int)clampd(*y, 0, canvas_h - h);
+}
+static void alpha_blit(Frame *out, const Frame *source, int x, int y, double opacity)
+{
+    unsigned factor = (unsigned)lround(clampd(opacity, 0, 1) * 255);
+    if (!source || !source->data || !factor) {
+        return;
+    }
+    for (int j = 0; j < source->height; j++) {
+        const uint8_t *row = source->data + (size_t)j * source->stride;
+        for (int i = 0; i < source->width; i++) {
+            int px = x + i, py = y + j;
+            if (px < 0 || py < 0 || px >= out->width || py >= out->height) {
+                continue;
+            }
+            const uint8_t *src = row + i * 4;
+            unsigned alpha = (src[3] * factor + 127) / 255;
+            if (!alpha) {
+                continue;
+            }
+            uint8_t *dst = out->data + (size_t)py * out->stride + px * 4;
+            if (alpha == 255) {
+                memcpy(dst, src, 4);
+            } else {
+                for (int channel = 0; channel < 3; channel++) {
+                    dst[channel] =
+                        (uint8_t)((src[channel] * alpha + dst[channel] * (255 - alpha) + 127) /
+                                  255);
+                }
+                dst[3] = 255;
+            }
+        }
+    }
+}
+static void overlays_draw(Compositor *c, const Config *cfg, Frame *out)
+{
+    int x, y;
+    if (cfg->logo_enabled && c->logo.data) {
+        int w = c->logo_scaled.width, h = c->logo_scaled.height;
+        anchor_position(cfg->logo_anchor, out->width, out->height, w, h, cfg->logo_margin_x,
+                        cfg->logo_margin_y, &x, &y);
+        alpha_blit(out, &c->logo_scaled, x, y, cfg->logo_opacity);
+    }
+    if (cfg->text_enabled) {
+        const Frame *text = presentation_text_overlay(c->presentation);
+        if (text && text->data) {
+            anchor_position(cfg->text_anchor, out->width, out->height, text->width, text->height,
+                            cfg->text_margin_x, cfg->text_margin_y, &x, &y);
+            alpha_blit(out, text, x, y, cfg->text_opacity);
+        }
+    }
+}
+static void stage_screen_geometry(const Config *cfg, const Frame *screen, int camera_x,
+                                  int camera_y, int camera_w, int camera_h, int *x, int *y, int *w,
+                                  int *h)
+{
+    int margin = (int)clampd(cfg->screen_margin, 0, (fmin(cfg->width, cfg->height) - 1) / 2);
+    double percent = cfg->screen_width_percent > 0 ? cfg->screen_width_percent : 78;
+    double scale = fmin((double)cfg->width * percent / 100 / screen->width,
+                        fmin((double)(cfg->width - 2 * margin) / screen->width,
+                             (double)(cfg->height - 2 * margin) / screen->height));
+    *w = (int)fmax(1, lround(screen->width * scale));
+    *h = (int)fmax(1, lround(screen->height * scale));
+    int horizontal = strstr(cfg->anchor, "left") ? -1 : strstr(cfg->anchor, "right") ? 1 : 0;
+    int vertical = strstr(cfg->anchor, "top") ? -1 : strstr(cfg->anchor, "bottom") ? 1 : 0;
+    if (!strcmp(cfg->anchor, "free")) {
+        horizontal = camera_x + camera_w / 2.0 >= cfg->width / 2.0 ? 1 : -1;
+        vertical = camera_y + camera_h / 2.0 >= cfg->height / 2.0 ? 1 : -1;
+    }
+    *x = horizontal < 0   ? cfg->width - margin - *w
+         : horizontal > 0 ? margin
+                          : (cfg->width - *w) / 2;
+    *y = vertical < 0 ? cfg->height - margin - *h : vertical > 0 ? margin : (cfg->height - *h) / 2;
+}
 int compositor_render(Compositor *c, const Config *cfg, const Frame *screen, const Frame *camera,
                       const Cursor *cursor, bool record_target, Frame *out, char *err, size_t n)
 {
     if (!c || !cfg || frame_alloc(out, cfg->width, cfg->height) < 0) {
         return fail(err, n, "cannot allocate composition canvas");
+    }
+    if (compositor_prepare(c, cfg, err, n)) {
+        return -1;
     }
     uint64_t now = screen && screen->ts_ns ? screen->ts_ns : cast_now_ns();
     keys_expire(c, now, cfg->keys_timeout_ms);
@@ -881,8 +1161,18 @@ int compositor_render(Compositor *c, const Config *cfg, const Frame *screen, con
     bool show_keys = record_target ? cfg->annotations_record_keys : cfg->annotations_live_keys;
     bool show_screen = strcmp(cfg->layout, "camera") != 0,
          show_camera = strcmp(cfg->layout, "screen") != 0 && cfg->camera_visible;
+    bool stage = !strcmp(cfg->layout, "stage");
     Transform t = {0};
-    int sx = 0, sw = cfg->width;
+    int sx = 0, sy = 0, sw = cfg->width, sh = cfg->height;
+    int cx = 0, cy = 0, cw = 0, ch = 0;
+    if (stage && compositor_geometry(cfg, camera && camera->data ? camera->width : 640,
+                                     camera && camera->data ? camera->height : 480, &cx, &cy, &cw,
+                                     &ch, err, n)) {
+        return -1;
+    }
+    if (stage && screen && screen->data) {
+        stage_screen_geometry(cfg, screen, cx, cy, cw, ch, &sx, &sy, &sw, &sh);
+    }
     int split = (int)lround(cfg->width * cfg->split_ratio / 100);
     if (!strcmp(cfg->layout, "split")) {
         if (split < 1 || split >= cfg->width) {
@@ -898,20 +1188,42 @@ int compositor_render(Compositor *c, const Config *cfg, const Frame *screen, con
         int ax = !strcmp(cfg->layout, "split") && !strcmp(cfg->split_side, "right")
                      ? cfg->width - split
                      : 0;
-        if (camera_background_draw(c, cfg, camera, out, ax, 0, area, cfg->height, err, n)) {
+        if (background_draw(&c->camera_backdrop, cfg, cfg->camera_visible ? camera : NULL, 2,
+                            cfg->mirror, cfg->camera_background, cfg->camera_background_color,
+                            cfg->camera_background_blur_radius, cfg->camera_background_brightness,
+                            out, ax, 0, area, cfg->height, err, n)) {
             return -1;
         }
+    } else {
+        frame_free(&c->camera_backdrop.pixels);
+        c->camera_backdrop.type = 0;
+    }
+    if (show_screen && (stage || !strcmp(cfg->layout, "screen") || cfg->screen_radius ||
+                        cfg->screen_border_width || !strcmp(cfg->screen_background, "gradient") ||
+                        !strcmp(cfg->screen_background, "solid"))) {
+        bool use_camera = !strcmp(cfg->background_source, "camera");
+        const Frame *background = use_camera ? (cfg->camera_visible ? camera : NULL) : screen;
+        if (background_draw(&c->screen_backdrop, cfg, background, use_camera ? 2 : 1,
+                            use_camera && cfg->mirror, cfg->screen_background,
+                            cfg->screen_background_color, cfg->screen_background_blur_radius,
+                            cfg->screen_background_brightness, out, stage ? 0 : sx, 0,
+                            stage ? cfg->width : sw, cfg->height, err, n)) {
+            return -1;
+        }
+    } else {
+        frame_free(&c->screen_backdrop.pixels);
+        c->screen_backdrop.type = 0;
     }
     if (show_screen && screen && screen->data && screen->width > 0 && screen->height > 0) {
-        t = screen_transform(c, cfg, screen, cursor, now, sx, 0, sw, cfg->height);
-        screen_blit(out, screen, t);
+        t = screen_transform(c, cfg, screen, cursor, now, sx, sy, sw, sh);
+        Clip clip = screen_layer_draw(out, screen, cfg, t);
         double x, y;
         if (cursor && cursor->valid && transform_point(t, cursor->x, cursor->y, &x, &y)) {
             if (cfg->cursor_highlight) {
-                ring(out, x, y, cfg->cursor_size, 3, cfg->cursor_color, .65);
+                ring(out, x, y, cfg->cursor_size, 3, cfg->cursor_color, .65, &clip);
             }
             if (cfg->cursor) {
-                cursor_draw(out, x, y, cfg->cursor_size, cfg->cursor_color);
+                cursor_draw(out, x, y, cfg->cursor_size, cfg->cursor_color, &clip);
             }
         }
         if (show_clicks && cfg->clicks) {
@@ -928,13 +1240,18 @@ int compositor_render(Compositor *c, const Config *cfg, const Frame *screen, con
                 uint32_t color = cl->button == 1   ? cfg->click_left_color
                                  : cl->button == 3 ? cfg->click_right_color
                                                    : cfg->click_middle_color;
-                ring(out, x, y, cfg->click_radius * (.35 + .65 * p), 3, color, 1 - p);
+                ring(out, x, y, cfg->click_radius * (.35 + .65 * p), 3, color, 1 - p, &clip);
             }
         }
     }
     if (show_camera && camera && camera->data) {
         int x, y, w, h;
-        if (!strcmp(cfg->layout, "overlay")) {
+        if (stage) {
+            x = cx;
+            y = cy;
+            w = cw;
+            h = ch;
+        } else if (!strcmp(cfg->layout, "overlay")) {
             if (compositor_geometry(cfg, camera->width, camera->height, &x, &y, &w, &h, err, n) <
                 0) {
                 return -1;
@@ -962,5 +1279,6 @@ int compositor_render(Compositor *c, const Config *cfg, const Frame *screen, con
     if (show_keys && cfg->keys) {
         keys_draw(c, cfg, out, now);
     }
+    overlays_draw(c, cfg, out);
     return 0;
 }

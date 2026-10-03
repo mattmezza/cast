@@ -10,4 +10,6 @@ PresentationText *presentation_text_create(void);
 void presentation_text_destroy(PresentationText *);
 int presentation_text_prepare(PresentationText *, const Config *, char *, size_t);
 int presentation_text_draw(PresentationText *, const Config *, bool blur, Frame *, char *, size_t);
+/* Prepared static RGBA text; the compositor positions/blends it without glyph work. */
+const Frame *presentation_text_overlay(const PresentationText *);
 #endif

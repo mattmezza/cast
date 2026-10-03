@@ -22,7 +22,11 @@ typedef struct {
 } TextFont;
 struct PresentationText {
     FT_Library library;
-    TextFont pause, blur;
+    TextFont pause, blur, overlay;
+    Frame static_text;
+    char static_content[256];
+    int static_size, static_width, static_height, static_margin_x, static_margin_y;
+    uint32_t static_color;
 };
 typedef struct {
     const char *start;
@@ -34,6 +38,7 @@ typedef struct {
     unsigned count;
     int width, height;
 } TextBlock;
+static int static_raster(PresentationText *, TextFont *, const Config *, Frame *, char *, size_t);
 static int fail(char *error, size_t n, const char *format, ...)
 {
     if (error && n) {
@@ -338,6 +343,8 @@ void presentation_text_destroy(PresentationText *text)
     if (text) {
         font_clear(&text->pause);
         font_clear(&text->blur);
+        font_clear(&text->overlay);
+        frame_free(&text->static_text);
         FT_Done_FreeType(text->library);
         free(text);
     }
@@ -352,18 +359,32 @@ int presentation_text_prepare(PresentationText *text, const Config *cfg, char *e
         presentation_template_validate(cfg->pause_footer, error, n) ||
         presentation_template_validate(cfg->blur_title, error, n) ||
         presentation_template_validate(cfg->blur_subtitle, error, n) ||
-        presentation_template_validate(cfg->blur_footer, error, n)) {
+        presentation_template_validate(cfg->blur_footer, error, n) ||
+        utf8_validate(cfg->text_content, error, n)) {
         return -1;
     }
     const char *pause = cfg->pause_font[0] ? cfg->pause_font : "Noto Sans";
     const char *blur = cfg->blur_font[0] ? cfg->blur_font : "Noto Sans";
+    const char *overlay = cfg->text_font[0] ? cfg->text_font : "Noto Sans";
     bool replace_pause = !text->pause.face || strcmp(pause, text->pause.name);
     bool replace_blur = !text->blur.face || strcmp(blur, text->blur.name);
-    TextFont candidate_pause = {0}, candidate_blur = {0};
+    bool replace_overlay = !text->overlay.face || strcmp(overlay, text->overlay.name);
+    bool replace_mask =
+        replace_overlay || strcmp(cfg->text_content, text->static_content) ||
+        cfg->text_size != text->static_size || cfg->text_color != text->static_color ||
+        cfg->width != text->static_width || cfg->height != text->static_height ||
+        cfg->text_margin_x != text->static_margin_x || cfg->text_margin_y != text->static_margin_y;
+    TextFont candidate_pause = {0}, candidate_blur = {0}, candidate_overlay = {0};
+    Frame candidate_mask = {0};
     if ((replace_pause && font_load(text->library, pause, &candidate_pause, error, n)) ||
-        (replace_blur && font_load(text->library, blur, &candidate_blur, error, n))) {
+        (replace_blur && font_load(text->library, blur, &candidate_blur, error, n)) ||
+        (replace_overlay && font_load(text->library, overlay, &candidate_overlay, error, n)) ||
+        (replace_mask && static_raster(text, replace_overlay ? &candidate_overlay : &text->overlay,
+                                       cfg, &candidate_mask, error, n))) {
         font_clear(&candidate_pause);
         font_clear(&candidate_blur);
+        font_clear(&candidate_overlay);
+        frame_free(&candidate_mask);
         return -1;
     }
     if (replace_pause) {
@@ -374,7 +395,26 @@ int presentation_text_prepare(PresentationText *text, const Config *cfg, char *e
         font_clear(&text->blur);
         text->blur = candidate_blur;
     }
+    if (replace_overlay) {
+        font_clear(&text->overlay);
+        text->overlay = candidate_overlay;
+    }
+    if (replace_mask) {
+        frame_free(&text->static_text);
+        text->static_text = candidate_mask;
+        snprintf(text->static_content, sizeof text->static_content, "%s", cfg->text_content);
+        text->static_size = cfg->text_size;
+        text->static_color = cfg->text_color;
+        text->static_width = cfg->width;
+        text->static_height = cfg->height;
+        text->static_margin_x = cfg->text_margin_x;
+        text->static_margin_y = cfg->text_margin_y;
+    }
     return 0;
+}
+const Frame *presentation_text_overlay(const PresentationText *text)
+{
+    return text ? &text->static_text : NULL;
 }
 static FT_Face glyph_face(PresentationText *text, TextFont *font, uint32_t codepoint, int size)
 {
@@ -503,11 +543,18 @@ static void blend(Frame *frame, int x, int y, uint32_t color, unsigned alpha)
         return;
     }
     uint8_t *pixel = frame->data + (size_t)y * frame->stride + (size_t)x * 4;
+    unsigned previous = pixel[3];
+    unsigned combined = alpha + (previous * (255 - alpha) + 127) / 255;
+    if (!combined) {
+        return;
+    }
     for (int ch = 0; ch < 3; ch++) {
         unsigned value = (color >> (16 - ch * 8)) & 255;
-        pixel[ch] = (uint8_t)((value * alpha + pixel[ch] * (255 - alpha) + 127) / 255);
+        pixel[ch] = (uint8_t)((value * alpha + (pixel[ch] * previous * (255 - alpha) + 127) / 255 +
+                               combined / 2) /
+                              combined);
     }
-    pixel[3] = 255;
+    pixel[3] = (uint8_t)combined;
 }
 static void block_draw(PresentationText *text, TextFont *font, const TextBlock *block, int size,
                        Frame *frame, int top, int margin, int clip_top, int clip_bottom,
@@ -561,6 +608,62 @@ static void block_draw(PresentationText *text, TextFont *font, const TextBlock *
         }
         top += line->height + size / 3 + 1;
     }
+}
+static int static_raster(PresentationText *text, TextFont *font, const Config *cfg, Frame *out,
+                         char *error, size_t n)
+{
+    if (!cfg->text_content[0]) {
+        return 0;
+    }
+    int width = (int)fmax(1, cfg->width - 2 * cfg->text_margin_x);
+    int height = (int)fmax(1, cfg->height - 2 * cfg->text_margin_y);
+    int size = cfg->text_size > 0 ? cfg->text_size : 28;
+    TextBlock block;
+    for (;;) {
+        if (block_measure(text, font, cfg->text_content, size, &block, error, n)) {
+            return -1;
+        }
+        if ((block.width <= width && block.height <= height) || size == 1) {
+            break;
+        }
+        double ratio =
+            fmin((double)width / fmax(1, block.width), (double)height / fmax(1, block.height));
+        size = (int)fmax(1, fmin(size - 1, floor(size * ratio)));
+    }
+    int w = (int)fmax(1, fmin(width, block.width));
+    int h = (int)fmax(1, fmin(height, block.height));
+    if (frame_alloc(out, w, h)) {
+        return fail(error, n, "cannot allocate bounded static text overlay");
+    }
+    block_draw(text, font, &block, size, out, 0, 0, 0, h, cfg->text_color);
+    /* Anchor the visible ink, including fonts with positive leading bearings. */
+    int left = w, right = -1, top = h, bottom = -1;
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            if (out->data[(size_t)y * out->stride + x * 4 + 3]) {
+                left = x < left ? x : left;
+                right = x > right ? x : right;
+                top = y < top ? y : top;
+                bottom = y > bottom ? y : bottom;
+            }
+        }
+    }
+    if (right < left) {
+        frame_free(out);
+    } else if (left || top || right != w - 1 || bottom != h - 1) {
+        Frame cropped = {0};
+        if (frame_alloc(&cropped, right - left + 1, bottom - top + 1)) {
+            return fail(error, n, "cannot prepare static text ink bounds");
+        }
+        for (int y = 0; y < cropped.height; y++) {
+            memcpy(cropped.data + (size_t)y * cropped.stride,
+                   out->data + (size_t)(y + top) * out->stride + left * 4,
+                   (size_t)cropped.width * 4);
+        }
+        frame_free(out);
+        *out = cropped;
+    }
+    return 0;
 }
 int presentation_text_draw(PresentationText *text, const Config *cfg, bool blur, Frame *frame,
                            char *error, size_t n)

@@ -1,10 +1,13 @@
 #include "cast.h"
 #include "presentation_text.h"
 #include <assert.h>
+#include <fcntl.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 static uint64_t now = 1000000000;
 uint64_t cast_now_ns(void)
@@ -35,6 +38,15 @@ static Config config(int w, int h)
     c.camera_background_color = 0x20252b;
     c.camera_background_blur_radius = 96;
     c.camera_background_brightness = .25;
+    c.gradient_from = 0x101827;
+    c.gradient_via = 0x26354a;
+    c.gradient_to = 0x080b12;
+    c.gradient_via_enabled = true;
+    c.gradient_angle = 135;
+    c.gradient_waypoint = 50;
+    c.screen_width_percent = 78;
+    c.screen_background_blur_radius = 96;
+    c.screen_background_brightness = .25;
     c.annotations_live_keys = c.annotations_record_keys = true;
     c.annotations_live_clicks = c.annotations_record_clicks = true;
     snprintf(c.layout, sizeof(c.layout), "overlay");
@@ -172,8 +184,7 @@ static void test_text_templates(void)
         assert(presentation_template_validate(invalid[i], error, sizeof error) < 0);
         assert(error[0]);
     }
-    assert(presentation_template_validate("{date:%1000Y}{time:%1000H}", error,
-                                          sizeof error) < 0);
+    assert(presentation_template_validate("{date:%1000Y}{time:%1000H}", error, sizeof error) < 0);
     assert(presentation_template_validate("{date:%800Y%800m}", error, sizeof error) < 0);
     char long_template[256];
     memset(long_template, 'x', 200);
@@ -404,8 +415,8 @@ static void test_footer_and_gap(void)
     /* Even text too tall at the minimum font size stays inside disjoint regions. */
     for (unsigned i = 0; i < 60; i++) {
         cfg.pause_text[i * 2] = cfg.pause_subtitle[i * 2] = cfg.pause_footer[i * 2] = 'M';
-        cfg.pause_text[i * 2 + 1] = cfg.pause_subtitle[i * 2 + 1] =
-            cfg.pause_footer[i * 2 + 1] = '\n';
+        cfg.pause_text[i * 2 + 1] = cfg.pause_subtitle[i * 2 + 1] = cfg.pause_footer[i * 2 + 1] =
+            '\n';
     }
     cfg.pause_text[120] = cfg.pause_subtitle[120] = cfg.pause_footer[120] = 0;
     assert(!compositor_neutral(c, &cfg, &out, error, sizeof error));
@@ -968,6 +979,380 @@ static void test_screen_sampling(void)
     frame_free(&out);
 }
 
+static void test_stage_geometry(void)
+{
+    Config cfg = config(400, 240);
+    strcpy(cfg.layout, "stage");
+    strcpy(cfg.screen_background, "solid");
+    cfg.screen_background_color = 0x0000aa;
+    cfg.camera_width_percent = 25;
+    cfg.margin = 10;
+    cfg.screen_margin = 20;
+    cfg.screen_width_percent = 50;
+    Frame screen = source(200, 100, 0xaa0000, false);
+    Frame camera = source(100, 75, 0x00aa00, false), out = {0};
+    Compositor *c = compositor_create();
+    const char *anchors[] = {"top-left", "top-right", "bottom-left", "bottom-right",
+                             "top",      "bottom",    "left",        "right"};
+    const int positions[][2] = {{180, 120}, {20, 120}, {180, 20}, {20, 20},
+                                {100, 120}, {100, 20}, {180, 70}, {20, 70}};
+    char error[CAST_ERR];
+    for (unsigned i = 0; i < 8; i++) {
+        strcpy(cfg.anchor, anchors[i]);
+        render(c, &cfg, &screen, &camera, NULL, false, &out);
+        int x = positions[i][0], y = positions[i][1];
+        assert(at(&out, x, y) == 0xaa0000);
+        assert(at(&out, x + 199, y + 99) == 0xaa0000);
+        assert(at(&out, x - 1, y) == 0x0000aa);
+        int cx, cy, cw, ch;
+        assert(!compositor_geometry(&cfg, 100, 75, &cx, &cy, &cw, &ch, error, sizeof error));
+        assert(cw == 100 && ch == 75);
+        assert(at(&out, cx + 50, cy + 37) == 0x00aa00);
+    }
+    strcpy(cfg.anchor, "free");
+    cfg.camera_x = 10;
+    cfg.camera_y = 10;
+    render(c, &cfg, &screen, &camera, NULL, false, &out);
+    assert(at(&out, 180, 120) == 0xaa0000);
+    cfg.camera_x = 290;
+    cfg.camera_y = 155;
+    render(c, &cfg, &screen, &camera, NULL, false, &out);
+    assert(at(&out, 20, 20) == 0xaa0000);
+    strcpy(cfg.anchor, "bottom-right");
+    cfg.camera_width_percent = 60;
+    cfg.screen_width_percent = 85;
+    render(c, &cfg, &screen, &camera, NULL, false, &out);
+    assert(at(&out, 30, 30) == 0xaa0000);
+    assert(at(&out, 200, 100) == 0x00aa00); /* Natural overlap keeps the camera in front. */
+    cfg.camera_visible = false;
+    cfg.zoom_factor = 2;
+    cfg.zoom_transition_ms = 0;
+    frame_free(&screen);
+    screen = source(200, 100, 0, true);
+    render(c, &cfg, &screen, &camera, NULL, false, &out);
+    assert((at(&out, 20, 20) >> 16) == 50); /* Zoom still crops the screen's source coordinates. */
+    frame_free(&screen);
+    frame_free(&camera);
+    frame_free(&out);
+    compositor_destroy(c);
+}
+static void test_shared_gradients_and_screen_backdrop(void)
+{
+    Config cfg = config(101, 31);
+    strcpy(cfg.layout, "screen");
+    strcpy(cfg.screen_background, "gradient");
+    cfg.gradient_from = 0xff0000;
+    cfg.gradient_via = 0x00ff00;
+    cfg.gradient_to = 0x0000ff;
+    cfg.gradient_angle = 0;
+    cfg.gradient_waypoint = 25;
+    Frame out = {0}, reference = {0};
+    Compositor *c = compositor_create();
+    render(c, &cfg, NULL, NULL, NULL, false, &out);
+    assert(at(&out, 0, 0) == 0xff0000 && at(&out, 25, 15) == 0x00ff00);
+    assert(at(&out, 100, 30) == 0x0000ff);
+    cfg.gradient_via_enabled = false;
+    cfg.gradient_angle = 90;
+    render(c, &cfg, NULL, NULL, NULL, false, &out);
+    assert(at(&out, 0, 0) == 0xff0000 && at(&out, 100, 30) == 0x0000ff);
+    assert(at(&out, 0, 15) == at(&out, 100, 15));
+    cfg.gradient_angle = 180;
+    render(c, &cfg, NULL, NULL, NULL, false, &out);
+    assert(at(&out, 0, 0) == 0x0000ff && at(&out, 100, 30) == 0xff0000);
+    cfg.gradient_angle = 135;
+    render(c, &cfg, NULL, NULL, NULL, false, &out);
+    assert(at(&out, 100, 0) == 0xff0000 && at(&out, 0, 30) == 0x0000ff);
+    assert(!frame_copy(&reference, &out));
+    strcpy(cfg.layout, "camera");
+    strcpy(cfg.camera_background, "gradient");
+    cfg.camera_visible = false;
+    render(c, &cfg, NULL, NULL, NULL, false, &out);
+    assert(!memcmp(reference.data, out.data, (size_t)out.stride * out.height));
+    compositor_clear(c);
+    render(c, &cfg, NULL, NULL, NULL, false, &out);
+    assert(!memcmp(reference.data, out.data, (size_t)out.stride * out.height));
+
+    cfg = config(120, 80);
+    strcpy(cfg.layout, "stage");
+    strcpy(cfg.screen_background, "blurred");
+    strcpy(cfg.background_source, "screen");
+    cfg.screen_margin = 10;
+    cfg.screen_width_percent = 50;
+    cfg.screen_background_brightness = 1;
+    cfg.screen_background_color = 0;
+    cfg.camera_width_percent = 20;
+    cfg.camera_visible = false;
+    Frame screen = source(120, 80, 0xff0000, false);
+    Frame camera = source(120, 80, 0x00ff00, false);
+    screen.ts_ns = camera.ts_ns = now;
+    render(c, &cfg, &screen, &camera, NULL, false, &out);
+    assert(at(&out, 0, 0) == 0xbf0000);
+    assert(!frame_copy(&reference, &out));
+    render(c, &cfg, &screen, &camera, NULL, false, &out);
+    assert(!memcmp(reference.data, out.data, (size_t)out.stride * out.height));
+    frame_free(&screen);
+    screen = source(120, 80, 0x0000ff, false);
+    now++;
+    camera.ts_ns = now;
+    render(c, &cfg, &screen, &camera, NULL, false, &out);
+    assert(at(&out, 0, 0) == 0x0000bf);
+    strcpy(cfg.background_source, "camera");
+    cfg.camera_visible = true;
+    render(c, &cfg, &screen, &camera, NULL, false, &out);
+    assert(at(&out, 0, 0) == 0x00bf00);
+    cfg.camera_visible = false;
+    cfg.gradient_angle = 0;
+    render(c, &cfg, &screen, &camera, NULL, false, &out);
+    assert(at(&out, 0, 0) == cfg.gradient_from); /* No replay of a hidden camera. */
+    strcpy(cfg.background_source, "screen");
+    render(c, &cfg, NULL, NULL, NULL, false, &out);
+    assert(at(&out, 0, 0) == cfg.gradient_from); /* Missing screen replaces its processed cache. */
+    frame_free(&screen);
+    frame_free(&camera);
+    frame_free(&reference);
+    frame_free(&out);
+    compositor_destroy(c);
+    now--;
+}
+static void test_screen_mask_and_annotations(void)
+{
+    Config cfg = config(100, 60);
+    strcpy(cfg.layout, "screen");
+    strcpy(cfg.screen_background, "solid");
+    cfg.screen_background_color = 0x0000aa;
+    cfg.screen_radius = 20;
+    cfg.screen_border_width = 3;
+    cfg.screen_border_color = 0xffffff;
+    Frame screen = source(100, 60, 0x223344, false), out = {0}, reference = {0};
+    Compositor *c = compositor_create();
+    render(c, &cfg, &screen, NULL, NULL, false, &out);
+    assert(at(&out, 0, 0) == 0x0000aa);
+    assert(at(&out, 50, 0) == 0xffffff && at(&out, 50, 4) == 0x223344);
+    assert(!frame_copy(&reference, &out));
+    cfg.cursor = cfg.cursor_highlight = cfg.clicks = true;
+    cfg.cursor_size = 35;
+    cfg.cursor_color = 0xffff00;
+    cfg.click_radius = 35;
+    compositor_click(c, 1, 1, 1, now);
+    Cursor cursor = {.x = 1, .y = 1, .valid = true};
+    render(c, &cfg, &screen, NULL, &cursor, false, &out);
+    unsigned changed = 0;
+    for (int y = 0; y < out.height; y++) {
+        for (int x = 0; x < out.width; x++) {
+            if (at(&reference, x, y) != 0x223344) {
+                assert(at(&out, x, y) == at(&reference, x, y));
+            }
+            changed += at(&out, x, y) != at(&reference, x, y);
+        }
+    }
+    assert(changed);
+    cfg.cursor = cfg.cursor_highlight = cfg.clicks = false;
+    strcpy(cfg.layout, "split");
+    cfg.split_ratio = 50;
+    strcpy(cfg.camera_background, "solid");
+    cfg.camera_background_color = 0xaa0000;
+    cfg.camera_visible = false;
+    render(c, &cfg, &screen, NULL, NULL, false, &out);
+    assert(at(&out, 0, 0) == 0xaa0000); /* Screen backdrop stays inside its split allocation. */
+    assert(at(&out, 50, 15) == 0x0000aa);
+    frame_free(&screen);
+    frame_free(&reference);
+    frame_free(&out);
+    compositor_destroy(c);
+}
+static bool rounded_reference(double x, double y, double width, double height, double radius)
+{
+    if (x < 0 || y < 0 || x >= width || y >= height || width <= 0 || height <= 0) {
+        return false;
+    }
+    double nearest_x = fmax(radius, fmin(x, width - radius));
+    double nearest_y = fmax(radius, fmin(y, height - radius));
+    double dx = x - nearest_x, dy = y - nearest_y;
+    return dx * dx + dy * dy <= radius * radius;
+}
+static void test_screen_mask_scanline_reference(void)
+{
+    Config cfg = config(93, 57);
+    strcpy(cfg.layout, "screen");
+    strcpy(cfg.screen_background, "solid");
+    cfg.screen_background_color = 0x112233;
+    cfg.screen_border_color = 0x445566;
+    Compositor *c = compositor_create();
+    Frame screen = {0}, out = {0};
+    const int shapes[][2] = {{71, 39}, {27, 61}};
+    const int radii[] = {0, 1, 9, 50}, borders[] = {0, 1, 6, 100};
+    for (unsigned shape = 0; shape < 2; shape++) {
+        frame_free(&screen);
+        screen = source(shapes[shape][0], shapes[shape][1], 0xabcdef, false);
+        double scale = fmin(93.0 / screen.width, 57.0 / screen.height);
+        double width = screen.width * scale, height = screen.height * scale;
+        double origin_x = (93 - width) / 2, origin_y = (57 - height) / 2;
+        for (unsigned r = 0; r < 4; r++) {
+            for (unsigned b = 0; b < 4; b++) {
+                cfg.screen_radius = radii[r];
+                cfg.screen_border_width = borders[b];
+                render(c, &cfg, &screen, NULL, NULL, false, &out);
+                double radius = fmin(cfg.screen_radius, fmin(width, height) / 2);
+                int border =
+                    (int)fmin(cfg.screen_border_width, fmax(0, (fmin(width, height) - 1) / 2));
+                for (int y = 0; y < out.height; y++) {
+                    for (int x = 0; x < out.width; x++) {
+                        uint32_t expected = cfg.screen_background_color;
+                        bool rectangle = x >= ceil(origin_x) && x < ceil(origin_x + width) &&
+                                         y >= ceil(origin_y) && y < ceil(origin_y + height);
+                        if (rectangle && !radius && !border) {
+                            expected = 0xabcdef;
+                        } else if (rectangle &&
+                                   rounded_reference(x + .5 - origin_x, y + .5 - origin_y, width,
+                                                     height, radius)) {
+                            bool content = rounded_reference(
+                                x + .5 - origin_x - border, y + .5 - origin_y - border,
+                                width - 2 * border, height - 2 * border, fmax(0, radius - border));
+                            expected = content ? 0xabcdef : cfg.screen_border_color;
+                        }
+                        assert(at(&out, x, y) == expected);
+                    }
+                }
+            }
+        }
+    }
+    frame_free(&screen);
+    frame_free(&out);
+    compositor_destroy(c);
+}
+static void test_prepared_logo_and_static_text(void)
+{
+    /* 4x2 RGBA PNG: transparent red, half red, opaque blue, opaque green. */
+    static const unsigned char png[] = {
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0,    0,    0,    0x0d, 0x49, 0x48,
+        0x44, 0x52, 0,    0,    0,    4,    0,    0,    0,    2,    8,    6,    0,    0,
+        0,    0x7f, 0xa8, 0x7d, 0x63, 0,    0,    0,    0x17, 0x49, 0x44, 0x41, 0x54, 0x78,
+        0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0xc0, 0,    0xc4, 0x0d, 0x40, 0xf2, 0x3f, 3,    4,
+        0xa2, 0x0a, 0,    0,    0xcc, 0xe6, 0x0c, 0xf5, 0x8a, 0xe1, 0x27, 0x5c, 0,    0,
+        0,    0,    0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82};
+    char path[] = "/tmp/cast-logo-XXXXXX", error[CAST_ERR];
+    int fd = mkstemp(path);
+    assert(fd >= 0 && write(fd, png, sizeof png) == sizeof png);
+    close(fd);
+    Config cfg = config(80, 40);
+    strcpy(cfg.layout, "screen");
+    strcpy(cfg.screen_background, "solid");
+    cfg.screen_background_color = 0x203040;
+    strcpy(cfg.logo_path, path);
+    cfg.logo_width_percent = 5;
+    cfg.logo_opacity = 1;
+    cfg.logo_margin_x = 3;
+    cfg.logo_margin_y = 4;
+    Compositor *c = compositor_create();
+    Frame out = {0}, reference = {0};
+    assert(!compositor_prepare(c, &cfg, error, sizeof error)); /* Path validates while disabled. */
+    assert(!unlink(path));
+    cfg.logo_enabled = true;
+    const char *anchors[] = {"top-left", "top-right", "bottom-left", "bottom-right",
+                             "top",      "bottom",    "left",        "right"};
+    const int xy[][2] = {{3, 4}, {73, 4}, {3, 34}, {73, 34}, {38, 4}, {38, 34}, {3, 19}, {73, 19}};
+    for (unsigned i = 0; i < 8; i++) {
+        strcpy(cfg.logo_anchor, anchors[i]);
+        render(c, &cfg, NULL, NULL, NULL, false, &out);
+        int x = xy[i][0], y = xy[i][1];
+        assert(at(&out, x, y) == 0x203040);
+        assert(at(&out, x + 1, y) == 0x901820);
+        assert(at(&out, x + 2, y) == 0x0000ff && at(&out, x + 3, y) == 0x00ff00);
+    }
+    cfg.logo_opacity = .5;
+    render(c, &cfg, NULL, NULL, NULL, false, &out);
+    assert(at(&out, 75, 19) == 0x1018a0); /* Global opacity multiplies the file's alpha. */
+    assert(!frame_copy(&reference, &out));
+    Config bad = cfg;
+    strcpy(bad.logo_path, "/no/such/cast-logo.png");
+    strcpy(bad.pause_font, "serif");
+    assert(compositor_prepare(c, &bad, error, sizeof error) < 0);
+    render(c, &cfg, NULL, NULL, NULL, false, &out);
+    assert(!memcmp(reference.data, out.data, (size_t)out.stride * out.height));
+    strcpy(bad.logo_path, "/dev/null");
+    assert(compositor_prepare(c, &bad, error, sizeof error) < 0 && strstr(error, "regular"));
+    char broken[] = "/tmp/cast-logo-broken-XXXXXX";
+    fd = mkstemp(broken);
+    assert(fd >= 0 && write(fd, png, 12) == 12);
+    strcpy(bad.logo_path, broken);
+    assert(compositor_prepare(c, &bad, error, sizeof error) < 0 && strstr(error, "decode"));
+    assert(!ftruncate(fd, 9 * 1024 * 1024));
+    assert(compositor_prepare(c, &bad, error, sizeof error) < 0 && strstr(error, "8 MiB"));
+    close(fd);
+    unlink(broken);
+    cfg.logo_enabled = false;
+    cfg.logo_path[0] = 0;
+    assert(!compositor_prepare(c, &cfg, error, sizeof error));
+
+    cfg = config(240, 100);
+    strcpy(cfg.layout, "screen");
+    strcpy(cfg.screen_background, "solid");
+    cfg.screen_background_color = 0x203040;
+    cfg.text_enabled = true;
+    strcpy(cfg.text_content, "F {date}"); /* Literal, never a template. */
+    strcpy(cfg.text_font, "Noto Sans");
+    cfg.text_size = 20;
+    cfg.text_color = 0x00ff00;
+    cfg.text_opacity = 1;
+    cfg.text_margin_x = 7;
+    cfg.text_margin_y = 9;
+    PresentationText *text_cache = presentation_text_create();
+    assert(text_cache && !presentation_text_prepare(text_cache, &cfg, error, sizeof error));
+    const Frame *mask = presentation_text_overlay(text_cache);
+    assert(mask && mask->data && mask->width > 40);
+    const uint8_t *cached_pixels = mask->data;
+    int text_w = mask->width, text_h = mask->height;
+    for (unsigned i = 0; i < 8; i++) {
+        strcpy(cfg.text_anchor, anchors[i]);
+        assert(!presentation_text_prepare(text_cache, &cfg, error, sizeof error));
+        assert(presentation_text_overlay(text_cache)->data == cached_pixels);
+        render(c, &cfg, NULL, NULL, NULL, false, &out);
+        int left = out.width, right = -1, top = out.height, bottom = -1;
+        for (int y = 0; y < out.height; y++) {
+            for (int x = 0; x < out.width; x++) {
+                if (at(&out, x, y) != cfg.screen_background_color) {
+                    left = x < left ? x : left;
+                    right = x > right ? x : right;
+                    top = y < top ? y : top;
+                    bottom = y > bottom ? y : bottom;
+                }
+            }
+        }
+        int x = strstr(anchors[i], "left")    ? 7
+                : strstr(anchors[i], "right") ? 240 - 7 - text_w
+                                              : (240 - text_w) / 2;
+        int y = strstr(anchors[i], "top")      ? 9
+                : strstr(anchors[i], "bottom") ? 100 - 9 - text_h
+                                               : (100 - text_h) / 2;
+        assert(left == x && right == x + text_w - 1);
+        assert(top == y && bottom == y + text_h - 1);
+    }
+    assert(!frame_copy(&reference, &out));
+    cfg.text_opacity = .5;
+    assert(!presentation_text_prepare(text_cache, &cfg, error, sizeof error));
+    assert(presentation_text_overlay(text_cache)->data == cached_pixels);
+    render(c, &cfg, NULL, NULL, NULL, false, &out);
+    assert(memcmp(reference.data, out.data, (size_t)out.stride * out.height));
+    bad = cfg;
+    strcpy(bad.text_font, "Noto Sans:file=/no/such/cast-text.ttf");
+    assert(presentation_text_prepare(text_cache, &bad, error, sizeof error) < 0);
+    assert(presentation_text_overlay(text_cache)->data == cached_pixels);
+    assert(!frame_copy(&reference, &out));
+    assert(compositor_prepare(c, &bad, error, sizeof error) < 0);
+    render(c, &cfg, NULL, NULL, NULL, false, &out);
+    assert(!memcmp(reference.data, out.data, (size_t)out.stride * out.height));
+    strcpy(cfg.text_font, "serif");
+    render(c, &cfg, NULL, NULL, NULL, false, &out);
+    assert(memcmp(reference.data, out.data, (size_t)out.stride * out.height));
+    cfg.text_enabled = false;
+    render(c, &cfg, NULL, NULL, NULL, false, &out);
+    assert_solid(&out, cfg.screen_background_color);
+    presentation_text_destroy(text_cache);
+    frame_free(&reference);
+    frame_free(&out);
+    compositor_destroy(c);
+}
+
 int main(void)
 {
     test_frames();
@@ -977,6 +1362,11 @@ int main(void)
     test_zoom_and_annotations();
     test_follow_lane_consistency();
     test_screen_sampling();
+    test_stage_geometry();
+    test_shared_gradients_and_screen_backdrop();
+    test_screen_mask_and_annotations();
+    test_screen_mask_scanline_reference();
+    test_prepared_logo_and_static_text();
     test_neutral();
     test_text_templates();
     test_styled_text();
@@ -986,9 +1376,8 @@ int main(void)
     test_camera_backgrounds();
     test_key_history();
     test_key_canvas_bounds();
-    puts(
-        "visual: owned frames, geometry, masks, fitting, crop/mirror, zoom transforms and lane "
-        "privacy, bounded key history, styled UTF-8/templates, footers/gaps/font reload, blur and "
-        "camera backgrounds passed");
+    puts("visual: owned frames, geometry, masks, fitting, crop/mirror, zoom transforms and lane "
+         "privacy, bounded key history, styled UTF-8/templates, footers/gaps/font reload, blur and "
+         "camera backgrounds, stage, gradients, masked screen and cached logo/static text passed");
     return 0;
 }
