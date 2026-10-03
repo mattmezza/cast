@@ -61,9 +61,9 @@ def main():
                     assert time.monotonic() < deadline, 'daemon startup timed out'
                     time.sleep(0.05)
 
-                assert status()['live']['state'] == 'paused'
+                assert status()['virtual']['state'] == 'paused'
                 neutral = consumer_frame()
-                command('live', 'resume')
+                command('virtual', 'resume')
                 resumed = consumer_frame()
                 assert resumed != neutral
                 # The synthetic screen red channel increases from left to right.
@@ -77,16 +77,16 @@ def main():
                 command('camera', 'mirror', 'on')
                 screen_orientation(consumer_frame())
                 command('camera', 'mirror', 'off')
-                command('live', 'freeze')
+                command('virtual', 'freeze')
                 frozen = consumer_frame()
                 assert consumer_frame() == frozen
-                command('live', 'pause')
+                command('virtual', 'pause')
                 assert consumer_frame() == neutral
-                command('live', 'unfreeze')
-                assert status()['live']['state'] == 'paused'
+                command('virtual', 'unfreeze')
+                assert status()['virtual']['state'] == 'paused'
                 assert consumer_frame() == neutral
 
-                command('live', 'resume')
+                command('virtual', 'resume')
                 recording = root / 'loopback.mkv'
                 command('record', 'start', str(recording))
                 time.sleep(0.8)

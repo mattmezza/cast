@@ -44,7 +44,7 @@ def main():
         environment = dict(os.environ, XDG_RUNTIME_DIR=directory)
         panel = None
         with (temporary / 'daemon.log').open('w+') as log:
-            daemon = subprocess.Popen(base + ['--backend', 'xorg', '--no-live', '--no-camera',
+            daemon = subprocess.Popen(base + ['--backend', 'xorg', '--no-virtual', '--no-camera',
                                              '--width', '320', '--height', '180'],
                                       env=environment, stdout=log, stderr=log)
             try:
@@ -70,7 +70,7 @@ def main():
                             snapshot = json.loads(ui_state.read_text())
                         except (FileNotFoundError, json.JSONDecodeError):
                             return False
-                        return bool(panels()) and snapshot['live_status'] != 'Disconnected'
+                        return bool(panels()) and snapshot['virtual_status'] != 'Disconnected'
 
                     wait_until(attached, 'native panel did not attach to private daemon')
                 command('record', 'start', str(temporary / 'escape.mkv'))

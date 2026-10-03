@@ -48,7 +48,7 @@ static void feed(Media *m, Frame *f, int color, int count)
     for (int i = 0; i < count; ++i) {
         paint(f, color);
         assert(media_record_frame(m, f, error, sizeof(error)) == 0);
-        assert(media_live(m, f, false, error, sizeof(error)) == 0);
+        assert(media_virtual(m, f, false, error, sizeof(error)) == 0);
         delay_ms(33);
     }
 }
@@ -227,15 +227,15 @@ static void finalized(Media *m)
     }
     assert(!error[0]);
 }
-static void timeline_test(const char *directory, bool live)
+static void timeline_test(const char *directory, bool virtual)
 {
     Config cfg;
     Media *m = new_media(&cfg);
-    cfg.live_enabled = live;
+    cfg.virtual_enabled = virtual;
     Frame f = {0};
     assert(frame_alloc(&f, cfg.width, cfg.height) == 0);
     char path[PATH_MAX], error[CAST_ERR], actual[PATH_MAX];
-    snprintf(path, sizeof(path), "%s/timeline-%d.mkv", directory, live);
+    snprintf(path, sizeof(path), "%s/timeline-%d.mkv", directory, virtual);
     assert(media_record_start(m, &cfg, path, error, sizeof(error)) == 0);
     media_record_path(m, actual, sizeof(actual));
     assert(!strcmp(path, actual));
@@ -274,7 +274,7 @@ static void timeline_test(const char *directory, bool live)
     frame_free(&f);
     media_close(m);
     printf("recording %s: decoded %d video frames, active %.3fs, audio %.3fs, max gap %.3fs\n",
-           live ? "+ live" : "only", x.video_frames, active, x.audio_last, x.max_video_gap);
+           virtual ? "+ virtual" : "only", x.video_frames, active, x.audio_last, x.max_video_gap);
 }
 static void privacy_test(const char *directory)
 {
@@ -397,7 +397,7 @@ static void failure_test(const char *directory)
     media_status(m, &recording, &paused, &dropped, error, sizeof(error));
     assert(!recording && strstr(error, "encoder failure"));
     assert(access(path, R_OK) == 0);
-    assert(media_live(m, &f, true, error, sizeof(error)) == 0);
+    assert(media_virtual(m, &f, true, error, sizeof(error)) == 0);
     recorder_test_failure(media_test_recorder(m), -1);
     snprintf(path, sizeof(path), "%s/after-failure.mkv", directory);
     assert(media_record_start(m, &cfg, path, error, sizeof(error)) == 0);
@@ -413,7 +413,8 @@ static void failure_test(const char *directory)
     assert(f.width == 640 && f.height == 360);
     frame_free(&f);
     media_close(m);
-    puts("encoder failure isolates live output, permits restart, and failed reconfigure preserves "
+    puts("encoder failure isolates virtual output, permits restart, and failed reconfigure "
+         "preserves "
          "camera");
 }
 static void responsiveness_test(const char *directory)
@@ -424,7 +425,7 @@ static void responsiveness_test(const char *directory)
     snprintf(path, sizeof(path), "%s/slow.mkv", directory);
     Frame f = {0};
     assert(frame_alloc(&f, cfg.width, cfg.height) == 0);
-    /* Exercise live-only before starting simultaneous operation. */
+    /* Exercise virtual-only before starting simultaneous operation. */
     feed(m, &f, 0, 3);
     assert(media_record_start(m, &cfg, path, error, sizeof(error)) == 0);
     feed(m, &f, 0, 3);
@@ -447,12 +448,12 @@ static void responsiveness_test(const char *directory)
     assert(media_record_duration(m) > 0);
     media_record_path(m, actual, sizeof(actual));
     assert(!strcmp(actual, path));
-    assert(media_live(m, &f, false, error, sizeof(error)) == 0);
+    assert(media_virtual(m, &f, false, error, sizeof(error)) == 0);
     assert(media_record_stop(m, error, sizeof(error)) == 0);
     assert(media_record_finalizing(m));
     /* Live privacy must not wait on the recording's drain/trailer/fsync. */
     assert(media_privacy(m, true, false, true, error, sizeof error) == 0);
-    assert(media_live(m, &f, true, error, sizeof(error)) == 0);
+    assert(media_virtual(m, &f, true, error, sizeof(error)) == 0);
     double control_ms = (cast_now_ns() - before) / 1e6;
     assert(control_ms < 100);
     assert(media_record_start(m, &cfg, NULL, error, sizeof(error)) < 0);
@@ -463,7 +464,7 @@ static void responsiveness_test(const char *directory)
     recorder_test_hold(media_test_recorder(m), 0);
     frame_free(&f);
     media_close(m);
-    printf("slow encoder: bounded queue dropped %llu frames; status/live/stop/privacy %.2f ms\n",
+    printf("slow encoder: bounded queue dropped %llu frames; status/virtual/stop/privacy %.2f ms\n",
            (unsigned long long)dropped, control_ms);
 }
 static void disk_failure_test(const char *directory)
@@ -491,7 +492,7 @@ static void disk_failure_test(const char *directory)
     media_record_error(m, error, sizeof(error));
     assert(strstr(error, "No space left on device"));
     assert(access(path, R_OK) == 0);
-    assert(media_live(m, &f, false, error, sizeof(error)) == 0);
+    assert(media_virtual(m, &f, false, error, sizeof(error)) == 0);
     recorder_test_write_limit(media_test_recorder(m), -1);
     snprintf(path, sizeof(path), "%s/after-disk-full.mkv", directory);
     assert(media_record_start(m, &cfg, path, error, sizeof(error)) == 0);
@@ -502,7 +503,7 @@ static void disk_failure_test(const char *directory)
     assert(x.blue > 0);
     frame_free(&f);
     media_close(m);
-    puts("ENOSPC write failure: partial file retained, live continues, next recording decodes");
+    puts("ENOSPC write failure: partial file retained, virtual continues, next recording decodes");
 }
 static void audio_lanes_test(void)
 {
@@ -520,13 +521,13 @@ static void audio_lanes_test(void)
     for (int i = 0; i < 960; ++i) {
         assert(out[i] == 1.0f);
     }
-    /* Virtual audio is independently silent during live pause/freeze while the
+    /* Virtual audio is independently silent during virtual pause/freeze while the
      * recording mix is available, then resumes only from new captured buffers. */
     audio_test_virtual_read(audio, now, out, 480);
     for (int i = 0; i < 960; ++i) {
         assert(out[i] == 0);
     }
-    audio_live_privacy(audio, false);
+    audio_virtual_privacy(audio, false);
     audio_test_virtual_read(audio, now, out, 1);
     assert(out[0] == 0);
     audio_read(audio, now, out, 480);
@@ -552,7 +553,7 @@ static void audio_lanes_test(void)
     assert(out[0] > 0.7f); /* Recording transitions preserve the virtual mix. */
     now += UINT64_C(10000000);
     audio_test_push(audio, 0, now, samples, 480);
-    audio_live_privacy(audio, true);
+    audio_virtual_privacy(audio, true);
     audio_read(audio, now, out, 1);
     assert(out[0] > 0.7f);
     audio_test_virtual_read(audio, now, out, 480);
@@ -612,7 +613,7 @@ static void output_negotiation_test(void)
     config_defaults(&cfg);
     cfg.width = 64;
     cfg.height = 36;
-    cfg.live_enabled = true;
+    cfg.virtual_enabled = true;
     snprintf(cfg.output_device, sizeof(cfg.output_device), "/dev/null");
     char error[CAST_ERR] = {0};
     output_capability.capabilities = V4L2_CAP_DEVICE_CAPS | V4L2_CAP_VIDEO_OUTPUT;

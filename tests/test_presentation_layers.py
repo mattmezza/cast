@@ -80,7 +80,7 @@ def main():
                 command('text', 'anchor', 'top-right')
                 command('text', 'margin', '2', '2')
                 command('text', 'on')
-                assert state()['live']['state'] == 'paused', 'styling resumed live output'
+                assert state()['virtual']['state'] == 'paused', 'styling resumed virtual output'
                 path = temporary / 'presentation.mkv'
                 command('record', 'start', str(path))
                 time.sleep(.4)

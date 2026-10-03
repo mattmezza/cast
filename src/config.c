@@ -46,7 +46,7 @@ static const Setting settings[] = {
     I("output", "width", width, 64, 7680, "1920"),
     I("output", "height", height, 64, 4320, "1080"),
     I("output", "fps", fps, 1, 120, "30"),
-    B("output", "enabled", live_enabled, "true"),
+    B("output", "enabled", virtual_enabled, "true"),
     C("output", "pause_background", pause_color, "#20252b"),
     S("output", "pause_title", pause_text, "Paused"),
     S("output", "pause_subtitle", pause_subtitle, ""),
@@ -168,8 +168,8 @@ static const Setting settings[] = {
       "Super+Shift+V,Ctrl+Super+Shift+R,Ctrl+Super+Shift+S,Ctrl+Super+F,Ctrl+Super+Shift+F"),
     S("keys", "navigation", keys_navigation,
       "Left,Right,Up,Down,Home,End,Page_Up,Page_Down,Escape,Tab,Return,BackSpace,Delete"),
-    B("annotations", "live_keys", annotations_live_keys, "true"),
-    B("annotations", "live_clicks", annotations_live_clicks, "true"),
+    B("annotations", "virtual_keys", annotations_virtual_keys, "true"),
+    B("annotations", "virtual_clicks", annotations_virtual_clicks, "true"),
     B("annotations", "record_keys", annotations_record_keys, "true"),
     B("annotations", "record_clicks", annotations_record_clicks, "true"),
     B("audio", "mic", mic, "false"),
@@ -188,8 +188,25 @@ static const Setting settings[] = {
     S("record", "preset", record_preset, "veryfast"),
     I("record", "countdown", record_countdown, 0, 60, "0"),
     I("record", "queue", record_queue, 1, 120, "8"),
+    E("stream", "service", stream.service, "custom,twitch,youtube", "custom"),
+    S("stream", "server_url", stream.server_url, ""),
+    S("stream", "key_file", stream.key_file, ""),
+    S("stream", "tls_ca_file", stream.tls_ca_file, ""),
+    I("stream", "video_bitrate_kbps", stream.video_bitrate_kbps, 100, 50000, "2500"),
+    I("stream", "audio_bitrate_kbps", stream.audio_bitrate_kbps, 32, 320, "128"),
+    E("stream", "encoder_preset", stream.encoder_preset,
+      "ultrafast,superfast,veryfast,faster,fast,medium,slow,slower,veryslow", "veryfast"),
+    I("stream", "queue_frames", stream.queue_frames, 1, 120, "3"),
+    I("stream", "lag_ms", stream.lag_ms, 50, 5000, "250"),
+    I("stream", "connect_timeout_ms", stream.connect_timeout_ms, 100, 30000, "5000"),
+    I("stream", "write_timeout_ms", stream.write_timeout_ms, 100, 30000, "3000"),
+    I("stream", "reconnect_attempts", stream.reconnect_attempts, 0, 10, "3"),
+    I("stream", "reconnect_initial_ms", stream.reconnect_initial_ms, 100, 10000, "500"),
+    I("stream", "reconnect_max_ms", stream.reconnect_max_ms, 100, 30000, "4000"),
+    B("annotations", "stream_keys", annotations_stream_keys, "true"),
+    B("annotations", "stream_clicks", annotations_stream_clicks, "true"),
     B("preview", "enabled", preview, "false"),
-    E("preview", "target", preview_target, "live,record", "live"),
+    E("preview", "target", preview_target, "virtual,record,stream", "virtual"),
     S("ipc", "socket", socket_path, ""),
     I("ipc", "timeout_ms", ipc_timeout_ms, 100, 30000, "5000")};
 #define NSET (sizeof settings / sizeof settings[0])
@@ -277,6 +294,9 @@ static int assign(void *base, const Setting *s, const char *v, char *err, size_t
         if (strlen(v) >= s->size) {
             return fail(err, n, "value too long for %s.%s", s->section, s->key);
         }
+        if (!strcmp(s->section, "preview") && !strcmp(s->key, "target") && !strcmp(v, "live")) {
+            return fail(err, n, "preview.target live was renamed; use virtual");
+        }
         if (s->type == T_ENUM && !choice(v, s->choices)) {
             return fail(err, n, "%s.%s expects one of %s", s->section, s->key, s->choices);
         }
@@ -329,10 +349,30 @@ static int assign(void *base, const Setting *s, const char *v, char *err, size_t
     }
     return 0;
 }
+void config_stream_preset(Config *config)
+{
+    if (!strcmp(config->stream.service, "twitch")) {
+        config->stream.video_bitrate_kbps = config->fps > 30 ? 6000 : 4500;
+        config->stream.audio_bitrate_kbps = config->fps > 30 ? 160 : 128;
+        snprintf(config->stream.encoder_preset, sizeof config->stream.encoder_preset, "veryfast");
+    } else if (!strcmp(config->stream.service, "youtube")) {
+        config->stream.video_bitrate_kbps =
+            config->height >= 1080 ? (config->fps > 30 ? 17000 : 14000) : 8000;
+        config->stream.audio_bitrate_kbps = 128;
+        snprintf(config->stream.encoder_preset, sizeof config->stream.encoder_preset, "veryfast");
+    }
+}
 int config_set_value(Config *config, const char *name, const char *value, char *error, size_t size)
 {
     if (!config || !name || !value) {
         return fail(error, size, "setting name and value are required");
+    }
+    if (!strcmp(name, "annotations.live_keys") || !strcmp(name, "annotations.live_clicks")) {
+        return fail(error, size, "obsolete %s; use annotations.virtual_%s", name,
+                    strstr(name, "clicks") ? "clicks" : "keys");
+    }
+    if (!strcmp(name, "preview.target") && !strcmp(value, "live")) {
+        return fail(error, size, "preview target live was renamed; use virtual");
     }
     const char *dot = strchr(name, '.');
     if (!dot || dot == name || !dot[1]) {
@@ -353,6 +393,9 @@ int config_set_value(Config *config, const char *name, const char *value, char *
             Config candidate = *config;
             if (assign(&candidate, setting, value, error, size)) {
                 return -1;
+            }
+            if (!strcmp(name, "stream.service")) {
+                config_stream_preset(&candidate);
             }
             *config = candidate;
             return 0;
@@ -408,6 +451,53 @@ static int valid_list(const char *value, const char *allowed, char *err, size_t 
     }
     return 0;
 }
+/* A server address contains no credentials. The worker joins the locally read key. */
+static int stream_config_validate(const StreamConfig *stream, char *error, size_t n)
+{
+    if (stream->tls_ca_file[0] && stream->tls_ca_file[0] != '/') {
+        return fail(error, n, "stream.tls_ca_file must be an absolute CA certificate path");
+    }
+    if (stream->key_file[0] && stream->key_file[0] != '/') {
+        return fail(error, n, "stream.key_file must be an absolute stream-key file path");
+    }
+    if (stream->reconnect_initial_ms > stream->reconnect_max_ms) {
+        return fail(error, n, "stream reconnect_initial_ms must not exceed reconnect_max_ms");
+    }
+    if (!stream->server_url[0]) {
+        return 0;
+    }
+    const char *authority;
+    if (!strncmp(stream->server_url, "rtmp://", 7)) {
+        authority = stream->server_url + 7;
+    } else if (!strncmp(stream->server_url, "rtmps://", 8)) {
+        authority = stream->server_url + 8;
+    } else {
+        return fail(error, n, "stream.server_url must use rtmp:// or rtmps://");
+    }
+    size_t host_length = strcspn(authority, "/?#");
+    if (!host_length || authority[host_length] != '/') {
+        return fail(error, n,
+                    "stream.server_url needs a server host and application path, without the key");
+    }
+    for (const unsigned char *p = (const unsigned char *)authority; *p; p++) {
+        if (*p <= 32 || *p >= 127 || *p == '@' || *p == '#' || *p == '\\' || *p == '%') {
+            return fail(
+                error, n,
+                "stream.server_url must not contain credentials, escapes, whitespace or fragments");
+        }
+    }
+    const char *path = authority + host_length;
+    const char *query = strchr(path, '?');
+    size_t path_length = query ? (size_t)(query - path) : strlen(path);
+    if (path_length < 2 || strstr(path, "../") || strstr(path, "//")) {
+        return fail(error, n, "stream.server_url needs an application path without a stream key");
+    }
+    if (query && (strstr(query, "key") || strstr(query, "token") || strstr(query, "password") ||
+                  strstr(query, "secret") || strstr(query, "auth"))) {
+        return fail(error, n, "stream.server_url must not contain secrets; use stream.key_file");
+    }
+    return 0;
+}
 int config_validate(const Config *c, char *err, size_t n)
 {
     /* Runtime commands and startup flags must pass the same schema as INI values. */
@@ -440,6 +530,9 @@ int config_validate(const Config *c, char *err, size_t n)
                             setting->min, setting->max);
             }
         }
+    }
+    if (stream_config_validate(&c->stream, err, n)) {
+        return -1;
     }
     if (!c->output_device[0] || !c->camera_device[0] || !c->record_dir[0] || !c->video_codec[0] ||
         !c->audio_codec[0] || !c->record_container[0]) {
@@ -616,6 +709,12 @@ static int handler(void *u, const char *section, const char *key, const char *va
     if (!key) {
         return 1;
     }
+    if (!strcmp(section, "annotations") &&
+        (!strcmp(key, "live_keys") || !strcmp(key, "live_clicks"))) {
+        fail(p->err, p->n, "%s:%d: annotations.%s was renamed; use annotations.virtual_%s", p->path,
+             line, key, strstr(key, "clicks") ? "clicks" : "keys");
+        return 0;
+    }
     key = canonical_key(section, key);
     if (snprintf(full, sizeof full, "%s.%s", section, key) >= (int)sizeof full) {
         fail(p->err, p->n, "%s:%d: key too long", p->path, line);
@@ -705,6 +804,24 @@ int config_load(Config *c, const char *path, bool explicit_path, char *err, size
     err[0] = 0;
     int rc = ini_parse_file(f, handler, p);
     int last_line = p->last_line;
+    bool explicit_video = false, explicit_audio = false, explicit_encoder = false;
+    for (int i = 0; i < p->seen_count; i++) {
+        explicit_video |= !strcmp(p->seen[i], "stream.video_bitrate_kbps");
+        explicit_audio |= !strcmp(p->seen[i], "stream.audio_bitrate_kbps");
+        explicit_encoder |= !strcmp(p->seen[i], "stream.encoder_preset");
+    }
+    StreamConfig explicit_settings = candidate.stream;
+    config_stream_preset(&candidate);
+    if (explicit_video) {
+        candidate.stream.video_bitrate_kbps = explicit_settings.video_bitrate_kbps;
+    }
+    if (explicit_audio) {
+        candidate.stream.audio_bitrate_kbps = explicit_settings.audio_bitrate_kbps;
+    }
+    if (explicit_encoder) {
+        memcpy(candidate.stream.encoder_preset, explicit_settings.encoder_preset,
+               sizeof candidate.stream.encoder_preset);
+    }
     if (ferror(f) && !rc) {
         rc = -1;
     }

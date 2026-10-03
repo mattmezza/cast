@@ -706,7 +706,7 @@ CastOutput *output_open(const Config *c, char *e, size_t n)
     o->fd = -1;
     o->w = c->width;
     o->h = c->height;
-    if (!c->live_enabled || !strcmp(c->output_device, "none")) {
+    if (!c->virtual_enabled || !strcmp(c->output_device, "none")) {
         return o;
     }
     o->fd = open(c->output_device, O_RDWR | O_NONBLOCK | O_CLOEXEC);
@@ -893,7 +893,7 @@ void camera_doctor(const Config *c, char *out, size_t n)
     size_t used = strlen(out);
     int fd = open(c->output_device, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
     struct v4l2_capability cap = {0};
-    if (!strcmp(c->output_device, "none") || !c->live_enabled) {
+    if (!strcmp(c->output_device, "none") || !c->virtual_enabled) {
         snprintf(out + used, n - used,
                  "Virtual output: disabled (test-only 'none' discards video).\n");
     } else if (fd < 0) {

@@ -37,8 +37,8 @@ typedef struct {
     uint32_t sequence, version, snapshot_size;
     uint64_t generation;
     PanelSnapshot snapshot;
-    TestFrameInfo frame[2];
-    uint8_t pixels[2][PREVIEW_BYTES];
+    TestFrameInfo frame[3];
+    uint8_t pixels[3][PREVIEW_BYTES];
 } TestShared;
 static void delay(void)
 {
@@ -149,12 +149,12 @@ static void reject_attach(const Config *config, uint32_t version, uint32_t snaps
 static void wait_raw(TestShared *shared, bool paused, bool recording)
 {
     uint64_t deadline = cast_now_ns() + UINT64_C(3000000000);
-    while ((!shared->snapshot.connected || shared->snapshot.state.live_paused != paused ||
+    while ((!shared->snapshot.connected || shared->snapshot.state.virtual_paused != paused ||
             shared->snapshot.state.recording != recording || (shared->sequence & 1)) &&
            cast_now_ns() < deadline) {
         delay();
     }
-    assert(shared->snapshot.connected && shared->snapshot.state.live_paused == paused &&
+    assert(shared->snapshot.connected && shared->snapshot.state.virtual_paused == paused &&
            shared->snapshot.state.recording == recording && !(shared->sequence & 1));
 }
 static PanelSnapshot wait_client(PanelClient *client, bool connected, uint64_t completed)
@@ -233,42 +233,42 @@ int main(void)
     int duplicate_fd;
     TestReply duplicate;
     assert(attach(&config, &duplicate_fd, &duplicate) < 0);
-    CMD(&config, true, "live", "message", "Sharing is paused");
+    CMD(&config, true, "virtual", "message", "Sharing is paused");
     assert(!strcmp(shared->snapshot.config.pause_text, "Sharing is paused"));
-    CMD(&config, true, "live", "message", "");
+    CMD(&config, true, "virtual", "message", "");
     assert(!shared->snapshot.config.pause_text[0]);
     uint64_t epoch = shared->snapshot.privacy_epoch;
-    CMD(&config, true, "live", "resume");
+    CMD(&config, true, "virtual", "resume");
     wait_raw(shared, false, false);
     uint64_t deadline = cast_now_ns() + UINT64_C(2000000000);
     while (shared->pixels[0][0] == 0x20 && cast_now_ns() < deadline) {
         delay();
     }
     assert(shared->pixels[0][0] != 0x20);
-    CMD(&config, true, "live", "freeze");
-    assert(shared->snapshot.state.live_frozen);
+    CMD(&config, true, "virtual", "freeze");
+    assert(shared->snapshot.state.virtual_frozen);
     uint8_t frozen[32];
     memcpy(frozen, shared->pixels[0], sizeof frozen);
-    CMD(&config, true, "live", "message", "Frozen label unchanged");
+    CMD(&config, true, "virtual", "message", "Frozen label unchanged");
     delay();
     assert(!memcmp(frozen, shared->pixels[0], sizeof frozen));
-    CMD(&config, true, "live", "blur", "on");
-    assert(shared->snapshot.state.live_frozen && shared->snapshot.state.live_blurred);
+    CMD(&config, true, "virtual", "blur", "on");
+    assert(shared->snapshot.state.virtual_frozen && shared->snapshot.state.virtual_blurred);
     assert(memcmp(frozen, shared->pixels[0], sizeof frozen));
     uint8_t blurred[32];
     memcpy(blurred, shared->pixels[0], sizeof blurred);
     delay();
     assert(!memcmp(blurred, shared->pixels[0], sizeof blurred));
-    CMD(&config, true, "live", "blur", "off");
-    assert(shared->snapshot.state.live_frozen && !shared->snapshot.state.live_blurred);
+    CMD(&config, true, "virtual", "blur", "off");
+    assert(shared->snapshot.state.virtual_frozen && !shared->snapshot.state.virtual_blurred);
     assert(!memcmp(frozen, shared->pixels[0], sizeof frozen));
-    CMD(&config, true, "live", "pause");
+    CMD(&config, true, "virtual", "pause");
     /* Acknowledgement comes after both stale pixels and metadata have been replaced. */
-    assert(shared->snapshot.state.live_paused && shared->snapshot.privacy_epoch > epoch);
+    assert(shared->snapshot.state.virtual_paused && shared->snapshot.privacy_epoch > epoch);
     assert(shared->pixels[0][0] == 0x20);
-    CMD(&config, true, "live", "unfreeze");
-    assert(shared->snapshot.state.live_paused);
-    CMD(&config, true, "live", "resume");
+    CMD(&config, true, "virtual", "unfreeze");
+    assert(shared->snapshot.state.virtual_paused);
+    CMD(&config, true, "virtual", "resume");
     char recording[PATH_MAX];
     snprintf(recording, sizeof recording, "%s/panel.mkv", directory);
     CMD(&config, true, "settings", "record.countdown", "3");
@@ -290,7 +290,7 @@ int main(void)
     assert(shared->pixels[0][0] == 0x20 && shared->pixels[1][0] == 0x20);
     CMD(&config, true, "record", "pause");
     CMD(&config, true, "resume");
-    assert(!shared->snapshot.state.live_paused && shared->snapshot.state.record_paused);
+    assert(!shared->snapshot.state.virtual_paused && shared->snapshot.state.record_paused);
     CMD(&config, true, "record", "freeze");
     CMD(&config, true, "record", "blur", "on");
     assert(shared->snapshot.state.record_paused && shared->snapshot.state.record_frozen &&
@@ -324,8 +324,8 @@ int main(void)
     assert(shared->snapshot.config.radius == 37 && shared->snapshot.config.border_width == 5);
     CMD(&config, false, "settings", "camera.radius", "90", "output.width", "640");
     assert(shared->snapshot.config.radius == 37);
-    const char *live_resume[] = {"live", "resume"};
-    assert(send_command(&config, reply.generation ^ 1, 2, live_resume) < 0);
+    const char *virtual_resume[] = {"virtual", "resume"};
+    assert(send_command(&config, reply.generation ^ 1, 2, virtual_resume) < 0);
     close(peer);
     deadline = cast_now_ns() + UINT64_C(1000000000);
     while (shared->snapshot.connected && cast_now_ns() < deadline) {
@@ -333,7 +333,7 @@ int main(void)
     }
     assert(!shared->snapshot.connected && !shared->frame[0].width);
     assert(!shared->pixels[0][0] && !shared->pixels[1][PREVIEW_BYTES - 1]);
-    assert(send_command(&config, reply.generation, 2, live_resume) < 0);
+    assert(send_command(&config, reply.generation, 2, virtual_resume) < 0);
     munmap(shared, reply.bytes);
 
     char error[CAST_ERR];
@@ -343,12 +343,12 @@ int main(void)
     PanelSnapshot snapshot = wait_client(client, true, 0);
     assert(snapshot.config.radius == 37 && snapshot.daemon_generation != reply.generation);
     uint64_t client_generation = snapshot.daemon_generation;
-    assert(send_command(&config, reply.generation, 2, live_resume) < 0);
+    assert(send_command(&config, reply.generation, 2, virtual_resume) < 0);
     assert(strstr(snapshot.exclusion, "unsupported"));
-    const char *pause[] = {"live", "pause"};
+    const char *pause[] = {"virtual", "pause"};
     queue(client, 2, pause);
     snapshot = wait_client(client, true, 1);
-    assert(snapshot.state.live_paused && !snapshot.command_failed);
+    assert(snapshot.state.virtual_paused && !snapshot.command_failed);
     Frame frame = {0};
     deadline = cast_now_ns() + UINT64_C(1000000000);
     int got = 0;
@@ -382,9 +382,9 @@ int main(void)
     assert(!frame.data);
     daemon = start_daemon(config, startup);
     snapshot = wait_client(client, true, 1);
-    assert(snapshot.daemon_generation != client_generation && snapshot.state.live_paused);
+    assert(snapshot.daemon_generation != client_generation && snapshot.state.virtual_paused);
     assert(snapshot.config.radius != 37); /* Session edits were never persisted. */
-    assert(send_command(&config, reply.generation, 2, live_resume) < 0);
+    assert(send_command(&config, reply.generation, 2, virtual_resume) < 0);
     CMD(&config, true, "quit");
     assert(waitpid(daemon, &status, 0) == daemon && WIFEXITED(status) && !WEXITSTATUS(status));
     panel_client_close(client);

@@ -13,12 +13,20 @@ uint64_t cast_now_ns(void)
 /* Pure output-state transitions. The daemon performs media barriers before ACK. */
 int state_command(State *s, const char *output, const char *action, char *err, size_t n)
 {
+    if (!strcmp(output, "live")) {
+        snprintf(err, n, "cast live was renamed; use cast virtual");
+        return -1;
+    }
     if (!strcmp(output, "pause")) {
         if (!s->group_paused) {
             s->group_paused = true;
-            s->group_live_restore = !s->live_paused;
+            s->group_virtual_restore = !s->virtual_paused;
             s->group_record_restore = s->recording && !s->record_paused;
-            s->live_paused = true;
+            s->group_stream_restore = s->stream_active && !s->stream_paused;
+            if (s->stream_active) {
+                s->stream_paused = true;
+            }
+            s->virtual_paused = true;
             if (s->recording) {
                 s->record_paused = true;
             }
@@ -27,44 +35,83 @@ int state_command(State *s, const char *output, const char *action, char *err, s
     }
     if (!strcmp(output, "resume")) {
         if (s->group_paused) {
-            if (s->group_live_restore) {
-                s->live_paused = false;
+            if (s->group_virtual_restore) {
+                s->virtual_paused = false;
             }
             if (s->group_record_restore && s->recording) {
                 s->record_paused = false;
             }
-            s->group_paused = s->group_live_restore = s->group_record_restore = false;
+            if (s->group_stream_restore && s->stream_active) {
+                s->stream_paused = false;
+            }
+            s->group_stream_restore = false;
+            s->group_paused = s->group_virtual_restore = s->group_record_restore = false;
         }
         return 0;
     }
-    if (!strcmp(output, "live")) {
+    if (!strcmp(output, "virtual")) {
         bool solid = true;
         if (!strcmp(action, "pause")) {
-            s->live_paused = true;
+            s->virtual_paused = true;
         } else if (!strcmp(action, "resume")) {
-            s->live_paused = false;
+            s->virtual_paused = false;
         } else if (!strcmp(action, "toggle")) {
-            s->live_paused = !s->live_paused;
+            s->virtual_paused = !s->virtual_paused;
         } else if (!strcmp(action, "freeze")) {
-            s->live_frozen = true;
+            s->virtual_frozen = true;
             solid = false;
         } else if (!strcmp(action, "unfreeze")) {
-            s->live_frozen = false;
+            s->virtual_frozen = false;
             solid = false;
         } else if (!strcmp(action, "blur")) {
-            s->live_blurred = true;
+            s->virtual_blurred = true;
             solid = false;
         } else if (!strcmp(action, "unblur")) {
-            s->live_blurred = false;
+            s->virtual_blurred = false;
             solid = false;
         } else if (!strcmp(action, "blur-toggle")) {
-            s->live_blurred = !s->live_blurred;
+            s->virtual_blurred = !s->virtual_blurred;
             solid = false;
         } else {
             goto invalid;
         }
         if (solid) {
-            s->group_live_restore = false;
+            s->group_virtual_restore = false;
+        }
+        return 0;
+    }
+    if (!strcmp(output, "stream")) {
+        if (!s->stream_active) {
+            snprintf(err, n, "no streaming session exists; use cast stream start");
+            return -1;
+        }
+        bool solid = true;
+        if (!strcmp(action, "pause")) {
+            s->stream_paused = true;
+        } else if (!strcmp(action, "resume")) {
+            s->stream_paused = false;
+        } else if (!strcmp(action, "toggle")) {
+            s->stream_paused = !s->stream_paused;
+        } else if (!strcmp(action, "freeze")) {
+            s->stream_frozen = true;
+            solid = false;
+        } else if (!strcmp(action, "unfreeze")) {
+            s->stream_frozen = false;
+            solid = false;
+        } else if (!strcmp(action, "blur")) {
+            s->stream_blurred = true;
+            solid = false;
+        } else if (!strcmp(action, "unblur")) {
+            s->stream_blurred = false;
+            solid = false;
+        } else if (!strcmp(action, "blur-toggle")) {
+            s->stream_blurred = !s->stream_blurred;
+            solid = false;
+        } else {
+            goto invalid;
+        }
+        if (solid) {
+            s->group_stream_restore = false;
         }
         return 0;
     }

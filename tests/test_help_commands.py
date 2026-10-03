@@ -78,10 +78,10 @@ with tempfile.TemporaryDirectory(prefix="cast-help-test-") as directory:
     assert {"setup", "update", "completions", "panel", "logo", "text", "--config"} <= bash_complete("cast", "")
     assert bash_complete("cast", "--backend", "") == {"xorg", "wayland", "synthetic"}
     assert {"pause", "resume", "freeze", "unfreeze", "message", "title", "subtitle", "footer"} <= \
-        bash_complete("cast", "--backend", "xorg", "live", "")
+        bash_complete("cast", "--backend", "xorg", "virtual", "")
     assert {"top", "bottom", "left", "right"} <= bash_complete("cast", "camera", "anchor", "")
     assert {"cut", "freeze", "unfreeze", "blur", "title", "subtitle", "footer"} <= bash_complete("cast", "record", "")
-    assert bash_complete("cast", "live", "blur", "") == {"on", "off", "toggle"}
+    assert bash_complete("cast", "virtual", "blur", "") == {"on", "off", "toggle"}
     assert bash_complete("cast", "record", "blur", "") == {"on", "off", "toggle"}
     assert bash_complete("cast", "layout", "") == {"overlay", "stage", "split", "screen", "camera", "next", "prev"}
     for route in (("camera", "anchor"), ("camera", "shape"), ("camera", "aspect"), ("preset",)):
@@ -99,7 +99,7 @@ with tempfile.TemporaryDirectory(prefix="cast-help-test-") as directory:
     assert bash_complete("cast", "camera", "mirror", "") == {"on", "off", "toggle"}
     assert bash_complete("cast", "camera", "aspect", "4", ":", "") == {"3"}
     assert bash_complete("cast", "annotations", "record", "keys", "") == {"on", "off"}
-    assert bash_complete("cast", "preview", "target", "") == {"live", "record"}
+    assert bash_complete("cast", "preview", "target", "") == {"virtual", "record"}
     assert bash_complete("cast", "audio", "virtual", "") == {"on", "off", "toggle"}
     assert bash_complete("cast", "completions", "--script", "") == set(SCRIPTS)
     keys = bash_complete("cast", "settings", "")

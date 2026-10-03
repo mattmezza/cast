@@ -139,6 +139,77 @@ static void json_string(char *dst, size_t n, const char *s)
     dst[pos++] = '"';
     dst[pos] = 0;
 }
+/* Display only the authority; URL paths/query parameters are destination-private. */
+static void stream_destination(const StreamConfig *config, char *destination, size_t n)
+{
+    const char *host = strstr(config->server_url, "://");
+    if (!host) {
+        snprintf(destination, n, "unconfigured");
+        return;
+    }
+    host += 3;
+    size_t length = strcspn(host, "/?#");
+    snprintf(destination, n, "%.*s", (int)length, host);
+}
+static void select_preview(App *app, const char *target)
+{
+    snprintf(app->config.preview_target, sizeof app->config.preview_target, "%s", target);
+    panel_transport_barrier(app->panel, app, false);
+}
+static int stream_status_reply(App *a, bool json, char *out, size_t n)
+{
+    StreamSnapshot status;
+    media_stream_status(a->media, &status);
+    char destination[1024], safe_destination[6147], safe_error[CAST_ERR * 6 + 3];
+    stream_destination(&a->config.stream, destination, sizeof destination);
+    json_string(safe_destination, sizeof safe_destination, destination);
+    json_string(safe_error, sizeof safe_error, status.error);
+    uint64_t now = cast_now_ns();
+    double session = status.active && status.session_started_ns && now > status.session_started_ns
+                         ? (now - status.session_started_ns) / 1e9
+                         : 0;
+    double connected = status.state == STREAM_STREAMING && status.connected_started_ns &&
+                               now > status.connected_started_ns
+                           ? (now - status.connected_started_ns) / 1e9
+                           : 0;
+    double bitrate = status.outgoing_bitrate_kbps;
+    double retry = status.next_retry_ns > now ? (status.next_retry_ns - now) / 1e9 : 0;
+    int length;
+    if (json) {
+        length = snprintf(
+            out, n,
+            "{\"state\":\"%s\",\"active\":%s,\"paused\":%s,\"frozen\":%s,\"blurred\":%s,"
+            "\"service\":\"%s\",\"destination\":%s,\"generation\":%llu,"
+            "\"session_duration\":%.3f,\"connected_duration\":%.3f,\"outgoing_bitrate_kbps\":%.3f,"
+            "\"bytes_written\":%llu,\"video_frames\":%llu,\"audio_samples\":%llu,"
+            "\"queue_depth\":%u,\"dropped_frames\":%llu,\"retry_attempt\":%u,"
+            "\"next_retry_seconds\":%.3f,\"error\":%s}",
+            stream_lifecycle_name(status.state), status.active ? "true" : "false",
+            a->state.stream_paused ? "true" : "false", a->state.stream_frozen ? "true" : "false",
+            a->state.stream_blurred ? "true" : "false", a->config.stream.service, safe_destination,
+            (unsigned long long)status.generation, session, connected, bitrate,
+            (unsigned long long)status.bytes_written, (unsigned long long)status.video_frames,
+            (unsigned long long)status.audio_samples, status.queue_depth,
+            (unsigned long long)status.dropped_frames, status.retry_attempt, retry, safe_error);
+    } else {
+        length = snprintf(
+            out, n,
+            "stream=%s presentation=%s service=%s destination=%s session=%.3fs connected=%.3fs "
+            "outgoing=%.1fkbps queue=%u dropped=%llu retry=%u next_retry=%.3fs error=%s\n"
+            "Network writes describe local transmission; service/viewer delivery is not measured.",
+            stream_lifecycle_name(status.state),
+            a->state.stream_paused    ? "paused"
+            : a->state.stream_blurred ? "blurred"
+            : a->state.stream_frozen  ? "frozen"
+                                      : "composition",
+            a->config.stream.service, destination, session, connected, bitrate, status.queue_depth,
+            (unsigned long long)status.dropped_frames, status.retry_attempt, retry, status.error);
+    }
+    if (length < 0 || (size_t)length >= n) {
+        return app_error(out, n, "stream status exceeds IPC limit");
+    }
+    return 0;
+}
 static int status(App *a, bool json, char *out, size_t n)
 {
     State *s = &a->state;
@@ -151,6 +222,10 @@ static int status(App *a, bool json, char *out, size_t n)
     char virtual_name[sizeof c->virtual_name * 6 + 3];
     char pause_text[sizeof c->pause_text * 6 + 3];
     int length;
+    char stream[CAST_ERR * 2];
+    if (stream_status_reply(a, json, stream, sizeof stream)) {
+        return app_error(out, n, "%s", stream);
+    }
     json_string(path, sizeof path, s->record_path);
     json_string(err, sizeof err, s->last_error);
     json_string(source, sizeof source, c->monitor);
@@ -167,12 +242,14 @@ static int status(App *a, bool json, char *out, size_t n)
             "{\"version\":\"%s\",\"backend\":%s,\"capabilities\":{\"capture\":%s,\"cursor_"
             "metadata\":%s,\"embedded_cursor\":%s,\"input\":%s,\"region_selection\":%s,"
             "\"window_selection\":%s,\"preview\":%s},\"source\":{\"monitor\":%s,\"kind\":\"%"
-            "s\",\"region\":[%d,%d,%d,%d]},\"live\":{\"enabled\":%s,\"state\":\"%s\",\"message\":%"
+            "s\",\"region\":[%d,%d,%d,%d]},\"virtual\":{\"enabled\":%s,\"state\":\"%s\","
+            "\"message\":%"
             "s,\"paused\":%s,\"frozen\":%s,\"blurred\":%s},"
             "\"record\":{\"state\":\"%s\",\"path\":%s,\"duration\":%.3f,\"countdown\":%s,"
             "\"finalizing\":%s,\"paused\":%s,\"frozen\":%s,\"blurred\":%s,\"cut\":%s,"
             "\"countdown_kind\":%s},"
-            "\"group_paused\":%s,\"layout\":\"%s\",\"zoom\":%.3f,\"camera_visible\":%s,"
+            "\"stream\":%s,\"group_paused\":%s,\"layout\":\"%s\",\"zoom\":%.3f,\"camera_visible\":%"
+            "s,"
             "\"audio\":{\"mic\":{\"enabled\":%s,\"source\":%s,\"gain\":%.3f},"
             "\"desktop\":{\"enabled\":%s,\"source\":%s,\"gain\":%.3f},"
             "\"virtual\":{\"enabled\":%s,\"name\":%s},\"readiness\":%s},"
@@ -182,13 +259,14 @@ static int status(App *a, bool json, char *out, size_t n)
             cap.input ? "true" : "false", cap.region_selection ? "true" : "false",
             cap.window_selection ? "true" : "false", cap.preview ? "true" : "false", source,
             c->capture_kind, c->region_x, c->region_y, c->region_w, c->region_h,
-            c->live_enabled ? "true" : "false",
-            s->live_paused    ? "paused"
-            : s->live_blurred ? "blurred"
-            : s->live_frozen  ? "frozen"
-                              : "live",
-            pause_text, s->live_paused ? "true" : "false", s->live_frozen ? "true" : "false",
-            s->live_blurred ? "true" : "false",
+            c->virtual_enabled ? "true" : "false",
+            !c->virtual_enabled  ? "stopped"
+            : s->virtual_paused  ? "paused"
+            : s->virtual_blurred ? "blurred"
+            : s->virtual_frozen  ? "frozen"
+                                 : "virtual",
+            pause_text, s->virtual_paused ? "true" : "false", s->virtual_frozen ? "true" : "false",
+            s->virtual_blurred ? "true" : "false",
             !s->recording       ? "stopped"
             : s->record_cut     ? "cut"
             : s->record_paused  ? "paused"
@@ -202,32 +280,32 @@ static int status(App *a, bool json, char *out, size_t n)
             !a->countdown         ? "null"
             : a->countdown_resume ? "\"resume\""
                                   : "\"start\"",
-            s->group_paused ? "true" : "false", c->layout, c->zoom_factor,
+            stream, s->group_paused ? "true" : "false", c->layout, c->zoom_factor,
             c->camera_visible ? "true" : "false", c->mic ? "true" : "false", mic_source,
             c->mic_gain, c->desktop ? "true" : "false", desktop_source, c->desktop_gain,
             c->virtual_audio ? "true" : "false", virtual_name, audio[0] ? audio : "{}", err,
             (unsigned long long)s->dropped_frames);
     } else {
-        length =
-            snprintf(out, n,
-                     "backend=%s source=%s:%s layout=%s camera=%s zoom=%.2f\nlive=%s recording=%s "
-                     "duration=%.3fs path=%s "
-                     "countdown=%s\nlive_message=%s\naudio=%s\ndropped_frames=%llu error=%s",
-                     c->backend, c->capture_kind, c->monitor[0] ? c->monitor : "selected",
-                     c->layout, c->camera_visible ? "visible" : "hidden", c->zoom_factor,
-                     s->live_paused    ? "PAUSED"
-                     : s->live_blurred ? "BLURRED"
-                     : s->live_frozen  ? "FROZEN"
-                                       : "LIVE",
-                     s->recording                        ? (s->record_cut       ? "CUT"
-                                                            : s->record_paused  ? "RECORDING-PAUSED"
-                                                            : s->record_blurred ? "BLURRED"
-                                                            : s->record_frozen  ? "FROZEN"
-                                                                                : "RECORDING")
-                     : media_record_finalizing(a->media) ? "finalizing"
-                                                         : "stopped",
-                     seconds, s->record_path, a->countdown ? "pending" : "off", c->pause_text,
-                     audio, (unsigned long long)s->dropped_frames, s->last_error);
+        length = snprintf(
+            out, n,
+            "backend=%s source=%s:%s layout=%s camera=%s zoom=%.2f\nvirtual=%s recording=%s "
+            "duration=%.3fs path=%s "
+            "countdown=%s\nvirtual_message=%s\n%s\naudio=%s\ndropped_frames=%llu error=%s",
+            c->backend, c->capture_kind, c->monitor[0] ? c->monitor : "selected", c->layout,
+            c->camera_visible ? "visible" : "hidden", c->zoom_factor,
+            s->virtual_paused    ? "PAUSED"
+            : s->virtual_blurred ? "BLURRED"
+            : s->virtual_frozen  ? "FROZEN"
+                                 : "VIRTUAL",
+            s->recording                        ? (s->record_cut       ? "CUT"
+                                                   : s->record_paused  ? "RECORDING-PAUSED"
+                                                   : s->record_blurred ? "BLURRED"
+                                                   : s->record_frozen  ? "FROZEN"
+                                                                       : "RECORDING")
+            : media_record_finalizing(a->media) ? "finalizing"
+                                                : "stopped",
+            seconds, s->record_path, a->countdown ? "pending" : "off", c->pause_text, stream, audio,
+            (unsigned long long)s->dropped_frames, s->last_error);
     }
     if (length < 0 || (size_t)length >= n) {
         return app_error(out, n, "status exceeds IPC limit; use shorter paths/source names");
@@ -238,7 +316,7 @@ static int barrier(App *a, State *candidate, char *e, size_t n)
 {
     int result = 0;
     State previous = a->state;
-    if (candidate->live_frozen && !previous.live_frozen &&
+    if (candidate->virtual_frozen && !previous.virtual_frozen &&
         app_freeze_frame(a, false, &a->frozen, e, n)) {
         return -1;
     }
@@ -246,25 +324,43 @@ static int barrier(App *a, State *candidate, char *e, size_t n)
         app_freeze_frame(a, true, &a->record_frozen, e, n)) {
         return -1;
     }
+    if (candidate->stream_frozen && !previous.stream_frozen &&
+        app_freeze_frame(a, 2, &a->stream_frozen, e, n)) {
+        return -1;
+    }
     a->state = *candidate;
     platform_events(a->platform, a->compositor, &a->config, true);
     compositor_clear(a->compositor);
-    if (candidate->live_paused || (previous.live_frozen && !candidate->live_frozen) ||
-        (previous.live_blurred && !candidate->live_blurred)) {
-        frame_free(&a->live_raw);
+    if (candidate->virtual_paused || (previous.virtual_frozen && !candidate->virtual_frozen) ||
+        (previous.virtual_blurred && !candidate->virtual_blurred)) {
+        frame_free(&a->virtual_raw);
     }
     if (candidate->record_paused || candidate->record_cut ||
         (previous.record_frozen && !candidate->record_frozen) ||
         (previous.record_blurred && !candidate->record_blurred)) {
         frame_free(&a->record_raw);
     }
+    bool stream_changed = candidate->stream_paused != previous.stream_paused ||
+                          candidate->stream_frozen != previous.stream_frozen ||
+                          candidate->stream_blurred != previous.stream_blurred;
+    if (stream_changed) {
+        frame_free(&a->stream_raw);
+        if (candidate->stream_paused && candidate->stream_frozen && !previous.stream_paused) {
+            if (frame_copy(&a->stream_frozen, &a->neutral)) {
+                frame_free(&a->stream_frozen);
+            }
+        }
+        media_stream_privacy(a->media, candidate->stream_paused || candidate->stream_frozen ||
+                                           candidate->stream_blurred);
+        media_stream_barrier(a->media);
+    }
     if (app_output_frames(a, e, n)) {
         result = -1;
     }
-    if (candidate->live_paused && !previous.live_paused && candidate->live_frozen) {
+    if (candidate->virtual_paused && !previous.virtual_paused && candidate->virtual_frozen) {
         if (frame_copy(&a->frozen, &a->neutral)) {
             frame_free(&a->frozen);
-            result = app_error(e, n, "cannot replace frozen live frame with neutral content");
+            result = app_error(e, n, "cannot replace frozen virtual frame with neutral content");
         }
     }
     if (candidate->record_paused && !previous.record_paused && candidate->record_frozen) {
@@ -273,15 +369,16 @@ static int barrier(App *a, State *candidate, char *e, size_t n)
             result = app_error(e, n, "cannot replace frozen recording frame with neutral content");
         }
     }
-    bool live_silent = !a->config.live_enabled || candidate->live_paused ||
-                       candidate->live_frozen || candidate->live_blurred;
+    bool virtual_silent = !a->config.virtual_enabled || candidate->virtual_paused ||
+                          candidate->virtual_frozen || candidate->virtual_blurred;
     bool record_silent =
         candidate->record_paused || candidate->record_frozen || candidate->record_blurred;
-    if (a->config.live_enabled &&
-        media_live(a->media, a->live.data ? &a->live : &a->neutral, live_silent, e, n)) {
+    if (a->config.virtual_enabled &&
+        media_virtual(a->media, a->virtual.data ? &a->virtual : &a->neutral, virtual_silent, e,
+                      n)) {
         result = -1;
     }
-    if (media_privacy(a->media, live_silent, candidate->recording && record_silent,
+    if (media_privacy(a->media, virtual_silent, candidate->recording && record_silent,
                       candidate->recording && candidate->record_cut, e, n)) {
         result = -1;
     }
@@ -312,9 +409,18 @@ static int barrier(App *a, State *candidate, char *e, size_t n)
             result = -1;
         }
     }
+    if (candidate->stream_active && stream_changed &&
+        media_stream_frame(a->media, a->stream.data ? &a->stream : &a->neutral,
+                           candidate->stream_paused || candidate->stream_frozen ||
+                               candidate->stream_blurred,
+                           e, n)) {
+        result = -1;
+    }
     panel_transport_barrier(a->panel, a, false);
     if (platform_capabilities(a->platform).preview) {
-        const Frame *target = !strcmp(a->config.preview_target, "record") ? &a->record : &a->live;
+        const Frame *target = !strcmp(a->config.preview_target, "record")   ? &a->record
+                              : !strcmp(a->config.preview_target, "stream") ? &a->stream
+                                                                            : &a->virtual;
         if (!target->data) {
             target = &a->neutral;
         }
@@ -340,7 +446,11 @@ int app_recording_start(App *a, const char *path, char *e, size_t n)
     media_record_path(a->media, a->state.record_path, sizeof a->state.record_path);
     a->state.record_paused = a->state.group_paused;
     State candidate = a->state;
-    return barrier(a, &candidate, e, n);
+    int result = barrier(a, &candidate, e, n);
+    if (!result) {
+        select_preview(a, "record");
+    }
+    return result;
 }
 int app_recording_resume(App *a, char *e, size_t n)
 {
@@ -350,7 +460,11 @@ int app_recording_resume(App *a, char *e, size_t n)
     State candidate = a->state;
     candidate.record_cut = false;
     frame_free(&a->record_raw);
-    return barrier(a, &candidate, e, n);
+    int result = barrier(a, &candidate, e, n);
+    if (!result) {
+        select_preview(a, "record");
+    }
+    return result;
 }
 static int restart_reasons(const Config *old, const Config *c, bool recording, char *e, size_t n)
 {
@@ -367,7 +481,7 @@ static int restart_reasons(const Config *old, const Config *c, bool recording, c
     RESTART(strcmp(old->output_device, c->output_device), "output device");
     RESTART(old->width != c->width || old->height != c->height || old->fps != c->fps,
             "output dimensions/fps");
-    RESTART(old->live_enabled != c->live_enabled, "output enabled");
+    RESTART(old->virtual_enabled != c->virtual_enabled, "output enabled");
     RESTART(strcmp(old->virtual_name, c->virtual_name), "virtual microphone name");
     if (recording) {
         RESTART(
@@ -384,6 +498,12 @@ static int apply_candidate(App *a, Config *c, char *e, size_t n)
 {
     if (config_validate(c, e, n)) {
         return -1;
+    }
+    StreamSnapshot stream;
+    media_stream_status(a->media, &stream);
+    if (stream.active && stream_settings_changed(&a->config.stream, &c->stream)) {
+        return app_error(e, n,
+                         "stream connection/encoder settings are locked; cast stream stop first");
     }
     Capabilities cap = platform_capabilities(a->platform);
     if ((c->keys || c->clicks) && !cap.input) {
@@ -425,8 +545,10 @@ static int apply_candidate(App *a, Config *c, char *e, size_t n)
     a->config = *c;
     app_sync_source(a);
     compositor_clear(a->compositor);
-    frame_free(&a->live_raw);
+    frame_free(&a->virtual_raw);
     frame_free(&a->record_raw);
+    frame_free(&a->stream_raw);
+    media_stream_barrier(a->media);
     if (app_output_frames(a, e, n)) {
         return -1;
     }
@@ -461,13 +583,13 @@ static int command_message(App *a, const char *value, char *out, size_t n)
         return -1;
     }
     int result = 0;
-    if (a->state.live_paused && a->config.live_enabled &&
-        media_live(a->media, &a->neutral, true, out, n)) {
+    if (a->state.virtual_paused && a->config.virtual_enabled &&
+        media_virtual(a->media, &a->neutral, true, out, n)) {
         result = -1;
     }
     /* An active freeze keeps its original pixels; changing the label never changes state. */
     if (platform_capabilities(a->platform).preview &&
-        ((!strcmp(a->config.preview_target, "live") && a->state.live_paused) ||
+        ((!strcmp(a->config.preview_target, "virtual") && a->state.virtual_paused) ||
          (!strcmp(a->config.preview_target, "record") &&
           (!a->state.recording || a->state.record_paused))) &&
         platform_preview(a->platform, &a->neutral, &a->state, &a->config, out, n)) {
@@ -843,6 +965,100 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
     bool change = false;
     char applied_preset[sizeof a->current_preset] = "";
     out[0] = 0;
+    if (IS(0, "live") || (IS(0, "annotations") && IS(1, "live")) ||
+        (IS(0, "preview") && IS(1, "target") && IS(2, "live"))) {
+        return app_error(out, n,
+                         "cast live was renamed; use cast virtual (annotations virtual; preview "
+                         "target virtual)");
+    }
+    if (IS(0, "stream")) {
+        if (IS(1, "status")) {
+            if (ac != 2 && !(ac == 3 && IS(2, "--json"))) {
+                return app_error(out, n, "stream status [--json]");
+            }
+            return stream_status_reply(a, ac == 3, out, n);
+        }
+        if (IS(1, "start")) {
+            ARITY(2);
+            StreamSnapshot current;
+            media_stream_status(a->media, &current);
+            if (current.active) {
+                return app_error(out, n, "stream session already exists; cast stream stop first");
+            }
+            if (media_stream_start(a->media, &a->config, out, n)) {
+                return -1;
+            }
+            a->state.stream_active = true;
+            a->state.stream_connection_state = STREAM_CONNECTING;
+            a->state.stream_paused = true;
+            a->state.stream_frozen = a->state.stream_blurred = false;
+            a->state.group_stream_restore = false;
+            frame_free(&a->stream_raw);
+            frame_free(&a->stream_frozen);
+            State candidate = a->state;
+            if (barrier(a, &candidate, out, n)) {
+                return -1;
+            }
+            select_preview(a, "stream");
+            snprintf(out, n,
+                     "stream startup accepted in solid pause; inspect cast stream status, then "
+                     "cast stream resume");
+            return 0;
+        }
+        if (IS(1, "stop")) {
+            ARITY(2);
+            if (media_stream_stop(a->media, out, n)) {
+                return -1;
+            }
+            a->state.stream_active = false;
+            a->state.stream_connection_state = STREAM_STOPPED;
+            a->state.stream_paused = true;
+            a->state.stream_frozen = a->state.stream_blurred = false;
+            a->state.group_stream_restore = false;
+            frame_free(&a->stream_raw);
+            frame_free(&a->stream_frozen);
+            app_output_frames(a, out, n);
+            panel_transport_barrier(a->panel, a, false);
+            snprintf(out, n,
+                     "stream stopped; service buffering may delay the public broadcast ending");
+            return 0;
+        }
+        if (IS(1, "title") || IS(1, "subtitle") || IS(1, "footer")) {
+            ARITY(3);
+            const char *key = IS(1, "title")      ? "output.pause_title"
+                              : IS(1, "subtitle") ? "output.pause_subtitle"
+                                                  : "output.pause_footer";
+            if (config_set_value(&c, key, av[2], out, n) || apply_candidate(a, &c, out, n)) {
+                return -1;
+            }
+            snprintf(out, n, "shared output %s updated for this session", av[1]);
+            return 0;
+        }
+        const char *action = ac > 1 ? av[1] : "";
+        if (IS(1, "blur") && ac == 3) {
+            if (!oneof(av[2], "on,off,toggle")) {
+                return app_error(out, n, "stream blur [on|off|toggle]");
+            }
+            action = IS(2, "on") ? "blur" : IS(2, "off") ? "unblur" : "blur-toggle";
+        } else {
+            ARITY(2);
+        }
+        StreamSnapshot current;
+        media_stream_status(a->media, &current);
+        s.stream_active = current.active;
+        if (state_command(&s, "stream", action, out, n)) {
+            return -1;
+        }
+        if (barrier(a, &s, out, n)) {
+            return -1;
+        }
+        if (!strcmp(action, "resume")) {
+            select_preview(a, "stream");
+        }
+        snprintf(out, n, "stream presentation %s; previously transmitted media cannot be retracted",
+                 action);
+        return 0;
+    }
     if (IS(0, "status")) {
         if (ac != 1 && !(ac == 2 && IS(1, "--json"))) {
             return app_error(out, n, "status [--json]");
@@ -854,15 +1070,42 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
         int result = app_shutdown_privacy(a, out, n);
         app_request_stop();
         if (!result) {
-            snprintf(out, n, "cast shutting down; live output privacy-paused");
+            snprintf(out, n, "cast shutting down; virtual output privacy-paused");
         }
         return result;
     }
-    if (IS(0, "live") && IS(1, "message")) {
+    if (IS(0, "virtual") && (IS(1, "start") || IS(1, "stop"))) {
+        ARITY(2);
+        bool enabled = IS(1, "start");
+        if (enabled && a->config.virtual_enabled) {
+            return app_error(out, n, "virtual camera is already enabled; use cast virtual resume");
+        }
+        if (media_virtual_enabled(a->media, &a->config, enabled, out, n)) {
+            return -1;
+        }
+        a->config.virtual_enabled = enabled;
+        a->state.virtual_paused = true;
+        a->state.virtual_frozen = a->state.virtual_blurred = false;
+        a->state.group_virtual_restore = false;
+        frame_free(&a->virtual_raw);
+        frame_free(&a->frozen);
+        State candidate = a->state;
+        if (barrier(a, &candidate, out, n)) {
+            return -1;
+        }
+        if (enabled) {
+            select_preview(a, "virtual");
+        }
+        snprintf(out, n, "%s",
+                 enabled ? "virtual camera started privacy-paused; use cast virtual resume"
+                         : "virtual camera stopped");
+        return 0;
+    }
+    if (IS(0, "virtual") && IS(1, "message")) {
         ARITY(3);
         return command_message(a, av[2], out, n);
     }
-    if ((IS(0, "live") || IS(0, "record")) &&
+    if ((IS(0, "virtual") || IS(0, "record")) &&
         (IS(1, "title") || IS(1, "subtitle") || IS(1, "footer"))) {
         ARITY(3);
         const char *key = IS(1, "title")      ? "output.pause_title"
@@ -897,12 +1140,12 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
         snprintf(out, n, "session settings applied atomically; output states preserved");
         return 0;
     }
-    if (IS(0, "pause") || IS(0, "resume") || IS(0, "live")) {
+    if (IS(0, "pause") || IS(0, "resume") || IS(0, "virtual")) {
         const char *action = ac > 1 ? av[1] : "";
-        if (IS(0, "live")) {
+        if (IS(0, "virtual")) {
             if (IS(1, "blur") && ac == 3) {
                 if (!oneof(av[2], "on,off,toggle")) {
-                    return app_error(out, n, "live blur on|off|toggle");
+                    return app_error(out, n, "virtual blur on|off|toggle");
                 }
                 action = IS(2, "on") ? "blur" : IS(2, "off") ? "unblur" : "blur-toggle";
             } else {
@@ -918,12 +1161,15 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
             return -1;
         }
         result = barrier(a, &s, out, n);
+        if (!result && IS(0, "virtual") && IS(1, "resume")) {
+            select_preview(a, "virtual");
+        }
         if (!result) {
-            snprintf(out, n, "outputs updated: live %s, record %s",
-                     s.live_paused    ? "paused"
-                     : s.live_blurred ? "blurred"
-                     : s.live_frozen  ? "frozen"
-                                      : "live",
+            snprintf(out, n, "outputs updated: virtual %s, record %s",
+                     s.virtual_paused    ? "paused"
+                     : s.virtual_blurred ? "blurred"
+                     : s.virtual_frozen  ? "frozen"
+                                         : "virtual",
                      !s.recording       ? "stopped"
                      : s.record_cut     ? "cut"
                      : s.record_paused  ? "paused"
@@ -1057,7 +1303,11 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
         if (s.record_paused && !a->state.record_paused) {
             app_countdown_cancel(a);
         }
-        return barrier(a, &s, out, n);
+        result = barrier(a, &s, out, n);
+        if (!result && IS(1, "resume")) {
+            select_preview(a, "record");
+        }
+        return result;
     }
     if (IS(0, "config")) {
         ARITY(2);
@@ -1074,6 +1324,7 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
             fprintf(stderr,
                     "cast: backend lacks cursor metadata; reloaded cursor-follow disabled\n");
         }
+        fresh.virtual_enabled = a->config.virtual_enabled;
         Config effective = fresh;
         if (apply_candidate(a, &fresh, out, n)) {
             return -1;
@@ -1148,10 +1399,12 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
         RESTORE(clicks);
         RESTORE(keys);
         RESTORE_STR(keys_mode);
-        RESTORE(annotations_live_keys);
-        RESTORE(annotations_live_clicks);
+        RESTORE(annotations_virtual_keys);
+        RESTORE(annotations_virtual_clicks);
         RESTORE(annotations_record_keys);
         RESTORE(annotations_record_clicks);
+        RESTORE(annotations_stream_keys);
+        RESTORE(annotations_stream_clicks);
         fresh.zoom_factor = 1;
 #undef RESTORE
 #undef RESTORE_STR
@@ -1199,7 +1452,7 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
         change = true;
     } else if (IS(0, "screen") || IS(0, "capture") || IS(0, "preview")) {
         if (IS(0, "preview") && ac == 3 && IS(1, "target")) {
-            ENUM(c.preview_target, av[2], "live,record");
+            ENUM(c.preview_target, av[2], "virtual,record,stream");
             change = true;
         } else {
             if (platform_command(a->platform, &a->config, ac, av, out, n)) {
@@ -1256,8 +1509,10 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
         }
         if (ac == 2 && IS(1, "clear")) {
             compositor_clear(a->compositor);
-            frame_free(&a->live_raw);
+            frame_free(&a->virtual_raw);
             frame_free(&a->record_raw);
+            frame_free(&a->stream_raw);
+            media_stream_barrier(a->media);
             return barrier(a, &s, out, n);
         }
         if (ac == 3 && IS(1, "mode")) {
@@ -1271,16 +1526,22 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
         change = true;
     } else if (IS(0, "annotations")) {
         ARITY(4);
-        if (!oneof(av[1], "live,record") || !oneof(av[2], "keys,clicks") ||
+        if (!oneof(av[1], "virtual,record,stream") || !oneof(av[2], "keys,clicks") ||
             !oneof(av[3], "on,off")) {
-            return app_error(out, n, "annotations live|record keys|clicks on|off");
+            return app_error(out, n, "annotations virtual|record|stream keys|clicks on|off");
         }
         bool value = IS(3, "on");
-        if (IS(1, "live")) {
+        if (IS(1, "virtual")) {
             if (IS(2, "keys")) {
-                c.annotations_live_keys = value;
+                c.annotations_virtual_keys = value;
             } else {
-                c.annotations_live_clicks = value;
+                c.annotations_virtual_clicks = value;
+            }
+        } else if (IS(1, "stream")) {
+            if (IS(2, "keys")) {
+                c.annotations_stream_keys = value;
+            } else {
+                c.annotations_stream_clicks = value;
             }
         } else {
             if (IS(2, "keys")) {
@@ -1319,6 +1580,14 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
         }
         bool annotation_policy_changed = c.keys != a->config.keys || c.clicks != a->config.clicks ||
                                          strcmp(c.keys_mode, a->config.keys_mode);
+        bool stream_annotations_changed =
+            annotation_policy_changed ||
+            c.annotations_stream_keys != a->config.annotations_stream_keys ||
+            c.annotations_stream_clicks != a->config.annotations_stream_clicks;
+        if (stream_annotations_changed) {
+            frame_free(&a->stream_raw);
+            media_stream_barrier(a->media);
+        }
         a->config = c;
         if (c.zoom_factor > 1) {
             a->zoom_last = c.zoom_factor;

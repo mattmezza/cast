@@ -72,13 +72,13 @@ with tempfile.TemporaryDirectory(prefix='cast-test-') as directory:
                     pass
             assert time.monotonic() < deadline
             time.sleep(0.02)
-        assert first['live']['state'] == 'paused'
+        assert first['virtual']['state'] == 'paused'
         assert first['record']['state'] == 'stopped'
         assert os.stat(sock).st_mode & 0o777 == 0o600
-        run(*common, '--backend', 'synthetic', '--no-live', '--no-camera', env=env, ok=False)
-        assert state()['live']['state'] == 'paused'
+        run(*common, '--backend', 'synthetic', '--no-virtual', '--no-camera', env=env, ok=False)
+        assert state()['virtual']['state'] == 'paused'
         cmd('record', 'toggle', ok=False)
-        cmd('live', 'resume')
+        cmd('virtual', 'resume')
         cmd('camera', 'size', '+5%')
         cmd('camera', 'size', '95%', ok=False)
         cmd('camera', 'position', '-10', '30')
@@ -106,7 +106,7 @@ with tempfile.TemporaryDirectory(prefix='cast-test-') as directory:
         cmd('camera', 'move', 'NaN', '0', ok=False)
         cmd('zoom', 'set', 'nan', ok=False)
         cmd('record', 'nonsense', ok=False)
-        cmd('live', 'unknown', ok=False)
+        cmd('virtual', 'unknown', ok=False)
         cmd('audio', 'desktop', 'on', ok=False)
 
         path = root / 'presentation.mkv'
@@ -115,14 +115,14 @@ with tempfile.TemporaryDirectory(prefix='cast-test-') as directory:
         cmd('pause')
         cmd('pause')
         paused = state()
-        assert paused['live']['state'] == 'paused'
+        assert paused['virtual']['state'] == 'paused'
         assert paused['record']['state'] == 'paused'
         duration = paused['record']['duration']
         time.sleep(0.15)
         assert state()['record']['duration'] > duration + 0.1  # Solid pause writes file time.
         cmd('record', 'pause')  # Independent pause supersedes remembered restoration.
         cmd('resume')
-        assert state()['live']['state'] == 'live'
+        assert state()['virtual']['state'] == 'virtual'
         assert state()['record']['state'] == 'paused'
         cmd('record', 'resume')
         cmd('record', 'cut')
@@ -133,12 +133,12 @@ with tempfile.TemporaryDirectory(prefix='cast-test-') as directory:
         cmd('record', 'resume')
         assert state()['record']['state'] == 'recording'
         time.sleep(0.25)
-        cmd('live', 'freeze')
-        cmd('live', 'pause')
-        cmd('live', 'unfreeze')
-        assert state()['live']['state'] == 'paused'
+        cmd('virtual', 'freeze')
+        cmd('virtual', 'pause')
+        cmd('virtual', 'unfreeze')
+        assert state()['virtual']['state'] == 'paused'
         cmd('reset')
-        assert state()['live']['state'] == 'paused'
+        assert state()['virtual']['state'] == 'paused'
         assert state()['record']['state'] == 'recording'
 
         # Failed reloads preserve state and prior composition; overrides survive reload.
@@ -148,7 +148,7 @@ with tempfile.TemporaryDirectory(prefix='cast-test-') as directory:
         cmd('config', 'reload')
         new = state()
         assert new['layout'] == 'screen'
-        assert new['live']['state'] == 'paused'
+        assert new['virtual']['state'] == 'paused'
         assert new['record']['state'] == 'recording'
         config.write_text('[composition]\nlayout=camera\n[output]\nbackend=invalid\n')
         cmd('config', 'reload', ok=False)

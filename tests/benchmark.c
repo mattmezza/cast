@@ -124,7 +124,7 @@ int main(int argc, char **argv)
     Config config;
     config_defaults(&config);
     config.zoom_factor = 1;
-    Frame screen = {0}, camera = {0}, live = {0}, record = {0};
+    Frame screen = {0}, camera = {0}, virtual = {0}, record = {0};
     if (frame_alloc(&screen, 1920, 1080) || frame_alloc(&camera, 640, 480)) {
         fprintf(stderr, "benchmark: allocation failed\n");
         return 1;
@@ -145,7 +145,7 @@ int main(int argc, char **argv)
         for (int i = 0; i < SAMPLE_COUNT; i++) {
             screen.ts_ns = cast_now_ns();
             uint64_t sample_start = screen.ts_ns;
-            if (compositor_render(compositor, &config, &screen, &camera, &cursor, false, &live,
+            if (compositor_render(compositor, &config, &screen, &camera, &cursor, false, &virtual,
                                   error, sizeof error) ||
                 (outputs == 2 && compositor_render(compositor, &config, &screen, &camera, &cursor,
                                                    true, &record, error, sizeof error))) {
@@ -172,15 +172,16 @@ int main(int argc, char **argv)
         return fprintf(stderr, "background benchmark: camera allocation failed\n"), 1;
     }
     memset(camera.data, 0xc0, (size_t)camera.stride * camera.height);
-    if (camera_background_benchmark(&config, compositor, &screen, &camera, &live)) {
+    if (camera_background_benchmark(&config, compositor, &screen, &camera, &virtual)) {
         return 1;
     }
-    if (stage_benchmark(&config, compositor, &screen, &camera, &live, argc > 1 ? argv[1] : NULL)) {
+    if (stage_benchmark(&config, compositor, &screen, &camera, &virtual,
+                        argc > 1 ? argv[1] : NULL)) {
         return 1;
     }
     frame_free(&screen);
     frame_free(&camera);
-    frame_free(&live);
+    frame_free(&virtual);
     frame_free(&record);
     compositor_destroy(compositor);
     return 0;

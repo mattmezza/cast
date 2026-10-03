@@ -1,6 +1,7 @@
 #ifndef PANEL_TRANSPORT_H
 #define PANEL_TRANSPORT_H
 #include "cast.h"
+#include "stream.h"
 #include <sys/types.h>
 
 /* Private protocol: both ends must come from the same build and struct layout. */
@@ -10,6 +11,7 @@
 typedef struct {
     Config config;
     State state;
+    StreamSnapshot stream;
     Capabilities capabilities;
     bool connected, countdown, finalizing, command_failed;
     /* Generation changes for a new daemon or a replacement attachment. */
@@ -24,7 +26,7 @@ void panel_client_close(PanelClient *);
 /* Polling never waits on the worker. A snapshot may describe a disconnected daemon. */
 bool panel_client_snapshot(PanelClient *, PanelSnapshot *);
 /* 1 copied a new frame, 0 unchanged/busy, -1 disconnected. Caller owns Frame. */
-int panel_client_frame(PanelClient *, bool record, Frame *, char *, size_t);
+int panel_client_frame(PanelClient *, int target, Frame *, char *, size_t);
 int panel_client_command(PanelClient *, int, const char *const *, char *, size_t);
 int panel_client_setting(PanelClient *, const char *dotted_key, const char *value, char *, size_t);
 

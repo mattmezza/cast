@@ -4,11 +4,11 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#define CAST_VERSION "0.6.0"
+#define CAST_VERSION "0.7.0"
 #define CAST_TEXT 256
 #define CAST_ERR 1024
 #define CAST_MAX_PRESETS 24
-#define CAST_MAX_ARGS 16
+#define CAST_MAX_ARGS 64
 #define CAST_IPC_MAX 8192
 /* Owned RGBA8 frames. ts_ns is CLOCK_MONOTONIC; stride may exceed width*4. */
 typedef struct {
@@ -23,9 +23,16 @@ typedef struct {
     unsigned mask;
 } Preset;
 typedef struct {
+    char service[16], server_url[1024], key_file[PATH_MAX], tls_ca_file[PATH_MAX],
+        encoder_preset[24];
+    int video_bitrate_kbps, audio_bitrate_kbps, queue_frames, lag_ms;
+    int connect_timeout_ms, write_timeout_ms;
+    int reconnect_attempts, reconnect_initial_ms, reconnect_max_ms;
+} StreamConfig;
+typedef struct {
     char backend[16], socket_path[PATH_MAX], output_device[PATH_MAX], camera_device[PATH_MAX];
     int width, height, fps;
-    bool live_enabled, camera_enabled;
+    bool virtual_enabled, camera_enabled;
     char layout[16], shape[16], anchor[24], aspect[16], fit[16], split_side[8];
     double camera_width_percent, split_ratio;
     int margin, radius, border_width;
@@ -70,14 +77,15 @@ typedef struct {
     char keys_mode[16], keys_position[24], keys_filter[512], keys_navigation[512];
     int keys_font_size, keys_timeout_ms;
     uint32_t keys_color, keys_background;
-    bool annotations_live_keys, annotations_live_clicks, annotations_record_keys,
-        annotations_record_clicks;
+    bool annotations_virtual_keys, annotations_virtual_clicks, annotations_record_keys,
+        annotations_record_clicks, annotations_stream_keys, annotations_stream_clicks;
     bool mic, desktop, virtual_audio;
     char mic_source[256], desktop_source[256], virtual_name[128];
     double mic_gain, desktop_gain;
     char record_dir[PATH_MAX], record_container[24], video_codec[64], audio_codec[64];
     int record_crf, record_countdown, record_queue;
     char record_preset[32];
+    StreamConfig stream;
     bool preview;
     char preview_target[16];
     uint32_t pause_color;
@@ -94,9 +102,11 @@ typedef struct {
     int preset_count;
 } Config;
 typedef struct {
-    bool live_paused, live_frozen, live_blurred;
+    bool virtual_paused, virtual_frozen, virtual_blurred;
     bool recording, record_paused, record_frozen, record_blurred, record_cut, group_paused;
-    bool group_live_restore, group_record_restore;
+    bool group_virtual_restore, group_record_restore, group_stream_restore;
+    bool stream_active, stream_paused, stream_frozen, stream_blurred;
+    int stream_connection_state; /* StreamLifecycle; presentation flags remain independent. */
     uint64_t record_started_ns, record_paused_ns, record_pause_total_ns;
     char record_path[PATH_MAX], last_error[CAST_ERR];
     uint64_t dropped_frames;
@@ -119,6 +129,8 @@ int frame_alloc(Frame *, int, int);
 void frame_free(Frame *);
 int frame_copy(Frame *, const Frame *);
 void config_defaults(Config *);
+/* Fill software encoder quality from the selected service; explicit settings may override. */
+void config_stream_preset(Config *);
 int config_load(Config *, const char *, bool, char *, size_t);
 void config_print_defaults(void);
 int config_validate(const Config *, char *, size_t);
@@ -133,6 +145,8 @@ int platform_capture(Platform *, Frame *, Cursor *, char *, size_t);
 int platform_command(Platform *, Config *, int, char **, char *, size_t);
 int platform_reconfigure(Platform *, const Config *, char *, size_t);
 void platform_events(Platform *, Compositor *, const Config *, bool privacy);
+/* Native target selectors return a pending lane index, or -1 when unchanged. */
+int platform_preview_target(Platform *);
 int platform_preview(Platform *, const Frame *, const State *, const Config *, char *, size_t);
 /* Transient local countdown; remaining_ns=0 hides it, return 1 cancels, -1 errors. */
 int platform_countdown(Platform *, uint64_t remaining_ns, char *, size_t);
@@ -171,7 +185,8 @@ Media *media_open(const Config *, char *, size_t);
 void media_close(Media *);
 void media_camera_list(char *, size_t);
 int media_camera(Media *, Frame *, char *, size_t);
-int media_live(Media *, const Frame *, bool, char *, size_t);
+int media_virtual_enabled(Media *, const Config *, bool, char *, size_t);
+int media_virtual(Media *, const Frame *, bool, char *, size_t);
 int media_record_start(Media *, const Config *, const char *, char *, size_t);
 int media_record_stop(Media *, char *, size_t);
 bool media_record_finalizing(Media *);
@@ -182,12 +197,20 @@ int media_record_frame(Media *, const Frame *, char *, size_t);
 int media_reconfigure(Media *, const Config *, bool, char *, size_t);
 void media_barrier(Media *);
 void media_record_barrier(Media *);
-int media_privacy(Media *, bool live_silent, bool record_silent, bool record_cut, char *, size_t);
+int media_privacy(Media *, bool virtual_silent, bool record_silent, bool record_cut, char *,
+                  size_t);
 int media_audio_command(Media *, Config *, int, char **, char *, size_t);
 void media_status(Media *, bool *, bool *, uint64_t *, char *, size_t);
 uint64_t media_record_duration(Media *);
 void media_record_path(Media *, char *, size_t);
 void media_audio_status(Media *, char *, size_t);
 void media_doctor(const Config *, char *, size_t);
+typedef struct StreamSnapshot StreamSnapshot;
+int media_stream_start(Media *, const Config *, char *, size_t);
+int media_stream_stop(Media *, char *, size_t);
+int media_stream_frame(Media *, const Frame *, bool silent, char *, size_t);
+void media_stream_privacy(Media *, bool silent);
+void media_stream_barrier(Media *);
+void media_stream_status(Media *, StreamSnapshot *);
 int state_command(State *, const char *, const char *, char *, size_t);
 #endif

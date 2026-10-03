@@ -71,7 +71,7 @@ static App *new_app(const char *config_pathname, const char *socket_pathname)
     assert(config_load(&app->config, config_pathname, true, error, sizeof error) == 0);
     assert(app_apply_overrides(&app->config, &app->startup, error, sizeof error) == 0);
     app->defaults = app->config;
-    app->state.live_paused = true;
+    app->state.virtual_paused = true;
     app->zoom_last = app->config.zoom_factor;
     app->config.zoom_factor = 1;
     app->compositor = compositor_create();
@@ -93,13 +93,16 @@ static void free_app(App *app)
     compositor_destroy(app->compositor);
     frame_free(&app->screen);
     frame_free(&app->camera);
-    frame_free(&app->live);
+    frame_free(&app->virtual);
     frame_free(&app->record);
     frame_free(&app->neutral);
     frame_free(&app->frozen);
     frame_free(&app->record_frozen);
-    frame_free(&app->live_raw);
+    frame_free(&app->virtual_raw);
     frame_free(&app->record_raw);
+    frame_free(&app->stream);
+    frame_free(&app->stream_raw);
+    frame_free(&app->stream_frozen);
     free(app);
 }
 static void wait_finalization(App *app)
@@ -125,7 +128,7 @@ static void presentation_controls(App *app, const char *configuration)
 {
     char error[CAST_ERR];
     State initial = app->state;
-    COMMAND(app, true, "live", "footer", "café — {date:%Y}");
+    COMMAND(app, true, "virtual", "footer", "café — {date:%Y}");
     assert(!strcmp(app->config.pause_footer, "café — {date:%Y}"));
     COMMAND(app, true, "record", "footer", "Shared footer");
     assert(!strcmp(app->config.pause_footer, "Shared footer"));
@@ -138,11 +141,11 @@ static void presentation_controls(App *app, const char *configuration)
     char long_footer[sizeof app->config.pause_footer + 1];
     memset(long_footer, 'a', sizeof long_footer - 1);
     long_footer[sizeof long_footer - 1] = 0;
-    COMMAND(app, false, "live", "footer", long_footer);
-    COMMAND(app, false, "live", "footer", "bad \xff");
+    COMMAND(app, false, "virtual", "footer", long_footer);
+    COMMAND(app, false, "virtual", "footer", "bad \xff");
     COMMAND(app, false, "record", "footer", "{unknown}");
     COMMAND(app, false, "record", "footer", "control\x01");
-    COMMAND(app, false, "live", "footer", "text", "extra");
+    COMMAND(app, false, "virtual", "footer", "text", "extra");
     COMMAND(app, false, "settings", "output.pause_footer_size", "7");
     COMMAND(app, false, "settings", "output.blur_footer_size", "257");
     COMMAND(app, false, "settings", "output.pause_text_gap", "-1");
@@ -150,9 +153,9 @@ static void presentation_controls(App *app, const char *configuration)
     COMMAND(app, false, "settings", "output.blur_footer", "{time:%999999Y}");
     assert(!memcmp(&before, &app->config, sizeof before));
     /* IPC uses NUL as an argument boundary; an injected extra field fails arity. */
-    char empty[] = "CAST1\0live\0footer\0\0";
+    char empty[] = "CAST1\0virtual\0footer\0\0";
     char injected[] = "CAST1\0record\0footer\0first\0second\0";
-    char invalid[] = "CAST1\0live\0\0text\0";
+    char invalid[] = "CAST1\0virtual\0\0text\0";
     char *argv[CAST_MAX_ARGS];
     int argc;
     assert(decode_packet(empty, sizeof empty - 1, &argc, argv, error, sizeof error) == 0);
@@ -393,27 +396,27 @@ static void output_modes(App *app)
             "output.blur_radius", "4");
     COMMAND(app, false, "settings", "output.pause_font", "sans");
     assert(strstr(response, "config reload"));
-    COMMAND(app, true, "live", "subtitle", "");
+    COMMAND(app, true, "virtual", "subtitle", "");
     COMMAND(app, true, "camera", "anchor", "top");
     COMMAND(app, true, "camera", "anchor", "left");
     tick(app);
-    app->config.live_enabled = false;
-    COMMAND(app, true, "live", "resume");
+    app->config.virtual_enabled = false;
+    COMMAND(app, true, "virtual", "resume");
     media_audio_status(app->media, error, sizeof error);
     assert(strstr(error, "\"virtual_silent\":true"));
-    app->config.live_enabled = true;
-    COMMAND(app, true, "live", "resume");
-    COMMAND(app, true, "live", "freeze");
-    COMMAND(app, true, "live", "blur", "on");
-    assert(app->state.live_frozen && app->state.live_blurred && !app->state.record_frozen &&
+    app->config.virtual_enabled = true;
+    COMMAND(app, true, "virtual", "resume");
+    COMMAND(app, true, "virtual", "freeze");
+    COMMAND(app, true, "virtual", "blur", "on");
+    assert(app->state.virtual_frozen && app->state.virtual_blurred && !app->state.record_frozen &&
            !app->state.record_blurred);
     Frame snapshot = {0}, expected = {0};
     assert(frame_copy(&snapshot, &app->frozen) == 0);
     assert(frame_copy(&expected, &snapshot) == 0);
     assert(compositor_blur(app->compositor, &app->config, &expected, error, sizeof error) == 0);
-    assert(same_pixels(&expected, &app->live));
+    assert(same_pixels(&expected, &app->virtual));
     assert(app_output_frames(app, error, sizeof error) == 0);
-    assert(same_pixels(&expected, &app->live) && same_pixels(&snapshot, &app->frozen));
+    assert(same_pixels(&expected, &app->virtual) && same_pixels(&snapshot, &app->frozen));
     COMMAND(app, true, "record", "freeze");
     COMMAND(app, true, "record", "blur", "on");
     assert(app->record_frozen.data != app->frozen.data);
@@ -430,7 +433,7 @@ static void output_modes(App *app)
     COMMAND(app, true, "settings", "record.countdown", "1");
     COMMAND(app, true, "record", "cut");
     assert(app->state.record_cut && app->state.record_paused && app->state.record_frozen &&
-           app->state.record_blurred && app->state.live_frozen && app->state.live_blurred);
+           app->state.record_blurred && app->state.virtual_frozen && app->state.virtual_blurred);
     char path[PATH_MAX];
     strcpy(path, app->state.record_path);
     uint64_t cut_duration = media_record_duration(app->media);
@@ -460,11 +463,11 @@ static void output_modes(App *app)
     COMMAND(app, true, "record", "resume");
     COMMAND(app, true, "record", "unfreeze");
     COMMAND(app, true, "record", "blur", "off");
-    COMMAND(app, true, "live", "pause");
+    COMMAND(app, true, "virtual", "pause");
     assert(same_pixels(&app->frozen, &app->neutral));
-    COMMAND(app, true, "live", "unfreeze");
-    COMMAND(app, true, "live", "blur", "off");
-    COMMAND(app, true, "live", "resume");
+    COMMAND(app, true, "virtual", "unfreeze");
+    COMMAND(app, true, "virtual", "blur", "off");
+    COMMAND(app, true, "virtual", "resume");
     COMMAND(app, true, "settings", "record.countdown", "0");
     tick(app);
     frame_free(&snapshot);
@@ -482,6 +485,28 @@ int main(void)
     snprintf(recording_path, sizeof recording_path, "%s/control.mkv", directory);
     write_config(configuration, "[camera]\nwidth_percent=25\n");
     App *app = new_app(configuration, socket_pathname);
+    Config initial_config = app->config;
+    State initial_state = app->state;
+    COMMAND(app, false, "live", "resume");
+    COMMAND(app, false, "annotations", "live", "keys", "off");
+    COMMAND(app, false, "preview", "target", "live");
+    COMMAND(app, false, "settings", "annotations.live_clicks", "false");
+    COMMAND(app, false, "stream", "resume");
+    COMMAND(app, false, "stream", "toggle");
+    COMMAND(app, false, "stream", "freeze");
+    COMMAND(app, false, "stream", "blur", "on");
+    assert(!memcmp(&initial_config, &app->config, sizeof initial_config));
+    assert(!memcmp(&initial_state, &app->state, sizeof initial_state));
+    COMMAND(app, true, "stream", "stop");
+    assert(!app->state.stream_active && app->state.stream_paused);
+    COMMAND(app, true, "stream", "stop");
+    COMMAND(app, true, "stream", "status", "--json");
+    assert(strstr(response, "\"state\":\"stopped\""));
+    COMMAND(app, true, "preview", "target", "stream");
+    COMMAND(app, true, "preview", "target", "virtual");
+    COMMAND(app, true, "status", "--json");
+    assert(strstr(response, "\"stream\":{") && strstr(response, "\"virtual\":{") &&
+           !strstr(response, "\"live\":"));
     presentation_controls(app, configuration);
     composition_controls(app, configuration, directory);
     COMMAND(app, true, "status", "--json");
@@ -489,7 +514,7 @@ int main(void)
     State message_state = app->state;
     Frame neutral_before = {0};
     assert(frame_copy(&neutral_before, &app->neutral) == 0);
-    COMMAND(app, true, "live", "message", "Screen sharing paused");
+    COMMAND(app, true, "virtual", "message", "Screen sharing paused");
     assert(!strcmp(app->config.pause_text, "Screen sharing paused"));
     assert(memcmp(&message_state, &app->state, sizeof message_state) == 0);
     assert(memcmp(neutral_before.data, app->neutral.data,
@@ -498,16 +523,16 @@ int main(void)
     char too_long[sizeof app->config.pause_text + 1];
     memset(too_long, 'x', sizeof too_long - 1);
     too_long[sizeof too_long - 1] = 0;
-    COMMAND(app, false, "live", "message", too_long);
-    COMMAND(app, false, "live", "message", "invalid \xff");
-    COMMAND(app, false, "live", "message", "{unknown}");
-    COMMAND(app, false, "live", "message", "{time:%999999Y}");
-    COMMAND(app, false, "live", "message", "control\x01");
-    COMMAND(app, false, "live", "message", "extra", "argument");
+    COMMAND(app, false, "virtual", "message", too_long);
+    COMMAND(app, false, "virtual", "message", "invalid \xff");
+    COMMAND(app, false, "virtual", "message", "{unknown}");
+    COMMAND(app, false, "virtual", "message", "{time:%999999Y}");
+    COMMAND(app, false, "virtual", "message", "control\x01");
+    COMMAND(app, false, "virtual", "message", "extra", "argument");
     assert(memcmp(&message_config, &app->config, sizeof message_config) == 0);
-    COMMAND(app, true, "live", "message", "");
-    assert(!app->config.pause_text[0] && app->state.live_paused);
-    COMMAND(app, true, "live", "message", "café paused");
+    COMMAND(app, true, "virtual", "message", "");
+    assert(!app->config.pause_text[0] && app->state.virtual_paused);
+    COMMAND(app, true, "virtual", "message", "café paused");
     COMMAND(app, true, "status", "--json");
     assert(strstr(response, "\"message\":\"café paused\""));
     frame_free(&neutral_before);
@@ -532,43 +557,43 @@ int main(void)
     assert(app->config.zoom_factor == 1);
     COMMAND(app, true, "zoom", "toggle");
     assert(app->config.zoom_factor == 2.5);
-    COMMAND(app, true, "live", "resume");
+    COMMAND(app, true, "virtual", "resume");
     tick(app);
-    COMMAND(app, true, "live", "freeze");
-    assert(app->state.live_frozen && app->frozen.data);
+    COMMAND(app, true, "virtual", "freeze");
+    assert(app->state.virtual_frozen && app->frozen.data);
     Frame freeze_before = {0};
     assert(frame_copy(&freeze_before, &app->frozen) == 0);
-    COMMAND(app, true, "live", "message", "New paused label");
-    assert(app->state.live_frozen && !app->state.live_paused);
+    COMMAND(app, true, "virtual", "message", "New paused label");
+    assert(app->state.virtual_frozen && !app->state.virtual_paused);
     assert(!memcmp(freeze_before.data, app->frozen.data,
                    (size_t)app->frozen.stride * app->frozen.height));
     frame_free(&freeze_before);
-    COMMAND(app, true, "live", "pause");
-    COMMAND(app, true, "live", "unfreeze");
-    assert(app->state.live_paused);
+    COMMAND(app, true, "virtual", "pause");
+    COMMAND(app, true, "virtual", "unfreeze");
+    assert(app->state.virtual_paused);
     COMMAND(app, true, "resume");
-    assert(app->state.live_paused); /* Group resume cannot undo an independent pause. */
-    COMMAND(app, true, "live", "resume");
+    assert(app->state.virtual_paused); /* Group resume cannot undo an independent pause. */
+    COMMAND(app, true, "virtual", "resume");
     COMMAND(app, true, "record", "start", recording_path);
     tick(app);
     output_modes(app);
     COMMAND(app, true, "pause");
     COMMAND(app, true, "pause");
-    assert(app->state.live_paused && app->state.record_paused);
+    assert(app->state.virtual_paused && app->state.record_paused);
     COMMAND(app, true, "record", "pause");
     COMMAND(app, true, "resume");
-    assert(!app->state.live_paused && app->state.record_paused);
+    assert(!app->state.virtual_paused && app->state.record_paused);
     COMMAND(app, true, "record", "resume");
     assert(app->state.recording && !app->state.record_paused);
-    COMMAND(app, true, "live", "pause");
+    COMMAND(app, true, "virtual", "pause");
     COMMAND(app, true, "reset");
-    assert(app->state.live_paused && app->state.recording);
+    assert(app->state.virtual_paused && app->state.recording);
     assert(app->config.camera_width_percent == 25);
 
     write_config(configuration, "[composition]\nlayout=screen\n[output]\nwidth=640\n");
     COMMAND(app, true, "config", "reload");
     assert(!strcmp(app->config.layout, "screen") && app->config.width == 320);
-    assert(app->state.live_paused && app->state.recording);
+    assert(app->state.virtual_paused && app->state.recording);
     Config before = app->config, defaults_before = app->defaults;
     write_config(configuration, "[composition]\nlayout=camera\n[output]\nbackend=invalid\n");
     COMMAND(app, false, "config", "reload");
@@ -577,7 +602,7 @@ int main(void)
     write_config(configuration, "[composition]\nlayout=camera\n[record]\nvideo_codec=ffv1\n");
     COMMAND(app, false, "config", "reload");
     assert(memcmp(&app->config, &before, sizeof before) == 0);
-    assert(app->state.recording && app->state.live_paused);
+    assert(app->state.recording && app->state.virtual_paused);
     COMMAND(app, true, "record", "stop");
     assert(strstr(response, recording_path) && !app->state.recording);
     if (media_record_finalizing(app->media)) {
@@ -617,9 +642,9 @@ int main(void)
     app->state.record_path[sizeof app->state.record_path - 1] = 0;
     COMMAND(app, false, "status", "--json");
     assert(strstr(response, "IPC limit"));
-    COMMAND(app, true, "live", "resume");
+    COMMAND(app, true, "virtual", "resume");
     COMMAND(app, true, "quit");
-    assert(app->state.live_paused && !app->state.live_frozen && !app->state.recording);
+    assert(app->state.virtual_paused && !app->state.virtual_frozen && !app->state.recording);
     free_app(app);
     unlink(recording_path);
     unlink(configuration);

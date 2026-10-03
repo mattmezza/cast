@@ -36,7 +36,7 @@ static const char help[] =
     "cast " CAST_VERSION " — Linux presentation camera and recorder\n"
     "Usage: cast [startup options] | cast [--config PATH] [--socket PATH] COMMAND\n"
     "Startup: --backend xorg|wayland --output-device PATH --camera-device PATH\n"
-    "  --width N --height N --fps N --no-live --no-camera --mic-source NAME\n"
+    "  --width N --height N --fps N --no-virtual --no-camera --mic-source NAME\n"
     "  --desktop-source NAME --record-dir PATH --container NAME --video-codec NAME\n"
     "  --audio-codec NAME --countdown SECONDS --config PATH --socket PATH\n"
     "Test-only: --backend synthetic --camera-device synthetic --output-device none\n"
@@ -62,21 +62,27 @@ static const char help[] =
     "  zoom toggle|in|out|reset; zoom set FACTOR; zoom follow on|off\n"
     "  cursor on|off|toggle; cursor highlight on|off|toggle\n"
     "  clicks on|off|toggle; keys on|off|toggle; keys mode shortcuts|all; keys clear\n"
-    "  annotations live|record keys|clicks on|off\n"
-    "  pause; resume; live pause|resume|toggle|freeze|unfreeze; live blur on|off|toggle\n"
-    "  live message TEXT; live|record title|subtitle|footer TEXT\n"
+    "  annotations virtual|record|stream keys|clicks on|off\n"
+    "  pause; resume; virtual start|stop|pause|resume|toggle|freeze|unfreeze; virtual blur "
+    "on|off|toggle\n"
+    "  virtual message TEXT; virtual|record title|subtitle|footer TEXT\n"
     "  record start [PATH]; record stop|pause|resume|toggle|freeze|unfreeze|cut|cancel\n"
     "  record blur on|off|toggle; cut resume reuses the file with the configured countdown\n"
     "  audio list; audio mic|desktop|virtual on|off|toggle\n"
     "  audio mic|desktop source NAME; audio mic|desktop gain PERCENT%\n"
-    "  preset NAME|next|prev; preview on|off|toggle; preview target live|record\n"
+    "  preset NAME|next|prev; preview on|off|toggle; preview target virtual|record|stream\n"
+    "  stream start|stop|pause|resume|toggle|freeze|unfreeze|unblur\n"
+    "  stream blur [on|off|toggle]; stream status [--json]\n"
     "  status [--json]; doctor; config check [PATH]; config defaults; config reload\n"
     "  settings SECTION.KEY VALUE [SECTION.KEY VALUE ...] (session only)\n"
     "  panel (optional native control panel)\n"
     "  setup; completions [bash|zsh|fish]; completions --script bash|zsh|fish\n"
     "  update [VERSION] [--download-only DIRECTORY] (Arch release package)\n"
     "  reset; quit; --help; --version\n"
-    "Live starts privacy-paused. Recording toggle only pauses/resumes an existing file.\n";
+    "Virtual camera starts privacy-paused. Recording toggle only pauses/resumes an existing "
+    "file.\n"
+    "Stream start accepts asynchronous startup in solid pause; stream resume reveals content.\n"
+    "Streaming pause/freeze/blur retain the connection and send silence; stop ends transmission.\n";
 
 #define OS(flag, field) {flag, offsetof(Config, field), sizeof(((Config *)0)->field), false, 0, 0}
 #define OI(flag, field, min, max) {flag, offsetof(Config, field), 0, true, min, max}
@@ -108,8 +114,8 @@ int app_apply_overrides(Config *c, const Startup *s, char *e, size_t n)
             return -1;
         }
     }
-    if (s->no_live) {
-        c->live_enabled = false;
+    if (s->no_virtual) {
+        c->virtual_enabled = false;
     }
     if (s->no_camera) {
         c->camera_enabled = false;
@@ -157,7 +163,10 @@ static int startup_parse(int argc, char **argv, Startup *s, char *e, size_t n)
             continue;
         }
         if (!strcmp(argv[i], "--no-live")) {
-            s->no_live = true;
+            return app_error(e, n, "--no-live was renamed; use --no-virtual");
+        }
+        if (!strcmp(argv[i], "--no-virtual")) {
+            s->no_virtual = true;
             i++;
             continue;
         }
@@ -336,12 +345,16 @@ void app_sync_source(App *a)
     compositor_clear(a->compositor);
     panel_transport_barrier(a->panel, a, true);
     media_barrier(a->media);
-    frame_free(&a->live);
+    media_stream_barrier(a->media);
+    frame_free(&a->virtual);
     frame_free(&a->record);
-    frame_free(&a->live_raw);
+    frame_free(&a->virtual_raw);
     frame_free(&a->record_raw);
     frame_free(&a->frozen);
     frame_free(&a->record_frozen);
+    frame_free(&a->stream);
+    frame_free(&a->stream_raw);
+    frame_free(&a->stream_frozen);
 }
 void app_countdown_cancel(App *a)
 {
@@ -354,10 +367,13 @@ void app_countdown_cancel(App *a)
         }
     }
 }
-int app_freeze_frame(App *a, bool record, Frame *frame, char *error, size_t n)
+int app_freeze_frame(App *a, int lane, Frame *frame, char *error, size_t n)
 {
-    bool paused = record ? a->state.record_paused || a->state.record_cut : a->state.live_paused;
-    const Frame *raw = record ? &a->record_raw : &a->live_raw;
+    bool record = lane == 1;
+    bool paused = lane == 2 ? a->state.stream_paused
+                  : record  ? a->state.record_paused || a->state.record_cut
+                            : a->state.virtual_paused;
+    const Frame *raw = lane == 2 ? &a->stream_raw : record ? &a->record_raw : &a->virtual_raw;
     if (paused || !raw->data || (!a->screen.data && strcmp(a->config.layout, "camera"))) {
         return frame_copy(frame, &a->neutral) ? app_error(error, n, "cannot allocate frozen frame")
                                               : 0;
@@ -369,15 +385,21 @@ int app_freeze_frame(App *a, bool record, Frame *frame, char *error, size_t n)
                              a->config.camera_enabled && a->camera.data ? &a->camera : NULL,
                              &a->cursor, record, frame, error, n);
 }
-static int lane_output_frame(App *a, bool record, Frame *out, char *error, size_t n)
+static int lane_output_frame(App *a, int lane, Frame *out, char *error, size_t n)
 {
-    bool solid = record ? ((!a->state.recording || a->state.record_cut) && !a->countdown) ||
-                              a->state.record_paused
-                        : !a->config.live_enabled || a->state.live_paused;
-    bool frozen = record ? a->state.record_frozen : a->state.live_frozen;
-    bool blurred = record ? a->state.record_blurred : a->state.live_blurred;
-    const Frame *raw = record ? &a->record_raw : &a->live_raw;
-    const Frame *snapshot = record ? &a->record_frozen : &a->frozen;
+    bool record = lane == 1;
+    bool solid = lane == 2 ? !a->state.stream_active || a->state.stream_paused
+                 : record  ? ((!a->state.recording || a->state.record_cut) && !a->countdown) ||
+                                 a->state.record_paused
+                           : !a->config.virtual_enabled || a->state.virtual_paused;
+    bool frozen = lane == 2 ? a->state.stream_frozen
+                  : record  ? a->state.record_frozen
+                            : a->state.virtual_frozen;
+    bool blurred = lane == 2 ? a->state.stream_blurred
+                   : record  ? a->state.record_blurred
+                             : a->state.virtual_blurred;
+    const Frame *raw = lane == 2 ? &a->stream_raw : record ? &a->record_raw : &a->virtual_raw;
+    const Frame *snapshot = lane == 2 ? &a->stream_frozen : record ? &a->record_frozen : &a->frozen;
     const Frame *source = solid ? &a->neutral : frozen ? snapshot : raw;
     if (!source->data) {
         source = &a->neutral;
@@ -387,7 +409,7 @@ static int lane_output_frame(App *a, bool record, Frame *out, char *error, size_
         frame_free(out);
         frame_copy(out, &a->neutral);
         return app_error(error, n, "cannot prepare %s output; emitting neutral content",
-                         record ? "recording" : "live");
+                         record ? "recording" : "virtual");
     }
     out->ts_ns = cast_now_ns();
     return 0;
@@ -395,21 +417,30 @@ static int lane_output_frame(App *a, bool record, Frame *out, char *error, size_
 int app_output_frames(App *a, char *error, size_t n)
 {
     int result = compositor_neutral(a->compositor, &a->config, &a->neutral, error, n);
-    if (lane_output_frame(a, false, &a->live, error, n)) {
+    if (lane_output_frame(a, false, &a->virtual, error, n)) {
         result = -1;
     }
     if (lane_output_frame(a, true, &a->record, error, n)) {
+        result = -1;
+    }
+    if (lane_output_frame(a, 2, &a->stream, error, n)) {
         result = -1;
     }
     return result;
 }
 int app_shutdown_privacy(App *a, char *e, size_t n)
 {
-    a->state.live_paused = true;
-    a->state.live_frozen = false;
-    a->state.group_live_restore = false;
+    a->state.virtual_paused = true;
+    a->state.stream_paused = true;
+    a->state.stream_active = false;
+    a->state.group_stream_restore = false;
+    if (a->media) {
+        media_stream_stop(a->media, e, n);
+    }
+    a->state.virtual_frozen = false;
+    a->state.group_virtual_restore = false;
     app_countdown_cancel(a);
-    frame_free(&a->live);
+    frame_free(&a->virtual);
     frame_free(&a->frozen);
     if (a->platform && a->compositor) {
         platform_events(a->platform, a->compositor, &a->config, true);
@@ -418,8 +449,8 @@ int app_shutdown_privacy(App *a, char *e, size_t n)
     panel_transport_barrier(a->panel, a, true);
     int result = 0;
     if (a->media) {
-        /* media_live silences virtual audio without dropping accepted recorder jobs. */
-        result = media_live(a->media, &a->neutral, true, e, n);
+        /* media_virtual silences virtual audio without dropping accepted recorder jobs. */
+        result = media_virtual(a->media, &a->neutral, true, e, n);
     }
     if (a->platform && platform_capabilities(a->platform).preview) {
         a->config.preview = false;
@@ -433,6 +464,18 @@ static void tick(App *a)
 {
     char e[CAST_ERR] = "";
     uint64_t now = cast_now_ns();
+    StreamSnapshot stream_status;
+    media_stream_status(a->media, &stream_status);
+    if (a->stream_generation != stream_status.generation) {
+        a->stream_generation = stream_status.generation;
+        frame_free(&a->stream_raw);
+        /* Reconnect admits a fresh composition, preserving deliberate freeze. */
+    }
+    a->state.stream_active = stream_status.active;
+    a->state.stream_connection_state = stream_status.state;
+    if (!stream_status.active) {
+        a->state.group_stream_restore = false;
+    }
     bool running, paused;
     uint64_t dropped;
     media_status(a->media, &running, &paused, &dropped, e, sizeof e);
@@ -475,7 +518,7 @@ static void tick(App *a)
         bool resume = a->countdown_resume;
         a->countdown = false;
         a->countdown_resume = false;
-        frame_free(&a->live_raw);
+        frame_free(&a->virtual_raw);
         frame_free(&a->record_raw);
         int result = resume ? app_recording_resume(a, e, sizeof e)
                             : app_recording_start(
@@ -486,11 +529,19 @@ static void tick(App *a)
             fprintf(stderr, "cast: recording %s\n", a->state.record_path);
         }
     }
-    bool input_private = (!a->config.live_enabled || a->state.live_paused || a->state.live_frozen ||
-                          a->state.live_blurred) &&
+    bool input_private = (!a->config.virtual_enabled || a->state.virtual_paused ||
+                          a->state.virtual_frozen || a->state.virtual_blurred) &&
                          (!a->state.recording || a->state.record_cut || a->state.record_paused ||
-                          a->state.record_frozen || a->state.record_blurred);
+                          a->state.record_frozen || a->state.record_blurred) &&
+                         (!a->state.stream_active || a->state.stream_paused ||
+                          a->state.stream_frozen || a->state.stream_blurred);
     platform_events(a->platform, a->compositor, &a->config, input_private);
+    int preview_target = platform_preview_target(a->platform);
+    if (preview_target >= 0 && preview_target <= 2) {
+        const char *targets[] = {"virtual", "record", "stream"};
+        snprintf(a->config.preview_target, sizeof a->config.preview_target, "%s",
+                 targets[preview_target]);
+    }
     bool capture_ok = platform_capture(a->platform, &a->screen, &a->cursor, e, sizeof e) == 0;
     /* Portal responses can commit a source during capture's event dispatch. */
     app_sync_source(a);
@@ -503,19 +554,21 @@ static void tick(App *a)
         frame_free(&a->camera);
         remember_error(a, e);
     }
-    bool need_live = a->config.live_enabled && !a->state.live_paused && !a->state.live_frozen;
+    bool need_virtual =
+        a->config.virtual_enabled && !a->state.virtual_paused && !a->state.virtual_frozen;
     bool need_record = ((a->state.recording && !a->state.record_cut) || a->countdown) &&
                        !a->state.record_paused && !a->state.record_frozen;
-    bool shared_composition =
-        need_live && need_record &&
-        (!a->config.keys || a->config.annotations_live_keys == a->config.annotations_record_keys) &&
-        (!a->config.clicks ||
-         a->config.annotations_live_clicks == a->config.annotations_record_clicks);
+    bool need_stream = a->state.stream_active && !a->state.stream_paused && !a->state.stream_frozen;
+    bool shared_composition = need_virtual && need_record &&
+                              (!a->config.keys || a->config.annotations_virtual_keys ==
+                                                      a->config.annotations_record_keys) &&
+                              (!a->config.clicks || a->config.annotations_virtual_clicks ==
+                                                        a->config.annotations_record_clicks);
     bool composition_ok = capture_ok || !strcmp(a->config.layout, "camera");
-    if ((need_live || need_record) && composition_ok) {
-        if (need_live &&
+    if ((need_virtual || need_record || need_stream) && composition_ok) {
+        if (need_virtual &&
             compositor_render(a->compositor, &a->config, &a->screen, camera_ok ? &a->camera : NULL,
-                              &a->cursor, false, &a->live_raw, e, sizeof e)) {
+                              &a->cursor, false, &a->virtual_raw, e, sizeof e)) {
             composition_ok = false;
             remember_error(a, e);
         }
@@ -526,22 +579,35 @@ static void tick(App *a)
             remember_error(a, e);
         }
     }
+    if (need_stream && composition_ok) {
+        Config stream_config = a->config;
+        stream_config.annotations_virtual_keys = stream_config.annotations_stream_keys;
+        stream_config.annotations_virtual_clicks = stream_config.annotations_stream_clicks;
+        if (compositor_render(a->compositor, &stream_config, &a->screen,
+                              camera_ok ? &a->camera : NULL, &a->cursor, false, &a->stream_raw, e,
+                              sizeof e)) {
+            frame_free(&a->stream_raw);
+            remember_error(a, e);
+        }
+    }
     if (!composition_ok) {
-        frame_free(&a->live_raw);
+        frame_free(&a->stream_raw);
+        frame_free(&a->virtual_raw);
         frame_free(&a->record_raw);
-    } else if (shared_composition && frame_copy(&a->record_raw, &a->live_raw)) {
+    } else if (shared_composition && frame_copy(&a->record_raw, &a->virtual_raw)) {
         frame_free(&a->record_raw);
         remember_error(a, "cannot allocate recording composition");
     }
     if (app_output_frames(a, e, sizeof e)) {
         remember_error(a, e);
     }
-    const Frame *live = a->live.data ? &a->live : &a->neutral;
+    const Frame *virtual = a->virtual.data ? &a->virtual : &a->neutral;
     const Frame *record = a->record.data ? &a->record : &a->neutral;
-    if (a->config.live_enabled &&
-        media_live(a->media, live,
-                   a->state.live_paused || a->state.live_frozen || a->state.live_blurred, e,
-                   sizeof e)) {
+    if (a->config.virtual_enabled &&
+        media_virtual(a->media, virtual,
+                      a->state.virtual_paused || a->state.virtual_frozen ||
+                          a->state.virtual_blurred,
+                      e, sizeof e)) {
         remember_error(a, e);
     }
     bool write_record = a->state.recording && !a->state.record_cut;
@@ -550,12 +616,21 @@ static void tick(App *a)
             remember_error(a, e);
         }
     }
-    panel_transport_publish(a->panel, a, live,
+    if (a->state.stream_active &&
+        media_stream_frame(a->media, a->stream.data ? &a->stream : &a->neutral,
+                           a->state.stream_paused || a->state.stream_frozen ||
+                               a->state.stream_blurred,
+                           e, sizeof e)) {
+        remember_error(a, e);
+    }
+    panel_transport_publish(a->panel, a, virtual,
                             (write_record || a->countdown) ? record : &a->neutral);
     if (a->config.preview || platform_capabilities(a->platform).preview) {
         const Frame *target = !strcmp(a->config.preview_target, "record")
                                   ? (write_record ? record : &a->neutral)
-                                  : live;
+                              : !strcmp(a->config.preview_target, "stream")
+                                  ? (a->stream.data ? &a->stream : &a->neutral)
+                                  : virtual;
         if (platform_preview(a->platform, target, &a->state, &a->config, e, sizeof e)) {
             remember_error(a, e);
         }
@@ -580,14 +655,15 @@ static int decode_packet(char *packet, ssize_t size, int *argc, char **argv, cha
             return app_error(e, n, "too many arguments");
         }
         char *end = memchr(packet + offset, 0, (size_t)size - offset);
-        bool empty_value =
-            (*argc == 2 && (!strcmp(argv[0], "live") || !strcmp(argv[0], "record")) &&
-             (!strcmp(argv[1], "message") || !strcmp(argv[1], "title") ||
-              !strcmp(argv[1], "subtitle") || !strcmp(argv[1], "footer"))) ||
-            (*argc == 2 && !strcmp(argv[0], "text") &&
-             (!strcmp(argv[1], "set") || !strcmp(argv[1], "font"))) ||
-            (*argc == 2 && !strcmp(argv[0], "logo") && !strcmp(argv[1], "path")) ||
-            (*argc >= 2 && !(*argc & 1) && !strcmp(argv[0], "settings"));
+        bool empty_value = (*argc == 2 &&
+                            (!strcmp(argv[0], "virtual") || !strcmp(argv[0], "record") ||
+                             !strcmp(argv[0], "stream")) &&
+                            (!strcmp(argv[1], "message") || !strcmp(argv[1], "title") ||
+                             !strcmp(argv[1], "subtitle") || !strcmp(argv[1], "footer"))) ||
+                           (*argc == 2 && !strcmp(argv[0], "text") &&
+                            (!strcmp(argv[1], "set") || !strcmp(argv[1], "font"))) ||
+                           (*argc == 2 && !strcmp(argv[0], "logo") && !strcmp(argv[1], "path")) ||
+                           (*argc >= 2 && !(*argc & 1) && !strcmp(argv[0], "settings"));
         if (!end || (end == packet + offset && !empty_value)) {
             return app_error(e, n, "empty or unterminated command argument");
         }
@@ -727,6 +803,8 @@ static void doctor(const Config *c)
     puts(report);
     media_doctor(c, report, sizeof report);
     puts(report);
+    stream_doctor(c, report, sizeof report);
+    puts(report);
     struct statvfs fs;
     if (access(c->record_dir, W_OK) || statvfs(c->record_dir, &fs)) {
         printf("Recording directory %s: %s; create an owned writable directory\n", c->record_dir,
@@ -747,7 +825,8 @@ static int run_daemon(Config config, Startup startup)
     }
     a->config = a->defaults = config;
     a->startup = startup;
-    a->state.live_paused = true;
+    a->state.virtual_paused = true;
+    a->state.stream_paused = true;
     a->zoom_last = config.zoom_factor;
     a->config.zoom_factor = 1;
     int lockfd = -1, server = daemon_socket(&config, &lockfd, e, sizeof e);
@@ -800,10 +879,10 @@ static int run_daemon(Config config, Startup startup)
         media_privacy(a->media, true, false, false, e, sizeof e)) {
         goto failed;
     }
-    if (config.live_enabled && media_live(a->media, &a->neutral, true, e, sizeof e)) {
+    if (config.virtual_enabled && media_virtual(a->media, &a->neutral, true, e, sizeof e)) {
         goto failed;
     }
-    fprintf(stderr, "cast: %s backend; live privacy-paused; socket %s\n", config.backend,
+    fprintf(stderr, "cast: %s backend; virtual privacy-paused; socket %s\n", config.backend,
             config.socket_path);
     a->source_generation = platform_source_generation(a->platform);
     a->panel = panel_transport_create();
@@ -908,12 +987,15 @@ cleanup:
     }
     frame_free(&a->screen);
     frame_free(&a->camera);
-    frame_free(&a->live);
+    frame_free(&a->virtual);
     frame_free(&a->record);
     frame_free(&a->neutral);
     frame_free(&a->frozen);
     frame_free(&a->record_frozen);
-    frame_free(&a->live_raw);
+    frame_free(&a->stream);
+    frame_free(&a->stream_raw);
+    frame_free(&a->stream_frozen);
+    frame_free(&a->virtual_raw);
     frame_free(&a->record_raw);
     if (server >= 0) {
         close(server);
@@ -929,6 +1011,40 @@ cleanup:
 }
 int main(int argc, char **argv)
 {
+    if (argc == 3 && !strcmp(argv[1], "--internal-stream-worker")) {
+        char *end = NULL;
+        long fd = strtol(argv[2], &end, 10);
+        if (!end || *end || fd < 3 || fd > INT_MAX) {
+            return 1;
+        }
+        return stream_worker_main((int)fd);
+    }
+    int command_index = 1;
+    while (command_index < argc && !strncmp(argv[command_index], "--", 2)) {
+        if (!strcmp(argv[command_index], "--no-live")) {
+            fprintf(stderr, "cast: --no-live was renamed; use --no-virtual\n");
+            return 1;
+        }
+        if (!strcmp(argv[command_index], "--no-virtual") ||
+            !strcmp(argv[command_index], "--no-camera")) {
+            command_index++;
+        } else if (!strcmp(argv[command_index], "--help") ||
+                   !strcmp(argv[command_index], "--version")) {
+            break;
+        } else {
+            command_index += 2;
+        }
+    }
+    if (command_index < argc &&
+        (!strcmp(argv[command_index], "live") ||
+         (!strcmp(argv[command_index], "annotations") && command_index + 1 < argc &&
+          !strcmp(argv[command_index + 1], "live")) ||
+         (!strcmp(argv[command_index], "preview") && command_index + 2 < argc &&
+          !strcmp(argv[command_index + 1], "target") &&
+          !strcmp(argv[command_index + 2], "live")))) {
+        fprintf(stderr, "cast: old live spelling was renamed; use virtual\n");
+        return 1;
+    }
     if ((argc == 2 && (!strcmp(argv[1], "--help") || !strcmp(argv[1], "help"))) ||
         (argc > 2 && !strcmp(argv[argc - 1], "--help"))) {
         fputs(help, stdout);

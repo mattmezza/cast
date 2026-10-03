@@ -47,8 +47,8 @@ static Config config(int w, int h)
     c.screen_width_percent = 78;
     c.screen_background_blur_radius = 96;
     c.screen_background_brightness = .25;
-    c.annotations_live_keys = c.annotations_record_keys = true;
-    c.annotations_live_clicks = c.annotations_record_clicks = true;
+    c.annotations_virtual_keys = c.annotations_record_keys = true;
+    c.annotations_virtual_clicks = c.annotations_record_clicks = true;
     snprintf(c.layout, sizeof(c.layout), "overlay");
     snprintf(c.shape, sizeof(c.shape), "rectangle");
     snprintf(c.anchor, sizeof(c.anchor), "bottom-right");
@@ -874,10 +874,10 @@ static void test_key_history(void)
             assert(at(&plain, x, y) == cfg.pause_color);
         }
     }
-    cfg.annotations_live_keys = false;
+    cfg.annotations_virtual_keys = false;
     now += 3000000000;
     render(c, &cfg, NULL, NULL, NULL, false, &out); /* Expire while hidden. */
-    cfg.annotations_live_keys = true;
+    cfg.annotations_virtual_keys = true;
     compositor_key(c, "j", now, cfg.keys_timeout_ms);
     expect_keys(c, &cfg, (const char *[]){"j"}, 1);
     compositor_destroy(c);
@@ -923,21 +923,21 @@ static void test_follow_lane_consistency(void)
     cfg.zoom_follow = true;
     cfg.zoom_smoothing = .25;
     Cursor cursor = {75, 25, true, now};
-    Frame screen = source(100, 50, 0, true), live = {0}, record = {0};
+    Frame screen = source(100, 50, 0, true), virtual = {0}, record = {0};
     Compositor *c = compositor_create();
-    render(c, &cfg, &screen, NULL, &cursor, false, &live);
+    render(c, &cfg, &screen, NULL, &cursor, false, &virtual);
     cursor.x = 20;
     now += 34000000;
-    render(c, &cfg, &screen, NULL, &cursor, false, &live);
+    render(c, &cfg, &screen, NULL, &cursor, false, &virtual);
     render(c, &cfg, &screen, NULL, &cursor, true, &record);
-    assert(memcmp(live.data, record.data, (size_t)live.stride * live.height) == 0);
+    assert(memcmp(virtual.data, record.data, (size_t)virtual.stride * virtual.height) == 0);
     now += 34000000;
     render(c, &cfg, &screen, NULL, &cursor, true, &record);
-    render(c, &cfg, &screen, NULL, &cursor, false, &live);
-    assert(memcmp(live.data, record.data, (size_t)live.stride * live.height) == 0);
+    render(c, &cfg, &screen, NULL, &cursor, false, &virtual);
+    assert(memcmp(virtual.data, record.data, (size_t)virtual.stride * virtual.height) == 0);
     compositor_destroy(c);
     frame_free(&screen);
-    frame_free(&live);
+    frame_free(&virtual);
     frame_free(&record);
 }
 

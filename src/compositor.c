@@ -1157,8 +1157,8 @@ int compositor_render(Compositor *c, const Config *cfg, const Frame *screen, con
     fill(out, cfg->pause_color);
     out->ts_ns = now;
     bool show_clicks =
-        record_target ? cfg->annotations_record_clicks : cfg->annotations_live_clicks;
-    bool show_keys = record_target ? cfg->annotations_record_keys : cfg->annotations_live_keys;
+        record_target ? cfg->annotations_record_clicks : cfg->annotations_virtual_clicks;
+    bool show_keys = record_target ? cfg->annotations_record_keys : cfg->annotations_virtual_keys;
     bool show_screen = strcmp(cfg->layout, "camera") != 0,
          show_camera = strcmp(cfg->layout, "screen") != 0 && cfg->camera_visible;
     bool stage = !strcmp(cfg->layout, "stage");

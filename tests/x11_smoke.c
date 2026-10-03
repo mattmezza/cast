@@ -32,7 +32,7 @@ static Config configuration(void)
     strcpy(c.keys_mode, "shortcuts");
     strcpy(c.keys_navigation, "Left,Right,Home,End,Tab,Return,Escape");
     strcpy(c.keys_position, "bottom-left");
-    strcpy(c.preview_target, "live");
+    strcpy(c.preview_target, "virtual");
     c.width = 256;
     c.height = 128;
     c.fps = 30;
@@ -43,8 +43,8 @@ static Config configuration(void)
     c.keys_font_size = 14;
     c.keys_color = 0xffffff;
     c.pause_color = 0x253647;
-    c.annotations_live_keys = c.annotations_record_keys = true;
-    c.annotations_live_clicks = c.annotations_record_clicks = true;
+    c.annotations_virtual_keys = c.annotations_record_keys = true;
+    c.annotations_virtual_clicks = c.annotations_record_clicks = true;
     return c;
 }
 
@@ -187,7 +187,7 @@ static void preview_tests(Display *d, Platform *p, Config *cfg, Compositor *c)
     fill_source(&source);
     Cursor cursor;
     char error[CAST_ERR];
-    State state = {.live_paused = true};
+    State state = {.virtual_paused = true};
     cfg->preview = true;
     Window preview = wait_preview(d, p, cfg, c, &source, &state);
     XWindowAttributes attr;
@@ -200,9 +200,27 @@ static void preview_tests(Display *d, Platform *p, Config *cfg, Compositor *c)
     assert(!strcmp(hint.res_name, "cast-preview") && !strcmp(hint.res_class, "CastPreview"));
     XFree(hint.res_name);
     XFree(hint.res_class);
-    XImage *header = XGetImage(d, preview, 0, 0, 32, 32, AllPlanes, ZPixmap);
-    assert(header && XGetPixel(header, 10, 10) == 0x111111);
+    XImage *header = XGetImage(d, preview, 0, attr.height - 32, 32, 32, AllPlanes, ZPixmap);
+    assert(header && XGetPixel(header, 1, 1) == 0x111111);
     XDestroyImage(header);
+    /* Native target controls select lanes without exposing UI pixels in output. */
+    XEvent choose = {0};
+    choose.xbutton.type = ButtonPress;
+    choose.xbutton.display = d;
+    choose.xbutton.window = preview;
+    choose.xbutton.button = Button1;
+    choose.xbutton.x = attr.width * 5 / 6;
+    choose.xbutton.y = attr.height - 48;
+    assert(XSendEvent(d, preview, False, ButtonPressMask, &choose));
+    pump(d, p, cfg, c, true);
+    assert(platform_preview_target(p) == 2);
+    assert(platform_preview_target(p) == -1);
+    choose.xkey.type = KeyPress;
+    choose.xkey.keycode = XKeysymToKeycode(d, XK_1);
+    choose.xkey.state = 0;
+    assert(XSendEvent(d, preview, False, KeyPressMask, &choose));
+    pump(d, p, cfg, c, true);
+    assert(platform_preview_target(p) == 0);
     XSetWindowBorderWidth(d, preview, 3);
     XSetWindowBorder(d, preview, 0xff0000);
     XMoveResizeWindow(d, preview, 70, 90, 210, 140);
@@ -215,13 +233,13 @@ static void preview_tests(Display *d, Platform *p, Config *cfg, Compositor *c)
         XNextEvent(d, &event);
     }
     for (int phase = 0; phase < 5; phase++) {
-        state.live_paused = phase == 0;
-        state.live_frozen = phase == 2;
+        state.virtual_paused = phase == 0;
+        state.virtual_frozen = phase == 2;
         state.recording = phase >= 3;
         state.record_paused = phase == 4;
-        strcpy(cfg->preview_target, phase >= 3 ? "record" : "live");
+        strcpy(cfg->preview_target, phase >= 3 ? "record" : "virtual");
         for (int i = 0; i < 4; i++) {
-            pump(d, p, cfg, c, state.live_paused);
+            pump(d, p, cfg, c, state.virtual_paused);
             assert(platform_preview(p, &source, &state, cfg, error, sizeof(error)) == 0);
             assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) == 0);
             assert(XGetWindowAttributes(d, preview, &attr) && attr.map_state == IsViewable);
@@ -323,7 +341,7 @@ static void preview_tests(Display *d, Platform *p, Config *cfg, Compositor *c)
 static void panel_tests(Display *d, Platform *p, Config *cfg, Compositor *comp)
 {
     char error[CAST_ERR], status[CAST_ERR];
-    Frame capture = {0}, live = {0}, recording = {0};
+    Frame capture = {0}, virtual = {0}, recording = {0};
     Cursor cursor;
     Window root = DefaultRootWindow(d);
     Window frame = XCreateSimpleWindow(d, root, 60, 70, 230, 150, 3, 0x123456, 0x456789);
@@ -375,14 +393,14 @@ static void panel_tests(Display *d, Platform *p, Config *cfg, Compositor *comp)
     output.zoom_factor = 2;
     output.zoom_follow = false;
     output.keys = output.clicks = output.cursor = false;
-    assert(compositor_render(comp, &output, &capture, NULL, NULL, false, &live, error,
+    assert(compositor_render(comp, &output, &capture, NULL, NULL, false, &virtual, error,
                              sizeof(error)) == 0);
     assert(compositor_render(comp, &output, &capture, NULL, NULL, true, &recording, error,
                              sizeof(error)) == 0);
-    assert(!memcmp(live.data, recording.data, (size_t)live.stride * live.height));
-    for (int y = 0; y < live.height; y++) {
-        for (int x = 0; x < live.width; x++) {
-            assert(pixel(&live, x, y) == 0 || pixel(&live, x, y) == cfg->pause_color);
+    assert(!memcmp(virtual.data, recording.data, (size_t)virtual.stride * virtual.height));
+    for (int y = 0; y < virtual.height; y++) {
+        for (int x = 0; x < virtual.width; x++) {
+            assert(pixel(&virtual, x, y) == 0 || pixel(&virtual, x, y) == cfg->pause_color);
         }
     }
     XSelectInput(d, panel, StructureNotifyMask);
@@ -502,7 +520,7 @@ static void panel_tests(Display *d, Platform *p, Config *cfg, Compositor *comp)
     assert(strstr(status, "no panel window registered"));
     assert(platform_panel_register(p, panel, (int)pid, error, sizeof(error)) < 0);
     frame_free(&capture);
-    frame_free(&live);
+    frame_free(&virtual);
     frame_free(&recording);
 }
 
@@ -897,8 +915,8 @@ static void preview_benchmark(Display *d, Platform *p, Config *cfg)
         uint64_t before = cast_now_ns();
         assert(platform_preview(p, &frame, &state, cfg, error, sizeof error) == 0);
         calls += cast_now_ns() - before;
-        XImage *image = XGetImage(d, window, attr.width / 2, 32 + (attr.height - 32) / 2, 1, 1,
-                                  AllPlanes, ZPixmap);
+        XImage *image =
+            XGetImage(d, window, attr.width / 2, (attr.height - 64) / 2, 1, 1, AllPlanes, ZPixmap);
         assert(image);
         unsigned long value = XGetPixel(image, 0, 0);
         XDestroyImage(image);
@@ -917,7 +935,7 @@ static void preview_benchmark(Display *d, Platform *p, Config *cfg)
     }
     printf("Preview 1080p->%dx%d: %d updates/90 at 60Hz, %.2fms mean age, %.3fms capture-thread "
            "call\n",
-           attr.width, attr.height - 32, updates, samples ? total_lag * 1000. / 60 / samples : 0,
+           attr.width, attr.height - 64, updates, samples ? total_lag * 1000. / 60 / samples : 0,
            calls / 90. / 1e6);
     assert(updates >= 40); /* Reject the former ~15fps gate, allow loaded CI runners. */
     assert(samples && total_lag < samples * 8); /* Less than eight producer ticks behind. */

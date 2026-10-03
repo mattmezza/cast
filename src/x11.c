@@ -1,6 +1,7 @@
 /* Xlib-only platform implementation. All desktop coordinates stop at this boundary. */
 #include "platform_backend.h"
 #include "presentation_text.h"
+#include "stream.h"
 #define Cursor X11Cursor
 #include <X11/XKBlib.h>
 #include <X11/Xatom.h>
@@ -26,6 +27,7 @@
 #include <time.h>
 
 #define MONITOR_MAX 64
+#define PREVIEW_CHROME_HEIGHT 64
 typedef struct {
     char name[128];
     int x, y, w, h;
@@ -38,7 +40,7 @@ typedef struct {
     bool stop, pending;
     Frame frame;
     Window window;
-    int width, height;
+    int width, height, target;
     char label[256], error[CAST_ERR];
     unsigned long color;
     uint64_t epoch, ready_epoch;
@@ -65,6 +67,7 @@ typedef struct {
     int panel_pid;
     Atom wm_delete, wm_state, active_window;
     int screen, xi_opcode, randr_base, xkb_base;
+    int preview_target_pending;
     bool xi, shm, composite, xkb, redirected, shm_attached, privacy, preview_disabled;
     bool window_unmapped;
     XImage *image;
@@ -489,6 +492,7 @@ Platform *x11_open(const Config *cfg, char *e, size_t n)
         fail(e, n, "out of memory opening Xorg");
         return NULL;
     }
+    p->preview_target_pending = -1;
     p->segment.shmid = -1;
     p->d = XOpenDisplay(NULL);
     if (!p->d) {
@@ -1543,6 +1547,28 @@ void x11_events(Platform *platform, Compositor *comp, const Config *cfg, bool pr
             p->preview_h = ev.xconfigure.height;
             p->preview_border = ev.xconfigure.border_width;
         }
+        if (ev.type == KeyPress && ev.xkey.window == p->preview) {
+            KeySym key = XLookupKeysym(&ev.xkey, 0);
+            if (key >= XK_1 && key <= XK_3) {
+                p->preview_target_pending = (int)(key - XK_1);
+                p->preview_epoch++;
+                preview_neutral(p);
+            } else if (key == XK_Escape || (key == XK_w && (ev.xkey.state & ControlMask))) {
+                XUnmapWindow(p->d, p->preview);
+                p->preview_disabled = true;
+                p->preview_dragging = false;
+            }
+            continue;
+        }
+        if (ev.type == ButtonPress && ev.xbutton.window == p->preview &&
+            ev.xbutton.button == Button1 && ev.xbutton.y >= p->preview_h - PREVIEW_CHROME_HEIGHT &&
+            ev.xbutton.y < p->preview_h - 32) {
+            int target = ev.xbutton.x * 3 / (p->preview_w > 0 ? p->preview_w : 1);
+            p->preview_target_pending = target < 0 ? 0 : target > 2 ? 2 : target;
+            p->preview_epoch++;
+            preview_neutral(p);
+            continue;
+        }
         if (ev.type == ButtonPress && ev.xbutton.window == p->preview &&
             ev.xbutton.button == Button1 && ev.xbutton.y < 32) {
             p->preview_dragging = true;
@@ -1591,10 +1617,10 @@ static void preview_neutral(Xorg *p)
 }
 static void preview_create(Xorg *p, const Config *cfg)
 {
-    int w = 640, h = cfg->height * 640 / cfg->width + 32;
+    int w = 640, h = cfg->height * 640 / cfg->width + PREVIEW_CHROME_HEIGHT;
     if (h > 600) {
         h = 600;
-        w = cfg->width * (h - 32) / cfg->height;
+        w = cfg->width * (h - PREVIEW_CHROME_HEIGHT) / cfg->height;
     }
     if (w < 160) {
         w = 160;
@@ -1643,9 +1669,11 @@ static void preview_create(Xorg *p, const Config *cfg)
     XChangeProperty(p->d, p->preview, type, XA_ATOM, 32, PropModeReplace, (unsigned char *)&utility,
                     1);
     XSetWMProtocols(p->d, p->preview, &p->wm_delete, 1);
+    XSizeHints hints = {.flags = PMinSize, .min_width = 360, .min_height = 160};
+    XSetWMNormalHints(p->d, p->preview, &hints);
     XSelectInput(p->d, p->preview,
                  ExposureMask | StructureNotifyMask | ButtonPressMask | ButtonReleaseMask |
-                     Button1MotionMask);
+                     Button1MotionMask | KeyPressMask);
     /* Map only after the worker has painted an accepted current-epoch frame. */
     /* Its second connection must not address a window before creation completes. */
     XSync(p->d, False);
@@ -1682,7 +1710,7 @@ static bool preview_image(PreviewPainter *p, int w, int h)
 }
 
 static Pixmap preview_paint(PreviewPainter *p, const Frame *frame, Window window, int w, int h,
-                            const char *label, unsigned long color)
+                            const char *label, unsigned long color, int target)
 {
     if (!preview_image(p, w, h)) {
         return None;
@@ -1714,17 +1742,25 @@ static Pixmap preview_paint(PreviewPainter *p, const Frame *frame, Window window
     xerror = 0;
     /* Each published pixmap is immutable. Reusing an installed background would
      * allow a worker from an older privacy epoch to alter visible pixels. */
-    Pixmap pixmap = XCreatePixmap(d, window, (unsigned)w, (unsigned)(h + 32),
+    Pixmap pixmap = XCreatePixmap(d, window, (unsigned)w, (unsigned)(h + PREVIEW_CHROME_HEIGHT),
                                   (unsigned)DefaultDepth(d, p->image.screen));
     if (p->image.shm_attached) {
-        XShmPutImage(d, pixmap, p->gc, im, 0, 0, 0, 32, (unsigned)w, (unsigned)h, False);
+        XShmPutImage(d, pixmap, p->gc, im, 0, 0, 0, 0, (unsigned)w, (unsigned)h, False);
     } else {
-        XPutImage(d, pixmap, p->gc, im, 0, 0, 0, 32, (unsigned)w, (unsigned)h);
+        XPutImage(d, pixmap, p->gc, im, 0, 0, 0, 0, (unsigned)w, (unsigned)h);
     }
     XSetForeground(d, p->gc, 0x111111);
-    XFillRectangle(d, pixmap, p->gc, 0, 0, (unsigned)w, 32);
+    XFillRectangle(d, pixmap, p->gc, 0, h, (unsigned)w, PREVIEW_CHROME_HEIGHT);
+    const char *targets[] = {"Virtual camera", "Recording", "Streaming"};
+    for (int lane = 0; lane < 3; lane++) {
+        int x = lane * w / 3, width = (lane + 1) * w / 3 - x;
+        XSetForeground(d, p->gc, lane == target ? 0x243c39 : 0x20242a);
+        XFillRectangle(d, pixmap, p->gc, x + 3, h + 3, (unsigned)(width > 6 ? width - 6 : 1), 26);
+        XSetForeground(d, p->gc, lane == target ? 0xb7e7dd : 0xc7ccd3);
+        XDrawString(d, pixmap, p->gc, x + 10, h + 21, targets[lane], (int)strlen(targets[lane]));
+    }
     XSetForeground(d, p->gc, color);
-    XDrawString(d, pixmap, p->gc, 10, 21, label, (int)strlen(label));
+    XDrawString(d, pixmap, p->gc, 10, h + 51, label, (int)strlen(label));
     /* Completes SHM consumption and painting before publishing across connections. */
     XSync(d, False);
     if (xerror) {
@@ -1749,7 +1785,7 @@ static void *preview_run(void *data)
         frame = p->frame;
         p->frame = spare;
         Window window = p->window;
-        int w = p->width, h = p->height;
+        int w = p->width, h = p->height, target = p->target;
         uint64_t epoch = p->epoch;
         unsigned long color = p->color;
         char label[sizeof(p->label)];
@@ -1782,7 +1818,8 @@ static void *preview_run(void *data)
                 }
             }
         }
-        Pixmap pixmap = d ? preview_paint(&painter, &frame, window, w, h, label, color) : None;
+        Pixmap pixmap =
+            d ? preview_paint(&painter, &frame, window, w, h, label, color, target) : None;
         pthread_mutex_lock(&p->mutex);
         if (!pixmap) {
             snprintf(p->error, sizeof(p->error), "%s; toggle preview off/on",
@@ -1848,6 +1885,13 @@ static void preview_stop(Xorg *p)
     free(worker);
     p->preview_worker = NULL;
 }
+int x11_preview_target(Platform *platform)
+{
+    Xorg *p = (Xorg *)platform;
+    int target = p->preview_target_pending;
+    p->preview_target_pending = -1;
+    return target;
+}
 int x11_preview(Platform *platform, const Frame *frame, const State *state, const Config *cfg,
                 char *e, size_t n)
 {
@@ -1879,11 +1923,16 @@ int x11_preview(Platform *platform, const Frame *frame, const State *state, cons
         return 0;
     }
     bool record = !strcmp(cfg->preview_target, "record");
-    unsigned flags = (unsigned)state->live_paused | ((unsigned)state->live_frozen << 1) |
-                     ((unsigned)state->recording << 2) | ((unsigned)state->record_paused << 3) |
-                     ((unsigned)record << 4) | ((unsigned)state->live_blurred << 5) |
-                     ((unsigned)state->record_frozen << 6) |
-                     ((unsigned)state->record_blurred << 7) | ((unsigned)state->record_cut << 8);
+    bool stream = !strcmp(cfg->preview_target, "stream");
+    unsigned flags =
+        (unsigned)state->virtual_paused | ((unsigned)state->virtual_frozen << 1) |
+        ((unsigned)state->recording << 2) | ((unsigned)state->record_paused << 3) |
+        ((unsigned)record << 4) | ((unsigned)state->virtual_blurred << 5) |
+        ((unsigned)state->record_frozen << 6) | ((unsigned)state->record_blurred << 7) |
+        ((unsigned)state->record_cut << 8) | ((unsigned)stream << 9) |
+        ((unsigned)state->stream_active << 10) | ((unsigned)state->stream_paused << 11) |
+        ((unsigned)state->stream_frozen << 12) | ((unsigned)state->stream_blurred << 13) |
+        ((unsigned)state->stream_connection_state << 14);
     if (!p->preview_enabled || flags != p->preview_state || p->preview_source != p->generation) {
         p->preview_epoch++;
         p->preview_state = flags;
@@ -1899,7 +1948,7 @@ int x11_preview(Platform *platform, const Frame *frame, const State *state, cons
     }
     Preview *worker = p->preview_worker;
     if (pthread_mutex_trylock(&worker->mutex) != 0) {
-        return 0; /* A busy preview loses this update, never the live capture cadence. */
+        return 0; /* A busy preview loses this update, never the virtual capture cadence. */
     }
     if (worker->ready_pixmap && worker->ready_epoch == p->preview_epoch) {
         XSetWindowBackgroundPixmap(p->d, p->preview, worker->ready_pixmap);
@@ -1914,7 +1963,7 @@ int x11_preview(Platform *platform, const Frame *frame, const State *state, cons
         pthread_mutex_unlock(&worker->mutex);
         return -1;
     }
-    int w = p->preview_w, h = p->preview_h - 32;
+    int w = p->preview_w, h = p->preview_h - PREVIEW_CHROME_HEIGHT;
     if (w < 1 || h < 1 || w > 4096 || h > 4096) {
         pthread_mutex_unlock(&worker->mutex);
         return fail(e, n, "preview window size is unsupported; resize it below 4096 pixels");
@@ -1927,22 +1976,43 @@ int x11_preview(Platform *platform, const Frame *frame, const State *state, cons
     worker->width = w;
     worker->height = h;
     worker->epoch = p->preview_epoch;
-    worker->color = state->live_paused                          ? 0xffc65c
-                    : state->live_blurred || state->live_frozen ? 0x7ec8ff
-                                                                : 0x64e69f;
-    const char *live = state->live_paused    ? "PAUSED"
-                       : state->live_blurred ? (state->live_frozen ? "BLURRED+FROZEN" : "BLURRED")
-                       : state->live_frozen  ? "FROZEN"
-                                             : "LIVE";
-    const char *record_state =
-        !state->recording       ? "RECORD OFF"
-        : state->record_cut     ? "RECORD CUT"
-        : state->record_paused  ? "RECORD PAUSED"
-        : state->record_blurred ? (state->record_frozen ? "RECORD BLUR+FREEZE" : "RECORD BLURRED")
-        : state->record_frozen  ? "RECORD FROZEN"
-                                : "RECORDING";
-    snprintf(worker->label, sizeof(worker->label), "%s | %s | preview: %s", live, record_state,
-             cfg->preview_target);
+    worker->target = stream ? 2 : record ? 1 : 0;
+    bool paused = stream   ? state->stream_paused
+                  : record ? state->record_paused
+                           : state->virtual_paused;
+    bool blurred = stream   ? state->stream_blurred
+                   : record ? state->record_blurred
+                            : state->virtual_blurred;
+    bool frozen = stream   ? state->stream_frozen
+                  : record ? state->record_frozen
+                           : state->virtual_frozen;
+    bool stopped = stream   ? !state->stream_active
+                   : record ? !state->recording
+                            : !cfg->virtual_enabled;
+    worker->color = stopped             ? 0xc7ccd3
+                    : paused            ? 0xffc65c
+                    : blurred || frozen ? 0x7ec8ff
+                                        : 0x64e69f;
+    const char *mode = stopped                       ? "Stopped"
+                       : record && state->record_cut ? "Cut time"
+                       : paused                      ? "Paused"
+                       : blurred                     ? (frozen ? "Blurred + frozen" : "Blurred")
+                       : frozen                      ? "Frozen"
+                       : stream                      ? "Streaming"
+                       : record                      ? "Recording"
+                                                     : "Virtual camera";
+    if (stream && state->stream_connection_state != STREAM_STREAMING) {
+        snprintf(worker->label, sizeof worker->label, "Streaming | %s | %s",
+                 state->stream_connection_state == STREAM_CONNECTING     ? "Connecting"
+                 : state->stream_connection_state == STREAM_RECONNECTING ? "Retrying"
+                 : state->stream_connection_state == STREAM_STOPPING     ? "Stopping"
+                 : state->stream_connection_state == STREAM_FAILED       ? "Failed"
+                                                                         : "Stopped",
+                 paused ? "Paused" : mode);
+    } else {
+        snprintf(worker->label, sizeof worker->label,
+                 "%s | %s | Local controls are excluded from output", cfg->preview_target, mode);
+    }
     worker->pending = true;
     pthread_cond_signal(&worker->changed);
     pthread_mutex_unlock(&worker->mutex);

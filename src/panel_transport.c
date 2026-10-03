@@ -36,8 +36,8 @@ typedef struct {
     uint32_t version, snapshot_size;
     uint64_t generation;
     PanelSnapshot snapshot;
-    PreviewInfo frame[2];
-    uint8_t pixels[2][PANEL_PIXELS];
+    PreviewInfo frame[3];
+    uint8_t pixels[3][PANEL_PIXELS];
 } SharedPreview;
 struct PanelTransport {
     int peer, writer, reader;
@@ -61,7 +61,7 @@ struct PanelClient {
     PanelSnapshot snapshot;
     QueuedCommand queue[PANEL_QUEUE];
     unsigned head, count;
-    uint64_t queued, completed, generation, last_frame[2];
+    uint64_t queued, completed, generation, last_frame[3];
     uint8_t *staging;
 };
 
@@ -134,6 +134,7 @@ static void snapshot_fill(PanelSnapshot *s, App *a, PanelTransport *t)
     memset(s, 0, sizeof *s);
     s->config = a->config;
     s->state = a->state;
+    media_stream_status(a->media, &s->stream);
     s->capabilities = platform_capabilities(a->platform);
     s->connected = true;
     s->countdown = a->countdown;
@@ -183,7 +184,7 @@ static void preview_write(SharedPreview *s, int target, const Frame *f)
     size_t used = (size_t)info->stride * h;
     memset(s->pixels[target] + used, 0, PANEL_PIXELS - used);
 }
-void panel_transport_publish(PanelTransport *t, App *a, const Frame *live, const Frame *record)
+void panel_transport_publish(PanelTransport *t, App *a, const Frame *virtual, const Frame *record)
 {
     if (!t || !t->shared) {
         return;
@@ -192,17 +193,20 @@ void panel_transport_publish(PanelTransport *t, App *a, const Frame *live, const
     if (!t->shared) {
         return;
     }
-    if (!a->config.live_enabled || a->state.live_paused) {
-        live = &a->neutral;
+    if (!a->config.virtual_enabled || a->state.virtual_paused) {
+        virtual = &a->neutral;
     }
-    if (a->state.record_paused ||
-        ((!a->state.recording || a->state.record_cut) && !a->countdown)) {
+    if (a->state.record_paused || ((!a->state.recording || a->state.record_cut) && !a->countdown)) {
         record = &a->neutral;
     }
     atomic_fetch_add_explicit(&t->shared->sequence, 1, memory_order_acq_rel);
     snapshot_fill(&t->shared->snapshot, a, t);
-    preview_write(t->shared, 0, live);
+    preview_write(t->shared, 0, virtual);
     preview_write(t->shared, 1, record);
+    preview_write(t->shared, 2,
+                  a->state.stream_active && !a->state.stream_paused && a->stream.data
+                      ? &a->stream
+                      : &a->neutral);
     atomic_fetch_add_explicit(&t->shared->sequence, 1, memory_order_release);
 }
 void panel_transport_barrier(PanelTransport *t, App *a, bool invalidate)
@@ -217,11 +221,11 @@ void panel_transport_barrier(PanelTransport *t, App *a, bool invalidate)
     atomic_fetch_add_explicit(&t->shared->sequence, 1, memory_order_acq_rel);
     t->privacy_epoch++;
     snapshot_fill(&t->shared->snapshot, a, t);
-    if (invalidate || !a->config.live_enabled || a->state.live_paused) {
+    if (invalidate || !a->config.virtual_enabled || a->state.virtual_paused) {
         preview_write(t->shared, 0, &a->neutral);
     } else {
         /* The daemon has applied freeze, then blur before this acknowledged barrier. */
-        preview_write(t->shared, 0, a->live.data ? &a->live : &a->neutral);
+        preview_write(t->shared, 0, a->virtual.data ? &a->virtual : &a->neutral);
     }
     if (invalidate || a->state.record_paused ||
         ((!a->state.recording || a->state.record_cut) && !a->countdown)) {
@@ -229,6 +233,10 @@ void panel_transport_barrier(PanelTransport *t, App *a, bool invalidate)
     } else {
         preview_write(t->shared, 1, a->record.data ? &a->record : &a->neutral);
     }
+    preview_write(t->shared, 2,
+                  !invalidate && a->state.stream_active && !a->state.stream_paused && a->stream.data
+                      ? &a->stream
+                      : &a->neutral);
     atomic_fetch_add_explicit(&t->shared->sequence, 1, memory_order_release);
 }
 static void attach_error(int fd, const char *error)
@@ -723,7 +731,7 @@ bool panel_client_snapshot(PanelClient *c, PanelSnapshot *snapshot)
     pthread_mutex_unlock(&c->mutex);
     return true;
 }
-int panel_client_frame(PanelClient *c, bool record, Frame *frame, char *error, size_t n)
+int panel_client_frame(PanelClient *c, int target, Frame *frame, char *error, size_t n)
 {
     if (!c) {
         return app_error(error, n, "panel client unavailable");
@@ -731,7 +739,10 @@ int panel_client_frame(PanelClient *c, bool record, Frame *frame, char *error, s
     if (pthread_mutex_trylock(&c->mutex)) {
         return 0;
     }
-    int result = 0, target = record ? 1 : 0;
+    if (target < 0 || target > 2) {
+        return app_error(error, n, "invalid preview target");
+    }
+    int result = 0;
     SharedPreview *s = c->shared;
     struct pollfd p = {c->peer, POLLIN | POLLHUP, 0};
     if (!s || c->peer < 0 || (poll(&p, 1, 0) > 0 && p.revents)) {

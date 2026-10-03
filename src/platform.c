@@ -148,8 +148,9 @@ int platform_command(Platform *p, Config *cfg, int argc, char **argv, char *e, s
     }
     if (argc >= 2 && !strcmp(argv[0], "preview")) {
         if (argc == 3 && !strcmp(argv[1], "target")) {
-            if (strcmp(argv[2], "live") && strcmp(argv[2], "record")) {
-                return error(e, n, "usage: cast preview target live|record");
+            if (strcmp(argv[2], "virtual") && strcmp(argv[2], "record") &&
+                strcmp(argv[2], "stream")) {
+                return error(e, n, "usage: cast preview target virtual|record|stream");
             }
             snprintf(cfg->preview_target, sizeof(cfg->preview_target), "%s", argv[2]);
             snprintf(e, n, "preview target: %s", cfg->preview_target);
@@ -157,8 +158,9 @@ int platform_command(Platform *p, Config *cfg, int argc, char **argv, char *e, s
         }
         if (argc != 2 ||
             (strcmp(argv[1], "on") && strcmp(argv[1], "off") && strcmp(argv[1], "toggle"))) {
-            return error(e, n,
-                         "usage: cast preview on|off|toggle; cast preview target live|record");
+            return error(
+                e, n,
+                "usage: cast preview on|off|toggle; cast preview target virtual|record|stream");
         }
         bool on = !strcmp(argv[1], "toggle") ? !cfg->preview : !strcmp(argv[1], "on");
         if (on && !platform_capabilities(p).preview) {
@@ -244,6 +246,17 @@ int platform_countdown_frame(Platform *p, const Frame *frame, const Config *conf
     (void)e;
     (void)n;
     return 0;
+}
+int platform_preview_target(Platform *p)
+{
+#ifdef WITH_X11
+    if (p->backend == XORG) {
+        return x11_preview_target(p->impl);
+    }
+#else
+    (void)p;
+#endif
+    return -1;
 }
 int platform_preview(Platform *p, const Frame *f, const State *s, const Config *cfg, char *e,
                      size_t n)
