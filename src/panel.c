@@ -446,7 +446,8 @@ static void navigate_view(Panel *p, PanelView view, int section)
 {
     remember_scroll(p);
     p->view = view;
-    p->main_tab = view == VIEW_COMPOSE || view == VIEW_SECTION;
+    p->main_tab = view == VIEW_SETUP ? p->return_view != VIEW_OPERATE
+                                     : view == VIEW_COMPOSE || view == VIEW_SECTION;
     p->open_section = view == VIEW_SECTION ? section : -1;
     p->stream_setup = view == VIEW_SETUP;
     p->dropdown = 0;
