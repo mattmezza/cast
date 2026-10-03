@@ -63,7 +63,60 @@ static int camera_background_benchmark(Config *config, Compositor *compositor, F
     return 0;
 }
 
-int main(void)
+static int stage_benchmark(Config *config, Compositor *compositor, Frame *screen, Frame *camera,
+                           Frame *output, const char *logo)
+{
+    enum {
+        SAMPLES = 40
+    };
+    char error[CAST_ERR];
+    strcpy(config->layout, "stage");
+    config->screen_radius = 24;
+    config->screen_border_width = 2;
+    strcpy(config->text_content, "Cast presentation · static overlay");
+    if (logo) {
+        snprintf(config->logo_path, sizeof config->logo_path, "%s", logo);
+    }
+    const char *modes[] = {"solid", "gradient", "blurred"};
+    for (unsigned mode = 0; mode < 3; mode++) {
+        strcpy(config->screen_background, modes[mode]);
+        double baseline = 0;
+        for (unsigned overlays = 0; overlays < 2; overlays++) {
+            config->logo_enabled = overlays && logo;
+            config->text_enabled = overlays;
+            if (compositor_prepare(compositor, config, error, sizeof error) ||
+                compositor_render(compositor, config, screen, camera, NULL, false, output, error,
+                                  sizeof error)) {
+                return fprintf(stderr, "stage benchmark: %s\n", error), -1;
+            }
+            double samples[SAMPLES];
+            for (int i = 0; i < SAMPLES; i++) {
+                screen->ts_ns = cast_now_ns();
+                camera->ts_ns = screen->ts_ns;
+                uint64_t started = screen->ts_ns;
+                if (compositor_render(compositor, config, screen, camera, NULL, false, output,
+                                      error, sizeof error)) {
+                    return fprintf(stderr, "stage benchmark: %s\n", error), -1;
+                }
+                samples[i] = (cast_now_ns() - started) / 1e6;
+            }
+            qsort(samples, SAMPLES, sizeof *samples, compare_samples);
+            double median = samples[SAMPLES / 2];
+            if (!overlays) {
+                baseline = median;
+            }
+            printf("synthetic RGBA stage 1920x1080 screen1920x1080 camera1920x1080 "
+                   "rounded+border background=%s overlays=%s: median=%.2fms p95=%.2fms "
+                   "added_overlay=%.2fms frame_budget_at30fps=%.1f%%\n",
+                   modes[mode], overlays ? (logo ? "cached logo+text" : "cached text") : "off",
+                   median, samples[SAMPLES * 95 / 100], overlays ? median - baseline : 0,
+                   median / (1000.0 / 30) * 100);
+        }
+    }
+    return 0;
+}
+
+int main(int argc, char **argv)
 {
     enum {
         SAMPLE_COUNT = 90
@@ -120,6 +173,9 @@ int main(void)
     }
     memset(camera.data, 0xc0, (size_t)camera.stride * camera.height);
     if (camera_background_benchmark(&config, compositor, &screen, &camera, &live)) {
+        return 1;
+    }
+    if (stage_benchmark(&config, compositor, &screen, &camera, &live, argc > 1 ? argv[1] : NULL)) {
         return 1;
     }
     frame_free(&screen);
