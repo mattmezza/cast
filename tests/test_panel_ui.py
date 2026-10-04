@@ -29,7 +29,7 @@ def wait_until(predicate, description, timeout=10):
     raise AssertionError(description)
 
 
-def exercise():
+def exercise(focused_setup_parent=False):
     with tempfile.TemporaryDirectory(prefix="cast-panel-redesign-") as directory:
         root = Path(directory)
         environment = os.environ.copy()
@@ -147,6 +147,8 @@ def exercise():
                 acknowledge()
 
         def capture(name):
+            if focused_setup_parent:
+                return
             destination = os.environ.get("CAST_PANEL_TEST_SCREENSHOTS")
             if destination:
                 Path(destination).mkdir(parents=True, exist_ok=True)
@@ -169,6 +171,8 @@ def exercise():
             assert abs(widget(22)["box"][2]-widget(34)["box"][2]) < 1, "meta-actions have unequal widths"
             status = ui()["status_bar"]
             assert status[3] == 46, "status rows changed height"
+            assert status[0] >= 0 and status[0]+status[2] <= width+1
+            assert status[1] >= 0 and status[1]+status[3] <= height+1, "footer extends outside window"
             for row in ui()["status_rows"]:
                 assert row[3] == 16, ("status row wrapped", row)
                 assert row[0] >= status[0] and row[0]+row[2] <= status[0]+status[2]+1, (row, status)
@@ -198,26 +202,10 @@ def exercise():
             assert all(widget(100+section) for section in range(7)), "Compose list is incomplete"
             assert not widget(99) and not any(item["key"] for item in ui()["widgets"]), "list contains page controls"
 
-        try:
-            daemon = start_daemon()
-            wait_until(lambda: (root / "daemon.sock").exists(), "synthetic daemon did not start")
-            initial = state()
-            panel = start_panel()
-            assert state()["virtual"] == initial["virtual"]
-            assert state()["record"] == initial["record"] and state()["stream"]["state"] == "stopped"
-            assert ui()["density"] == scale and ui()["raster_font_size"] == 16*scale
-            properties = subprocess.run(["xprop", "-id", window, "WM_CLASS", "_NET_WM_WINDOW_TYPE"],
-                                        env=environment, text=True, capture_output=True, check=True).stdout
-            assert '"cast-panel", "CastPanel"' in properties and "_NET_WM_WINDOW_TYPE_UTILITY" in properties
-            pinned_accessible()
-            capture("operate-collapsed")
-
-            # Flat Compose list, drill-in pages, Back, shortcuts and status links.
-            xdo("key", "--clearmodifiers", "2")
-            compose_list()
-            capture("compose-list")
-            xdo("windowsize", window, round(360*scale), round(480*scale))
+        def short_compose_list():
+            xdo("windowsize", window, round(360*scale), round(640*scale))
             time.sleep(.15)
+            pinned_accessible()
             wheel(5, 1)
             area = ui()["scroll"]
             partial = [item for item in ui()["widgets"] if 100 <= item["id"] <= 106
@@ -234,9 +222,73 @@ def exercise():
                     round(visible_y*scale), "click", 1)
                 time.sleep(.08)
                 assert ui()["open_section"] == -1, "invisible partial row opened its page"
-            capture("compose-list-partial-360x480")
+            capture("compose-list-partial-360x640")
             xdo("windowsize", window, round(440*scale), round(760*scale))
             time.sleep(.15)
+
+        def compose_setup_parent():
+            nonlocal panel
+            navigate(6)
+            # Focus Setup before scrolling so Enter exercises its parent-page
+            # memory at a nonzero position without moving the pointer to the top.
+            for _ in range(20):
+                if ui()["focus"] == 150:
+                    break
+                previous = ui()["focus"]
+                xdo("key", "--clearmodifiers", "Tab")
+                wait_until(lambda: ui()["focus"] != previous, "Tab did not move focus")
+            assert ui()["focus"] == 150, "Setup could not receive keyboard focus"
+            wheel(5, 2)
+            parent_scroll = ui()["scroll_offset"]
+            assert parent_scroll < -20, "Settings did not scroll before opening Setup"
+            xdo("key", "--clearmodifiers", "Return")
+            wait_until(lambda: ui()["stream_setup"] and ui()["tab"] == 1,
+                       "Settings setup did not retain Compose tab")
+            xdo("key", "--clearmodifiers", "ctrl+q")
+            assert panel.wait(timeout=8) == 0
+            panel = start_panel()
+            wait_until(lambda: ui()["stream_setup"] and ui()["tab"] == 1,
+                       "reopened Setup forgot its Compose parent tab")
+            xdo("key", "--clearmodifiers", "Escape")
+            wait_until(lambda: not ui()["stream_setup"] and ui()["tab"] == 1
+                       and ui()["open_section"] == 6, "Escape did not restore Settings parent")
+            wait_until(lambda: abs(ui()["scroll_offset"]-parent_scroll) < 2,
+                       "Escape did not restore Settings scroll")
+            assert config.read_bytes() == original_config, "Setup navigation wrote config"
+            xdo("key", "--clearmodifiers", "1")
+            wait_until(lambda: ui()["tab"] == 0, "Setup parent check did not return to Operate")
+
+        try:
+            daemon = start_daemon()
+            wait_until(lambda: (root / "daemon.sock").exists(), "synthetic daemon did not start")
+            initial = state()
+            panel = start_panel()
+            assert state()["virtual"] == initial["virtual"]
+            assert state()["record"] == initial["record"] and state()["stream"]["state"] == "stopped"
+            assert ui()["density"] == scale and ui()["raster_font_size"] == 16*scale
+            properties = subprocess.run(["xprop", "-id", window, "WM_CLASS", "_NET_WM_WINDOW_TYPE"],
+                                        env=environment, text=True, capture_output=True, check=True).stdout
+            assert '"cast-panel", "CastPanel"' in properties and "_NET_WM_WINDOW_TYPE_UTILITY" in properties
+            pinned_accessible()
+            capture("operate-collapsed")
+            if focused_setup_parent:
+                xdo("key", "--clearmodifiers", "2")
+                compose_list()
+                short_compose_list()
+                compose_setup_parent()
+                xdo("key", "--clearmodifiers", "ctrl+q")
+                assert panel.wait(timeout=8) == 0
+                assert state()["virtual"] == initial["virtual"] and state()["record"] == initial["record"]
+                cli("quit")
+                daemon.wait(timeout=8)
+                return
+            compose_setup_parent()
+
+            # Flat Compose list, drill-in pages, Back, shortcuts and status links.
+            xdo("key", "--clearmodifiers", "2")
+            compose_list()
+            capture("compose-list")
+            short_compose_list()
             click_widget(101)
             wait_until(lambda: ui()["open_section"] == 1, "Compose list row did not drill in")
             click_widget(99)
@@ -545,7 +597,11 @@ if __name__ == "__main__":
             raise SystemExit(f"native panel check requires {dependency}")
     if "--inside" not in sys.argv:
         result = subprocess.run(["xvfb-run", "-a", "-s", "-screen 0 2048x2048x24",
-                                 sys.executable, __file__, "--inside"], timeout=300)
+                                 sys.executable, __file__, "--inside", *sys.argv[1:]], timeout=300)
         raise SystemExit(result.returncode)
-    exercise()
-    print("native panel: nine workflows, Compose pages/back/keys, pinned drafts, session navigation memory, compact status/header, privacy restore, private streaming, disconnect/reconnect and 360–800px density passed")
+    focused = "--setup-parent-only" in sys.argv
+    exercise(focused_setup_parent=focused)
+    if focused:
+        print("native panel: supported360×640 list clipping/footer bounds and Compose setup parent tab/page/scroll/reopen passed")
+    else:
+        print("native panel: nine workflows, Compose pages/back/keys, pinned drafts, session navigation memory, compact status/header, privacy restore, private streaming, disconnect/reconnect and 360–800px density passed")
