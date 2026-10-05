@@ -559,7 +559,7 @@ def exercise(focused_setup_parent=False):
             wait_until(lambda: ui()["tab"] == 0 and ui()["open_section"] == -1,
                        "new daemon session inherited prior navigation memory")
             before_close = state()
-            xdo("key", "--clearmodifiers", "ctrl+q")
+            click_widget(7)
             assert panel.wait(timeout=8) == 0
             after_close = state()
             for lane in ("virtual", "record"):

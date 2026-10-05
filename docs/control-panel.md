@@ -2,7 +2,9 @@
 
 Build with `PANEL=1` and run `cast panel`. The panel is an independent client of the
 existing daemon. Opening, navigating, closing or reconnecting the panel never
-starts, stops, pauses or reveals an output. `Ctrl+Q` closes only this window.
+starts, stops, pauses or reveals an output. **Close**, beside the pinned tabs,
+or `Ctrl+Q` closes only this window, including while disconnected or waiting for
+a command acknowledgement.
 The optional Clay/SDL3 renderer uses bundled Inter at native display density and
 has no effect on a `PANEL=0` daemon’s streaming capability.
 
@@ -90,7 +92,9 @@ Wayland reports native preview limitations instead of pretending it has a window
 ## Window and feedback behaviour
 
 The panel uses fluid widths from 360 logical pixels, a centered column up to 520
-pixels, square controls, visible keyboard focus, and accelerated wheel scrolling.
+pixels, square controls, visible keyboard focus, and wheel scrolling at 60 logical
+pixels per notch (twice the previous speed). Fractional trackpad motion and natural
+scroll direction are preserved.
 Only the body scrolls; the header, tabs, page Back control, draft bar and status
 stay pinned. This works in both floating and tiled windows, without assuming a
 window drag handle. The X11 class

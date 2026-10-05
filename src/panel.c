@@ -305,7 +305,8 @@ typedef enum {
     A_REVERT,
     A_APPLY_SECTION,
     A_SETUP,
-    A_BACK
+    A_BACK,
+    A_CLOSE
 } Action;
 typedef enum {
     ICON_NONE,
@@ -1084,6 +1085,23 @@ static void pinned_header(Panel *p)
     {
         text_button(p, 5, "Operate", true, A_MAIN_TAB, 0, p->main_tab == 0);
         text_button(p, 6, "Compose", true, A_MAIN_TAB, 1, p->main_tab == 1);
+        /* Closing is local and remains available while disconnected or waiting
+         * for a daemon command. Keep the two output-action rows unchanged. */
+        widget(p, 7, W_BUTTON, A_CLOSE, true);
+        CLAY({.id = element_id(7),
+              .layout = {.sizing = {.width = CLAY_SIZING_FIXED(76),
+                                    .height = CLAY_SIZING_FIXED(42)},
+                         .childGap = 5,
+                         .childAlignment = {.x = CLAY_ALIGN_X_CENTER,
+                                            .y = CLAY_ALIGN_Y_CENTER}},
+              .backgroundColor = hot(7) ? hovered : background,
+              .border = {.color = p->focus == 7 ? accent : line,
+                         .width = p->focus == 7 ? outline_width
+                                               : (Clay_BorderWidth){.bottom = 1}}})
+        {
+            icon_slot(ICON_CLOSE, true, false);
+            quiet_label("Close", foreground, true);
+        }
     }
 }
 static void disclosure(Panel *p, uint32_t id, const char *title, const char *detail, Action action,
@@ -2541,6 +2559,9 @@ static void activate(Panel *p, Widget *w)
         return;
     }
     switch (w->action) {
+    case A_CLOSE:
+        p->quit = true;
+        break;
     case A_COMMAND:
         p->error[0] = 0;
         if (!panel_client_command(p->client, w->argc, w->arg, p->error, sizeof p->error)) {
@@ -2900,7 +2921,7 @@ static void click_event(Panel *p, float x, float y)
 static float wheel_delta(const SDL_MouseWheelEvent *wheel)
 {
     float direction = wheel->direction == SDL_MOUSEWHEEL_FLIPPED ? -1 : 1;
-    return wheel->y * direction * 3;
+    return wheel->y * direction * 6;
 }
 static void event(Panel *p, const SDL_Event *e)
 {

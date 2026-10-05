@@ -84,11 +84,11 @@ int main(void)
 {
     check_text_contrast();
     SDL_MouseWheelEvent wheel = {.y = .25f, .direction = SDL_MOUSEWHEEL_NORMAL};
-    assert(wheel_delta(&wheel) == .75f);
+    assert(wheel_delta(&wheel) == 1.5f);
     wheel.direction = SDL_MOUSEWHEEL_FLIPPED;
-    assert(wheel_delta(&wheel) == -.75f);
+    assert(wheel_delta(&wheel) == -1.5f);
     wheel.y = -1;
-    assert(wheel_delta(&wheel) == 3);
+    assert(wheel_delta(&wheel) == 6);
     assert(countdown_seconds(0) == 0);
     assert(countdown_seconds(1) == 1);
     assert(countdown_seconds(1000000000ULL) == 1);
@@ -366,6 +366,17 @@ int main(void)
     activate(panel, &pause);
     assert(!panel->error[0] && !app->countdown && !app->state.recording);
     assert(app->state.virtual_paused && !app->countdown_path[0]);
+
+    /* Close is a local action, even with a command pending or disconnected. */
+    State before_close = app->state;
+    Config config_before_close = app->config;
+    panel->snapshot.connected = false;
+    panel->snapshot.command_queued = panel->snapshot.command_completed + 1;
+    Widget close = {.enabled = true, .action = A_CLOSE};
+    activate(panel, &close);
+    assert(panel->quit);
+    assert(!memcmp(&before_close, &app->state, sizeof before_close));
+    assert(!memcmp(&config_before_close, &app->config, sizeof config_before_close));
 
     media_close(app->media);
     platform_close(app->platform);
