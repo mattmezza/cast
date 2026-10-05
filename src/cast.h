@@ -65,7 +65,6 @@ typedef struct {
     bool camera_visible, mirror;
     char corner_order[128], layout_order[128], preset_order[256], monitor[128];
     char capture_kind[16];
-    char capture_exclusion[16];
     uint32_t capture_mask_color;
     int region_x, region_y, region_w, region_h;
     double zoom_factor, zoom_min, zoom_max, zoom_step;

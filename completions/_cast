@@ -60,13 +60,12 @@ _cast() {
                 path) mode=file ;;
                 anchor) offer='top-left top-right bottom-left bottom-right top bottom left right' ;;
             esac ;;
-        capture:1) offer='monitor region window fit exclusion mask-color' ;;
+        capture:1) offer='monitor region window fit mask-color' ;;
         capture:2)
             case $first in
                 region) offer=select ;;
                 window) offer='select active' ;;
                 fit) offer='contain cover' ;;
-                exclusion) offer='mask transparent' ;;
             esac ;;
         zoom:1) offer='toggle in out reset set follow' ;;
         zoom:2) [[ $first == follow ]] && offer='on off' ;;
@@ -116,7 +115,6 @@ _cast() {
                     composition.split_side) offer='left right' ;;
                     composition.fit) offer='contain cover' ;;
                     capture.kind) offer='monitor region window' ;;
-                    capture.exclusion) offer='mask transparent' ;;
                     camera.shape) offer='rectangle rounded circle' ;;
                     camera.background|screen.background) offer='blurred gradient solid' ;;
                     background.source) offer='screen camera' ;;

@@ -59,7 +59,7 @@ static const char help[] =
     "  text color #RRGGBB; text anchor ANCHOR; text margin X Y; text opacity FRACTION|PERCENT%\n"
     "  capture monitor; capture region select|X Y W H; capture window select|active\n"
     "  capture fit contain|cover\n"
-    "  capture exclusion mask|transparent; capture mask-color '#RRGGBB' (Xorg)\n"
+    "  capture mask-color '#RRGGBB' (Xorg)\n"
     "  zoom toggle|in|out|reset; zoom set FACTOR; zoom follow on|off\n"
     "  cursor on|off|toggle; cursor highlight on|off|toggle\n"
     "  clicks on|off|toggle; keys on|off|toggle; keys mode shortcuts|all; keys clear\n"

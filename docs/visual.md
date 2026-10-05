@@ -186,13 +186,11 @@ current frame, so the first display has its local header and image together.
 
 Cast prefers preview placement on a monitor outside the captured root rectangle.
 If it overlaps monitor/region capture, cast replaces its full window rectangle,
-including the header and border, using `[capture] exclusion` before composition.
-The default `mask` fills it with `capture.mask_color` (default `#20252b`), independent
-of the pause-screen color. `transparent` removes the screen layer there and reveals
-the configured Cast screen background; outgoing frames remain opaque. Hidden RGB
-is cleared and ignored by screen scaling and backdrop filtering. Its current screen
-position and dimensions are queried for each capture, so moving or resizing it moves
-the excluded rectangle.
+including the header and border, with `capture.mask_color` (default `#20252b`) before
+composition, independently of the pause-screen color. Its current screen position
+and dimensions are queried for each capture, so moving or resizing it moves the
+masked rectangle. There is no transparent exclusion mode: Cast cannot reconstruct
+the live desktop beneath its windows through this capture path.
 The excluded rectangle follows the source's zoom and fit into each output. This
 covers the desktop content beneath the preview; cast does not recover hidden pixels.
 Place the preview outside the captured source when all source content must remain
@@ -272,8 +270,8 @@ Escape or closing it cancels the pending start.
 `cast record stop` and `cast pause` also cancel. The guide is hidden before the
 encoder starts and is excluded from Xorg monitor/region capture together with its
 window-manager frame. It is not an output overlay. The configured opaque
-`capture.mask_color` covers content underneath the guide even when panel/preview
-exclusion is set to transparent; application-window capture excludes it naturally.
+`capture.mask_color` covers content underneath the guide; application-window
+capture excludes it naturally.
 Wayland uses the panel guide; it has no standalone guide.
 
 The native recording countdown uses bundled Inter numerals and a film-leader guide

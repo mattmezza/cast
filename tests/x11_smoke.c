@@ -44,7 +44,6 @@ static Config configuration(void)
     c.keys_color = 0xffffff;
     c.pause_color = 0x253647;
     c.capture_mask_color = 0x314159;
-    strcpy(c.capture_exclusion, "mask");
     c.annotations_virtual_keys = c.annotations_record_keys = true;
     c.annotations_virtual_clicks = c.annotations_record_clicks = true;
     return c;
@@ -166,21 +165,6 @@ static void assert_preview_mask(const Frame *frame, const XWindowAttributes *att
             bool covered = x >= left && x < right && y >= top && y < bottom;
             assert(pixel(frame, x, y) == (covered ? color : 0));
             assert(frame->data[(size_t)y * frame->stride + x * 4 + 3] == 255);
-        }
-    }
-}
-
-static void assert_transparent_exclusion(const Frame *frame, const XWindowAttributes *attr,
-                                         int source_x, int source_y)
-{
-    int left = attr->x - source_x, top = attr->y - source_y;
-    int right = left + attr->width + 2 * attr->border_width;
-    int bottom = top + attr->height + 2 * attr->border_width;
-    for (int y = 0; y < frame->height; y++) {
-        for (int x = 0; x < frame->width; x++) {
-            bool covered = x >= left && x < right && y >= top && y < bottom;
-            assert(pixel(frame, x, y) == 0);
-            assert(frame->data[(size_t)y * frame->stride + x * 4 + 3] == (covered ? 0 : 255));
         }
     }
 }
@@ -319,14 +303,9 @@ static void preview_tests(Display *d, Platform *p, Config *cfg, Compositor *c)
     assert(platform_capture(p, &capture, &cursor, error, sizeof(error)) == 0);
     assert_preview_mask(&capture, &attr, 0, 0, cfg->capture_mask_color);
     uint64_t generation = platform_source_generation(p);
-    strcpy(cfg->capture_exclusion, "transparent");
-    assert(!platform_reconfigure(p, cfg, error, sizeof error));
-    assert(platform_source_generation(p) > generation);
-    assert(!platform_capture(p, &capture, &cursor, error, sizeof error));
-    assert_transparent_exclusion(&capture, &attr, 0, 0);
-    strcpy(cfg->capture_exclusion, "mask");
     cfg->capture_mask_color = 0xabcdef;
     assert(!platform_reconfigure(p, cfg, error, sizeof error));
+    assert(platform_source_generation(p) > generation);
     assert(!platform_capture(p, &capture, &cursor, error, sizeof error));
     assert_preview_mask(&capture, &attr, 0, 0, cfg->capture_mask_color);
     /* Application pixmap capture needs no footprint mask even when overlapped. */
@@ -414,28 +393,6 @@ static void panel_tests(Display *d, Platform *p, Config *cfg, Compositor *comp)
     assert_preview_mask(&capture, &attr, 0, 0, cfg->capture_mask_color);
     platform_panel_status(p, status, sizeof(status));
     assert(strstr(status, "overlap") && strstr(status, "neutral-masked"));
-    strcpy(cfg->capture_exclusion, "transparent");
-    assert(!platform_reconfigure(p, cfg, error, sizeof error));
-    assert(!platform_capture(p, &capture, &cursor, error, sizeof error));
-    assert_transparent_exclusion(&capture, &attr, 0, 0);
-    Config transparent_output = *cfg;
-    transparent_output.width = capture.width;
-    transparent_output.height = capture.height;
-    transparent_output.cursor = transparent_output.keys = transparent_output.clicks = false;
-    strcpy(transparent_output.screen_background, "solid");
-    transparent_output.screen_background_color = 0x13579b;
-    assert(!compositor_render(comp, &transparent_output, &capture, NULL, NULL, false,
-                             &virtual, error, sizeof error));
-    assert(pixel(&virtual, attr.x + 30, attr.y + 40) == 0x13579b);
-    char *transparent_region[] = {"capture", "region", "100", "110", "140", "100"};
-    command(p, cfg, 6, transparent_region);
-    assert(!platform_capture(p, &capture, &cursor, error, sizeof error));
-    assert_transparent_exclusion(&capture, &attr, 100, 110);
-    char *restore_monitor[] = {"capture", "monitor"};
-    command(p, cfg, 2, restore_monitor);
-    strcpy(cfg->capture_exclusion, "mask");
-    assert(!platform_reconfigure(p, cfg, error, sizeof error));
-    assert(!platform_capture(p, &capture, &cursor, error, sizeof error));
     /* Both output lanes receive already-excluded pixels through zoom and layout. */
     Config output = *cfg;
     output.width = capture.width;
@@ -576,9 +533,6 @@ static void panel_tests(Display *d, Platform *p, Config *cfg, Compositor *comp)
 
 static void countdown_tests(Display *d, Platform *p, Config *cfg, Compositor *comp)
 {
-    strcpy(cfg->capture_exclusion, "transparent");
-    char configure_error[CAST_ERR];
-    assert(!platform_reconfigure(p, cfg, configure_error, sizeof configure_error));
     char error[CAST_ERR];
     Frame capture = {0};
     Cursor cursor;

@@ -94,11 +94,10 @@ complete -c cast -n '__cast_at logo' -a 'on off toggle path size anchor margin o
 complete -c cast -n '__cast_at logo path' -F
 complete -c cast -n '__cast_at logo anchor; or __cast_at text anchor' -a 'top-left top-right bottom-left bottom-right top bottom left right'
 complete -c cast -n '__cast_at text' -a 'on off toggle set font size color anchor margin opacity'
-complete -c cast -n '__cast_at capture' -a 'monitor region window fit exclusion mask-color'
+complete -c cast -n '__cast_at capture' -a 'monitor region window fit mask-color'
 complete -c cast -n '__cast_at capture region' -a select
 complete -c cast -n '__cast_at capture window' -a 'select active'
 complete -c cast -n '__cast_at capture fit' -a 'contain cover'
-complete -c cast -n '__cast_at capture exclusion' -a 'mask transparent'
 complete -c cast -n '__cast_at zoom' -a 'toggle in out reset set follow'
 complete -c cast -n '__cast_at zoom follow' -a 'on off'
 complete -c cast -n '__cast_at cursor' -a 'on off toggle highlight'
@@ -131,7 +130,6 @@ complete -c cast -n '__cast_setting_value composition.layout' -a 'overlay stage 
 complete -c cast -n '__cast_setting_value composition.split_side' -a 'left right'
 complete -c cast -n '__cast_setting_value composition.fit' -a 'contain cover'
 complete -c cast -n '__cast_setting_value capture.kind' -a 'monitor region window'
-complete -c cast -n '__cast_setting_value capture.exclusion' -a 'mask transparent'
 complete -c cast -n '__cast_setting_value camera.shape' -a 'rectangle rounded circle'
 complete -c cast -n '__cast_setting_value camera.background screen.background' -a 'blurred gradient solid'
 complete -c cast -n '__cast_setting_value background.source' -a 'screen camera'

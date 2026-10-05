@@ -93,9 +93,8 @@ with tempfile.TemporaryDirectory(prefix="cast-help-test-") as directory:
     assert {"on", "off", "toggle", "set", "font", "size", "color", "anchor", "margin", "opacity"} == bash_complete("cast", "text", "")
     assert "free" not in bash_complete("cast", "logo", "anchor", "")
     assert {"top", "bottom", "left", "right"} <= bash_complete("cast", "text", "anchor", "")
-    assert {"exclusion", "mask-color"} <= bash_complete("cast", "capture", "")
-    assert bash_complete("cast", "capture", "exclusion", "") == {"mask", "transparent"}
-    assert bash_complete("cast", "settings", "capture.exclusion", "") == {"mask", "transparent"}
+    assert "mask-color" in bash_complete("cast", "capture", "")
+    assert "exclusion" not in bash_complete("cast", "capture", "")
     assert bash_complete("cast", "settings", "background.source", "") == {"screen", "camera"}
     assert bash_complete("cast", "settings", "screen.background", "") == {"blurred", "gradient", "solid"}
     assert bash_complete("cast", "settings", "text.enabled", "") == {"true", "false"}

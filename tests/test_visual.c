@@ -973,7 +973,7 @@ static void test_screen_sampling(void)
     screen = source(123, 79, 0x123456, false);
     screen.data[3] = 7;
     render(c, &cfg, &screen, NULL, NULL, false, &out);
-    assert(at(&out, 0, 0) == 0x000102 && out.data[3] == 255);
+    assert(at(&out, 0, 0) == 0x123456 && out.data[3] == 255);
     compositor_destroy(c);
     frame_free(&screen);
     frame_free(&out);
@@ -1353,59 +1353,8 @@ static void test_prepared_logo_and_static_text(void)
     compositor_destroy(c);
 }
 
-static void test_transparent_screen_exclusion(void)
-{
-    Config cfg = config(64, 64);
-    strcpy(cfg.layout, "screen");
-    cfg.screen_background_color = 0x13579b;
-    cfg.pause_color = 0x987654;
-    Frame screen = source(64, 64, 0x223344, false), out = {0}, reference = {0};
-    Compositor *c = compositor_create();
-    const char *modes[] = {"solid", "gradient", "blurred"};
-    for (int style = 0; style < 3; style++) {
-        strcpy(cfg.screen_background, modes[style]);
-        for (int shape = 0; shape < 3; shape++) {
-            cfg.screen_radius = shape == 2 ? 12 : 0;
-            cfg.screen_border_width = shape == 2 ? 2 : 0;
-            cfg.zoom_factor = shape == 1 ? 2 : 1;
-            for (int poison = 0; poison < 2; poison++) {
-                for (int y = 16; y < 48; y++) {
-                    for (int x = 16; x < 48; x++) {
-                        uint8_t *pixel = screen.data + (size_t)y * screen.stride + x * 4;
-                        pixel[0] = poison ? 255 : 0;
-                        pixel[1] = poison ? 0 : 255;
-                        pixel[2] = poison ? 255 : 0;
-                        pixel[3] = 0;
-                    }
-                }
-                now += 100000000;
-                render(c, &cfg, &screen, NULL, NULL, false, &out);
-                for (int y = 0; y < out.height; y++) {
-                    for (int x = 0; x < out.width; x++) {
-                        assert(out.data[(size_t)y * out.stride + x * 4 + 3] == 255);
-                    }
-                }
-                if (!style) {
-                    assert(at(&out, 32, 32) == cfg.screen_background_color);
-                }
-                if (!poison) {
-                    assert(!frame_copy(&reference, &out));
-                } else {
-                    /* Hidden RGB cannot affect either screen or its filtered backdrop. */
-                    assert(!memcmp(reference.data, out.data, (size_t)out.stride * out.height));
-                }
-            }
-        }
-    }
-    frame_free(&screen);
-    frame_free(&out);
-    frame_free(&reference);
-    compositor_destroy(c);
-}
-
 int main(void)
 {
-    test_transparent_screen_exclusion();
     test_frames();
     test_geometry();
     test_layout_and_masks();

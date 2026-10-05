@@ -130,7 +130,6 @@ static const Setting settings[] = {
     S("composition", "preset_order", preset_order, "coding,demo,conversation"),
     S("capture", "monitor", monitor, ""),
     E("capture", "kind", capture_kind, "monitor,region,window", "monitor"),
-    E("capture", "exclusion", capture_exclusion, "mask,transparent", "mask"),
     C("capture", "mask_color", capture_mask_color, "#20252b"),
     I("capture", "x", region_x, 0, 16384, "0"),
     I("capture", "y", region_y, 0, 16384, "0"),
@@ -368,6 +367,11 @@ int config_set_value(Config *config, const char *name, const char *value, char *
 {
     if (!config || !name || !value) {
         return fail(error, size, "setting name and value are required");
+    }
+    if (!strcmp(name, "capture.exclusion")) {
+        return fail(error, size,
+                    "capture.exclusion was removed; delete this setting and use "
+                    "capture.mask_color for opaque masking");
     }
     if (!strcmp(name, "annotations.live_keys") || !strcmp(name, "annotations.live_clicks")) {
         return fail(error, size, "obsolete %s; use annotations.virtual_%s", name,
@@ -727,6 +731,12 @@ static int handler(void *u, const char *section, const char *key, const char *va
         return 0;
     }
     key = canonical_key(section, key);
+    if (!strcmp(section, "capture") && !strcmp(key, "exclusion")) {
+        fail(p->err, p->n,
+             "%s:%d: capture.exclusion was removed; delete this setting and use "
+             "capture.mask_color for opaque masking", p->path, line);
+        return 0;
+    }
     if (snprintf(full, sizeof full, "%s.%s", section, key) >= (int)sizeof full) {
         fail(p->err, p->n, "%s:%d: key too long", p->path, line);
         return 0;

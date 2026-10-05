@@ -164,7 +164,6 @@ The following table is the supported schema. `examples/cast.conf` includes every
 | text | opacity | `1` | 0–1 |
 | capture | monitor | `` | Literal string |
 | capture | kind | `monitor` | monitor,region,window |
-| capture | exclusion | `mask` | mask,transparent; Xorg panel/preview overlap only |
 | capture | mask_color | `#20252b` | #RRGGBB; independent of pause background |
 | capture | x | `0` | 0–16384 (integer) |
 | capture | y | `0` | 0–16384 (integer) |
@@ -369,3 +368,9 @@ Migration: annotations.live_keys/live_clicks become virtual_keys/virtual_clicks,
 and preview.target=live becomes virtual. Old names are rejected with guidance.
 Add stream_keys/stream_clicks under [annotations] and the [stream] fields above;
 omitted values already use their documented defaults.
+
+`capture.mask_color` controls Xorg panel, preview and countdown masking before
+composition, independently of `output.pause_background`. Covered desktop content
+cannot be reconstructed by the current capture path. There is no transparent
+exclusion setting; remove `[capture] exclusion` if an unreleased configuration
+contains it. Unknown settings fail validation without replacing the active config.

@@ -63,10 +63,13 @@ and read-only sealed shared memory carry acknowledged state and small actual-out
 frames in the internal transport; the control-only panel does not request or render
 frames. Preview uses the independent platform presentation window. The daemon never
 waits for panel rendering. Xorg validates the peer's panel
-window identity and excludes its frame in monitor/region captures using an opaque
-configurable mask or a transparent screen-layer hole. The latter reveals the Cast
-background, not the underlying desktop. The compositor ignores excluded RGB even
-when constructing blurred backdrops. Countdown footprints always remain opaque.
+window identity and masks its frame in monitor/region captures with the configurable
+`capture.mask_color`, shared by preview and countdown footprints. These opaque
+source pixels reach every outgoing lane before composition. Root readback has
+already lost covered desktop pixels. Reconstructing them would require a separate
+composition of underlying window pixmaps and desktop effects; this capture path
+provides no transparent exclusion. Selected-window capture already reads the
+application's XComposite pixmap without unrelated windows.
 
 Setup and completion instructions are local commands, independent of configuration
 and daemon availability. Completion scripts and the Arch installer are embedded so

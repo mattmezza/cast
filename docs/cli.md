@@ -51,17 +51,18 @@ movement and failures are handled without silently returning to the desktop.
 zoom and annotation history, and do not resume any output. Unsupported backend
 selection commands fail explicitly.
 
-On Xorg, `capture exclusion mask|transparent` controls panel and native-preview
-overlap in monitor/region captures. `mask` fills the covered rectangle with
-`capture.mask_color`; change it with `cast capture mask-color '#112233'`.
-`transparent` reveals the configured Cast screen background, not the desktop
-content underneath. Encoded and virtual-camera frames remain opaque. Window
-capture already excludes unrelated windows. Countdown guides always use the
-opaque mask, including their retiring footprint. Set `[capture] exclusion` and
-`mask_color` for persistent defaults, or use `settings capture.exclusion` and
-`settings capture.mask_color` at runtime. Changing these settings keeps outputs
-paused/resumed as they were and retires old source frames. Wayland does not
-support this exclusion policy.
+On Xorg, panel and native-preview overlap in monitor/region captures is filled with
+`capture.mask_color`. Change it with `cast capture mask-color '#112233'`,
+`cast settings capture.mask_color '#112233'`, or `[capture] mask_color` for a
+persistent default. This color is independent of the pause background and applies
+before composition to virtual-camera, recording and streaming outputs. Changing it
+keeps output states and zoom as they were and retires old source frames. Countdown
+guides and their retiring footprints use the same opaque mask. Window capture
+already excludes unrelated windows. Wayland does not support this exclusion.
+
+Live desktop reconstruction beneath panel/preview windows is unavailable; there is
+no transparent exclusion mode. If an unreleased configuration includes
+`[capture] exclusion`, remove that field: it is rejected as an unknown setting.
 
 `zoom toggle` alternates 1 and the last/configured non-1 factor; `zoom in|out`
 adds/subtracts zoom.step within limits; `zoom set FACTOR` sets a finite factor;

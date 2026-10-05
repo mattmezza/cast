@@ -92,7 +92,6 @@ typedef struct {
     unsigned preview_state;
     bool preview_enabled;
     uint32_t capture_mask_color;
-    bool capture_transparent;
     bool preview_dragging;
     int preview_drag_x, preview_drag_y;
 } Xorg;
@@ -905,8 +904,7 @@ int x11_panel_register(Platform *platform, uint64_t window, int peer_pid, char *
     }
     p->panel = (Window)window;
     p->panel_pid = peer_pid;
-    snprintf(e, n, "panel registered: overlapping monitor/region pixels use %s exclusion",
-             p->capture_transparent ? "transparent" : "mask");
+    snprintf(e, n, "panel registered: overlapping monitor/region pixels will be neutral-masked");
     return 0;
 }
 
@@ -927,8 +925,7 @@ void x11_panel_status(Platform *platform, char *e, size_t n)
 {
     Xorg *p = (Xorg *)platform;
     if (!p->panel) {
-        snprintf(e, n, "available: Xorg %s exclusion; no panel window registered",
-                 p->capture_transparent ? "transparent" : "mask");
+        snprintf(e, n, "available: Xorg neutral masking; no panel window registered");
         return;
     }
     WindowRect rect;
@@ -949,9 +946,8 @@ void x11_panel_status(Platform *platform, char *e, size_t n)
             snprintf(e, n, "unavailable: capture source geometry is unavailable");
         } else {
             if (rect_overlaps_source(p, &rect)) {
-                snprintf(e, n, "overlap: panel and WM frame %s; covered content is lost",
-                         p->capture_transparent ? "reveal the Cast background"
-                                                : "are neutral-masked");
+                snprintf(e, n,
+                         "overlap: panel and WM frame are neutral-masked; covered content is lost");
             } else {
                 snprintf(e, n, "outside source: panel does not overlap the captured rectangle");
             }
@@ -959,7 +955,7 @@ void x11_panel_status(Platform *platform, char *e, size_t n)
     }
 }
 
-static void mask_window_rect(Xorg *p, Frame *out, const WindowRect *rect, bool transparent)
+static void mask_window_rect(Xorg *p, Frame *out, const WindowRect *rect)
 {
     if (!rect_overlaps_source(p, rect)) {
         return;
@@ -981,11 +977,10 @@ static void mask_window_rect(Xorg *p, Frame *out, const WindowRect *rect, bool t
     for (int y = top; y < bottom; y++) {
         uint8_t *d = out->data + (size_t)y * out->stride + 4 * left;
         for (int x = left; x < right; x++, d += 4) {
-            /* Clear hidden RGB too: no later filter may sample excluded UI pixels. */
-            d[0] = transparent ? 0 : (uint8_t)(p->capture_mask_color >> 16);
-            d[1] = transparent ? 0 : (uint8_t)(p->capture_mask_color >> 8);
-            d[2] = transparent ? 0 : (uint8_t)p->capture_mask_color;
-            d[3] = transparent ? 0 : 255;
+            d[0] = (uint8_t)(p->capture_mask_color >> 16);
+            d[1] = (uint8_t)(p->capture_mask_color >> 8);
+            d[2] = (uint8_t)p->capture_mask_color;
+            d[3] = 255;
         }
     }
 }
@@ -1064,12 +1059,12 @@ int x11_capture(Platform *platform, Frame *out, Cursor *cursor, char *e, size_t 
     /* Pixmap readback has no associated visual: XGetImage/XShmGetImage may return
      * zero channel masks. The selected window visual describes its backing pixmap. */
     image_to_frame(image, visual, out);
-    /* Exclusion happens before zoom/layout. Countdown always uses an opaque mask. */
+    /* Neutral masking happens before zoom/layout and applies to countdown too. */
     if (drawable == p->root) {
-        mask_window_rect(p, out, &preview, p->capture_transparent);
-        mask_window_rect(p, out, &panel, p->capture_transparent);
-        mask_window_rect(p, out, &countdown, false);
-        mask_window_rect(p, out, &retired, false);
+        mask_window_rect(p, out, &preview);
+        mask_window_rect(p, out, &panel);
+        mask_window_rect(p, out, &countdown);
+        mask_window_rect(p, out, &retired);
         p->countdown_retired_first = false;
     }
     if (image != p->image) {
@@ -1117,8 +1112,7 @@ int x11_reconfigure(Platform *platform, const Config *cfg, char *e, size_t n)
         strcmp(p->kind, cfg->capture_kind) ||
         (!strcmp(cfg->capture_kind, "window") ? false : strcmp(p->monitor, m.name) != 0) ||
         p->rx != cfg->region_x || p->ry != cfg->region_y || p->rw != cfg->region_w ||
-        p->rh != cfg->region_h || p->capture_mask_color != cfg->capture_mask_color ||
-        p->capture_transparent != !strcmp(cfg->capture_exclusion, "transparent");
+        p->rh != cfg->region_h || p->capture_mask_color != cfg->capture_mask_color;
     if (strcmp(cfg->capture_kind, "window")) {
         snprintf(p->monitor, sizeof(p->monitor), "%s", m.name);
     }
@@ -1134,7 +1128,6 @@ int x11_reconfigure(Platform *platform, const Config *cfg, char *e, size_t n)
     p->source_error[0] = 0;
     p->preview_disabled = false;
     p->capture_mask_color = cfg->capture_mask_color;
-    p->capture_transparent = !strcmp(cfg->capture_exclusion, "transparent");
     return 0;
 }
 static int selection_start(Xorg *p, Config *cfg, int kind, char *e, size_t n)
@@ -2457,8 +2450,8 @@ void x11_doctor(const Config *cfg, char *e, size_t n)
     }
     snprintf(e, n,
              "Xorg: DISPLAY connected; %s; MIT-SHM %s (XGetImage fallback); XI2 %s; XComposite %s. "
-             "Preview is a floating utility window; overlap uses capture.exclusion (mask or "
-             "Cast-background transparency).",
+             "Preview is a floating utility window; overlap is neutral-masked using "
+             "capture.mask_color.",
              source, shm ? "available" : "missing",
              xi ? "available" : "missing: keys/clicks unsupported",
              comp ? "available" : "missing: window capture unsupported");
