@@ -4155,6 +4155,8 @@ static void poll_client(Panel *p)
     PanelSnapshot fresh;
     if (panel_client_snapshot(p->client, &fresh)) {
         if (!fresh.connected) {
+            p->pending_button = 0;
+            p->pending_button_request = 0;
             fresh.config = p->snapshot.config;
             fresh.capabilities = p->snapshot.capabilities;
         }
