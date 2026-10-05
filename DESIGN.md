@@ -78,6 +78,8 @@ pinned. Connection state and acknowledged feedback live in a pinned 46px surface
 status bar: two centered 16px rows of quiet 11px text, with composition deep links
 above the connection label and marked, ellipsized feedback. Hovered summary links
 shift to foreground with dotted underlines. The body is the only scrolling region.
+An always-available square Close control beside the tabs closes only the panel;
+wheel scrolling advances 60 logical pixels per notch with fractional motion preserved.
 
 Operate has four disclosures: Virtual camera, Recording, Streaming and Audio.
 Selecting a header chip opens the corresponding lane. Primary actions name their
@@ -100,6 +102,10 @@ Composition tokens deep-link to source/layout or background/stage; zoom has a re
 link. Each view remembers its scroll in session memory across panel close/reopen
 against the same daemon. Navigation never writes config. Locked and unsupported
 fields explain why they are disabled; config-only output fonts show reload guidance.
+Source & layout includes inline overlap policy and mask-color controls, applied
+through the same draft bar. Transparent reveals Cast's background, with explicit
+copy that hidden desktop content cannot be recovered; unsupported backends disable
+the fields.
 
 The panel fills 360–520 logical pixels and centers at wider sizes. It uses the
 existing Inter slots: 13 secondary/chips, 16 controls/body, 19 section headings,

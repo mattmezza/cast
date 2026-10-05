@@ -372,7 +372,8 @@ int main(void)
     Config config_before_close = app->config;
     panel->snapshot.connected = false;
     panel->snapshot.command_queued = panel->snapshot.command_completed + 1;
-    Widget close = {.enabled = true, .action = A_CLOSE};
+    Widget close = {.id = 7, .enabled = true, .action = A_CLOSE};
+    assert(!widget_in_scroll(panel, &close));
     activate(panel, &close);
     assert(panel->quit);
     assert(!memcmp(&before_close, &app->state, sizeof before_close));

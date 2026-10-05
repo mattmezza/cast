@@ -149,6 +149,9 @@ check-loopback: cast
 ifeq ($(PANEL),1)
 check-panel: cast
 	python3 tests/test_panel_ui.py
+ifeq ($(X11),1)
+	python3 tests/test_panel_ui.py --exclusion-only
+endif
 else
 check-panel:
 	@echo 'check-panel requires PANEL=1 and optional Xvfb/xdotool/xclip test dependencies' >&2

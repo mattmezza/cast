@@ -29,7 +29,7 @@ def wait_until(predicate, description, timeout=10):
     raise AssertionError(description)
 
 
-def exercise(focused_setup_parent=False):
+def exercise(focused_setup_parent=False, focused_exclusion=False):
     with tempfile.TemporaryDirectory(prefix="cast-panel-redesign-") as directory:
         root = Path(directory)
         environment = os.environ.copy()
@@ -68,7 +68,8 @@ def exercise(focused_setup_parent=False):
             return child
 
         def start_daemon():
-            return spawn(BINARY, *common, "--backend", "synthetic", "--camera-device",
+            backend = "xorg" if focused_exclusion else "synthetic"
+            return spawn(BINARY, *common, "--backend", backend, "--camera-device",
                          "synthetic", "--output-device", "none", "--width", "320",
                          "--height", "240", "--fps", "20")
 
@@ -101,7 +102,7 @@ def exercise(focused_setup_parent=False):
                 item = widget(identifier)
                 x, y, width, height = item["box"]
                 area = ui()["scroll"]
-                pinned = (item["id"] in (5, 6, 10, 11, 12, 22, 34, 99)
+                pinned = (item["id"] in (5, 6, 7, 10, 11, 12, 22, 34, 99)
                           or 160 <= item["id"] <= 163
                           or 400 <= item["id"] < 500 or 700 <= item["id"] <= 715)
                 if pinned or y >= area[1] and y+height <= area[1]+area[3]:
@@ -159,7 +160,7 @@ def exercise(focused_setup_parent=False):
             bounds = dict(line.split("=", 1) for line in
                           xdo("getwindowgeometry", "--shell", window).splitlines() if "=" in line)
             width, height = int(bounds["WIDTH"])/scale, int(bounds["HEIGHT"])/scale
-            for identifier in (5, 6, 10, 11, 12, 22, 34):
+            for identifier in (5, 6, 7, 10, 11, 12, 22, 34):
                 item = widget(identifier)
                 assert item, identifier
                 x, y, w, h = item["box"]
@@ -168,6 +169,8 @@ def exercise(focused_setup_parent=False):
                     assert h == 44, ("chip height", item)
                 if identifier in (22, 34):
                     assert h == 30, ("privacy/preview height", item)
+                if identifier == 7:
+                    assert item["enabled"] and h == 42, ("Close button unavailable", item)
             assert abs(widget(22)["box"][2]-widget(34)["box"][2]) < 1, "meta-actions have unequal widths"
             status = ui()["status_bar"]
             assert status[3] == 46, "status rows changed height"
@@ -271,6 +274,57 @@ def exercise(focused_setup_parent=False):
             assert '"cast-panel", "CastPanel"' in properties and "_NET_WM_WINDOW_TYPE_UTILITY" in properties
             pinned_accessible()
             capture("operate-collapsed")
+            if focused_exclusion:
+                navigate(0)
+                assert widget("capture.exclusion")["enabled"]
+                assert widget("capture.mask_color")["enabled"]
+                edit("capture.mask_color", "#314159")
+                click_widget("capture.exclusion")
+                # The existing enum picker lists mask first, transparent second.
+                click_widget(401)
+                pinned_draft(0)
+                click_widget(700)
+                wait_until(lambda: state()["source"]["exclusion"] == "transparent"
+                           and state()["source"]["mask_color"] == "#314159",
+                           "panel exclusion draft did not apply atomically")
+                wait_until(lambda: not widget(700), "acknowledged exclusion draft did not clear")
+                assert ui()["open_section"] == 0
+                assert config.read_bytes() == original_config
+                capture("capture-transparent")
+                cli("capture", "exclusion", "mask")
+                cli("capture", "mask-color", "#8090a0")
+                wait_until(lambda: widget("capture.exclusion")["value"] == "mask"
+                           and widget("capture.mask_color")["value"] == "#8090a0"
+                           and "neutral-masked" in ui()["exclusion"],
+                           "CLI exclusion changes did not reach panel")
+                edit("capture.mask_color", "#abcdef")
+                click_widget(701)
+                wait_until(lambda: not widget(700), "Revert kept dirty exclusion draft")
+                assert state()["source"]["mask_color"] == "#8090a0"
+                xdo("windowsize", window, round(360*scale), round(640*scale))
+                time.sleep(.15)
+                pinned_accessible()
+                click_widget("capture.mask_color")
+                capture("capture-mask-narrow")
+                wheel(4, 40)
+                wait_until(lambda: abs(ui()["scroll_offset"]) < 1, "page did not return to top")
+                wheel(5, 1)
+                assert abs(ui()["scroll_offset"]+60) < 2, "wheel notch did not advance 60 logical pixels"
+                before_close = state()
+                click_widget(7)
+                assert panel.wait(timeout=8) == 0
+                after_close = state()
+                for lane in ("virtual", "record", "stream"):
+                    assert before_close[lane] == after_close[lane], "Close changed an output"
+                assert daemon.poll() is None and config.read_bytes() == original_config
+                panel = start_panel()
+                wait_until(lambda: ui()["open_section"] == 0 and ui()["scroll_offset"] < -20,
+                           "Close button lost page or scroll position")
+                click_widget(7)
+                assert panel.wait(timeout=8) == 0
+                cli("quit")
+                daemon.wait(timeout=8)
+                return
             if focused_setup_parent:
                 xdo("key", "--clearmodifiers", "2")
                 compose_list()
@@ -600,8 +654,11 @@ if __name__ == "__main__":
                                  sys.executable, __file__, "--inside", *sys.argv[1:]], timeout=300)
         raise SystemExit(result.returncode)
     focused = "--setup-parent-only" in sys.argv
-    exercise(focused_setup_parent=focused)
+    exclusion = "--exclusion-only" in sys.argv
+    exercise(focused_setup_parent=focused, focused_exclusion=exclusion)
     if focused:
         print("native panel: supported360×640 list clipping/footer bounds and Compose setup parent tab/page/scroll/reopen passed")
+    elif exclusion:
+        print("native Xorg panel: exclusion drafts/CLI sync/Revert, 60px scrolling, pinned Close and session restore passed")
     else:
         print("native panel: nine workflows, Compose pages/back/keys, pinned drafts, session navigation memory, compact status/header, privacy restore, private streaming, disconnect/reconnect and 360–800px density passed")

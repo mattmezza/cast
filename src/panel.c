@@ -51,7 +51,8 @@ enum {
     REQUIRE_REGION = 4,
     RECORD_LOCK = 8,
     READ_ONLY = 16,
-    STREAM_LOCK = 32
+    STREAM_LOCK = 32,
+    REQUIRE_EXCLUSION = 64
 };
 typedef struct {
     const char *key, *label, *choices;
@@ -100,6 +101,10 @@ static const FieldSpec fields[] = {
     FE("composition.fit", "Screen fit", fit, "contain,cover", TAB_SOURCE, 0, 0),
     FN("zoom.factor", "Zoom factor", zoom_factor, 1, 20, TAB_SOURCE, 0, 0),
     FB("zoom.follow", "Follow pointer", zoom_follow, TAB_SOURCE, 0, REQUIRE_CURSOR),
+    FE("capture.exclusion", "Panel / preview overlap", capture_exclusion, "mask,transparent",
+       TAB_SOURCE, 1, REQUIRE_EXCLUSION),
+    FC("capture.mask_color", "Overlap mask color", capture_mask_color, TAB_SOURCE, 1,
+       REQUIRE_EXCLUSION),
     FI("capture.x", "Region X", region_x, 0, 16384, TAB_SOURCE, 1, REQUIRE_REGION),
     FI("capture.y", "Region Y", region_y, 0, 16384, TAB_SOURCE, 1, REQUIRE_REGION),
     FI("capture.width", "Region width", region_w, 0, 16384, TAB_SOURCE, 1, REQUIRE_REGION),
@@ -772,7 +777,8 @@ static bool supported(const Panel *p, const FieldSpec *f)
 {
     return (!(f->flags & REQUIRE_CURSOR) || p->snapshot.capabilities.cursor_metadata) &&
            (!(f->flags & REQUIRE_INPUT) || p->snapshot.capabilities.input) &&
-           (!(f->flags & REQUIRE_REGION) || p->snapshot.capabilities.region_selection);
+           (!(f->flags & REQUIRE_REGION) || p->snapshot.capabilities.region_selection) &&
+           (!(f->flags & REQUIRE_EXCLUSION) || p->snapshot.capabilities.panel_exclusion);
 }
 static bool writable(const Panel *p, const FieldSpec *f)
 {
@@ -1468,7 +1474,7 @@ static void compose_body(Panel *p)
             }
         }
         const char *names[TAB_COUNT][GROUP_COUNT] = {
-            {"", "Region geometry", "Zoom behavior", "Stage sizes", "Screen appearance",
+            {"", "Capture & exclusion", "Zoom behavior", "Stage sizes", "Screen appearance",
              "Background gradient"},
             {"", "Position & crop", "Camera appearance", "Device"},
             {"", "Virtual microphone"},
@@ -1490,6 +1496,12 @@ static void compose_body(Panel *p)
                       .border = {.color = line, .width = {.top = 1}}})
                 {
                     label(names[tab][group] ? names[tab][group] : "Advanced", 2, foreground);
+                }
+                if (tab == TAB_SOURCE && group == 1) {
+                    text_wrapped("Mask covers the panel and preview with your chosen color. "
+                                 "Transparent shows Cast's screen background through the overlap; "
+                                 "it cannot reveal desktop content hidden behind either window.",
+                                 secondary);
                 }
                 if (tab == TAB_SETTINGS && group >= 4) {
                     text_wrapped("Title, subtitle and footer are optional. Templates: {date}, "
@@ -2339,7 +2351,7 @@ static Widget *find_widget(Panel *p, uint32_t id)
 static bool widget_in_scroll(const Panel *p, const Widget *w)
 {
     (void)p;
-    return w->id != 5 && w->id != 6 && w->id != 22 && w->id != 34 &&
+    return w->id != 5 && w->id != 6 && w->id != 7 && w->id != 22 && w->id != 34 &&
            !(w->id >= 10 && w->id <= 12) && w->id != 99 && !(w->id >= 160 && w->id <= 163) &&
            !(w->id >= 700 && w->id <= 715) && w->type != W_OPTION;
 }
@@ -3187,6 +3199,8 @@ static void write_ui_state(Panel *p, const char *path)
     json_string(file, record_status(&p->snapshot));
     fputs(",\"error\":", file);
     json_string(file, p->error[0] ? p->error : p->snapshot.error);
+    fputs(",\"exclusion\":", file);
+    json_string(file, p->snapshot.exclusion);
     fputs("}\n", file);
     fclose(file);
 }

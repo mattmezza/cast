@@ -47,6 +47,16 @@ styling, geometry, gradient stops, overlay anchors, annotation policies, recordi
 formats and presentation typography remain on the appropriate page. Every existing
 setting remains reachable.
 
+**Source & layout → Capture & exclusion** selects **mask** or **transparent** for
+panel/preview overlaps and sets the mask color independently of the pause screen.
+Mask is the default. Transparent reveals Cast's configured screen background in
+the overlap; it does not recover desktop content hidden behind the windows. The
+same controls are available as `cast capture exclusion mask|transparent` and
+`cast capture mask-color '#RRGGBB'`. Apply changes the session only; persist them
+as `[capture] exclusion` and `mask_color` in the config file. The controls are
+disabled on capture backends without panel exclusion. Selected application
+capture naturally excludes both separate windows.
+
 Text, numeric, enum and boolean composition edits are local drafts. **Apply** sends
 one validated settings batch for the current section; **Revert** discards its unsent
 drafts. A pinned draft bar above the status bar shows the current page's edit count,
@@ -106,8 +116,8 @@ source, layout and preset links to the relevant Compose pages; the zoom token
 resets zoom. Its second row shows connection state and marked pending, acknowledged
 or failed command feedback. Long tokens and messages fit with ellipses. During
 disconnect, last-known state remains visible, commands are disabled and the panel
-reconnects automatically. Capture exclusion is informational and permanent;
-neutral masking cannot reconstruct content covered by either window.
+reconnects automatically. The permanent exclusion notice reports the active
+capture policy; neither policy reconstructs covered desktop content.
 
 ## Implementation handoff
 
@@ -131,5 +141,5 @@ editing, instead of blocking them behind browser demo modal chrome.
 
 Panel-owned shared memory retains only navigation and per-view scroll numbers
 for the current daemon session. This panel refinement uses the existing daemon
-commands, snapshots and configuration schema, and retains the floating preview's
-existing behavior.
+commands and snapshots, with overlap policy/color added to the capture schema;
+the floating preview retains its existing controls and behavior.
