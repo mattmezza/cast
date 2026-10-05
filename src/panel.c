@@ -408,7 +408,7 @@ typedef struct {
     uint32_t color_popup, slider_drag;
     int color_field, pick_field;
     PanelColorPick *color_pick;
-    bool picking_color, pick_requested;
+    bool picking_color, pick_requested, pointer_needs_sync;
     uint64_t device_request;
     int device_count;
     char device_values[64][256], device_labels[64][256];
@@ -4508,10 +4508,35 @@ static float wheel_delta(const SDL_MouseWheelEvent *wheel)
     float direction = wheel->direction == SDL_MOUSEWHEEL_FLIPPED ? -1 : 1;
     return wheel->y * direction * 6;
 }
+static void pointer_position(Panel *p, float x, float y)
+{
+    p->mouse_x = x / p->input_scale;
+    p->mouse_y = y / p->input_scale;
+    if (p->pointer_needs_sync) {
+        /* An external X11 grab can leave SDL's cached button coordinates at the
+         * picker trigger. Use actual desktop coordinates until SDL catches up. */
+        float global_x, global_y;
+        int window_x, window_y;
+        SDL_GetGlobalMouseState(&global_x, &global_y);
+        SDL_GetWindowPosition(p->window, &window_x, &window_y);
+        float actual_x = (global_x - window_x) / p->input_scale;
+        float actual_y = (global_y - window_y) / p->input_scale;
+        p->pointer_needs_sync =
+            fabsf(actual_x - p->mouse_x) > .5f || fabsf(actual_y - p->mouse_y) > .5f;
+        p->mouse_x = actual_x;
+        p->mouse_y = actual_y;
+    }
+}
+
 static void event(Panel *p, const SDL_Event *e)
 {
     if (p->picking_color && e->type != SDL_EVENT_QUIT &&
         e->type != SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
+        if (e->type == SDL_EVENT_KEY_DOWN && e->key.key == SDLK_ESCAPE) {
+            panel_color_pick_cancel(p->color_pick);
+            p->picking_color = false;
+            p->mouse_down = false;
+        }
         return;
     }
     switch (e->type) {
@@ -4520,8 +4545,7 @@ static void event(Panel *p, const SDL_Event *e)
         p->quit = true;
         break;
     case SDL_EVENT_MOUSE_MOTION:
-        p->mouse_x = e->motion.x / p->input_scale;
-        p->mouse_y = e->motion.y / p->input_scale;
+        pointer_position(p, e->motion.x, e->motion.y);
         if (p->slider_drag && p->mouse_down) {
             flow_slider_update(p, find_widget(p, p->slider_drag), p->mouse_x);
         }
@@ -4529,7 +4553,8 @@ static void event(Panel *p, const SDL_Event *e)
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
         if (e->button.button == SDL_BUTTON_LEFT) {
             p->mouse_down = true;
-            click_event(p, e->button.x / p->input_scale, e->button.y / p->input_scale);
+            pointer_position(p, e->button.x, e->button.y);
+            click_event(p, p->mouse_x, p->mouse_y);
         }
         break;
     case SDL_EVENT_MOUSE_BUTTON_UP:
@@ -4582,6 +4607,8 @@ static void acknowledge_edit(FieldEdit *edit, bool failed)
 static void poll_color_pick(Panel *p)
 {
     if (!p->picking_color) {
+        /* Finish cancelled portal callbacks even when no chooser is open. */
+        panel_color_pick_poll(p->color_pick, NULL);
         return;
     }
     if (!p->snapshot.connected || !writable(p, &fields[p->pick_field])) {
@@ -4596,6 +4623,7 @@ static void poll_color_pick(Panel *p)
     }
     p->picking_color = false;
     p->mouse_down = false;
+    p->pointer_needs_sync = !strcmp(SDL_GetCurrentVideoDriver(), "x11");
     if (status == PANEL_COLOR_PICK_SUCCESS) {
         char value[8];
         snprintf(value, sizeof value, "#%02x%02x%02x", rgb[0], rgb[1], rgb[2]);
