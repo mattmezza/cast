@@ -1099,7 +1099,7 @@ static void flow_choice(Panel *p, uint32_t id, const char *text, size_t index,
         const char *resource = p->edit[path].dirty ? p->edit[path].value
                               : !strcmp(fields[index].key, "logo.enabled") ? p->snapshot.config.logo_path
                                                                           : p->snapshot.config.text_font;
-        missing = resource[0] && (resource[0] == '/' || strchr(resource, '/')) && access(resource, R_OK);
+        missing = resource[0] == '/' && access(resource, R_OK);
     }
     CLAY({.id = element_id(id),
           .layout = {.sizing = {.width = CLAY_SIZING_FIXED(width),
@@ -3288,8 +3288,8 @@ static void set_focus(Panel *p, Widget *w)
         SDL_Rect area = clip_rect(w->box);
         SDL_SetTextInputArea(p->window, &area, (int)p->caret);
     }
-    if (widget_in_scroll(p, w)) {
-        Clay_ElementId container = p->dropdown ? CLAY_ID("Dropdown")
+    if (widget_in_scroll(p, w) || w->type == W_OPTION) {
+        Clay_ElementId container = p->color_popup ? CLAY_ID("ColorPopup") : p->dropdown ? CLAY_ID("Dropdown")
                                    : p->open_menu ? CLAY_ID("LaneMenu") : CLAY_ID("SettingsScroll");
         Clay_ElementData area = Clay_GetElementData(container);
         Clay_ScrollContainerData scroll = Clay_GetScrollContainerData(container);
@@ -3992,6 +3992,12 @@ static void key_event(Panel *p, const SDL_KeyboardEvent *event)
 }
 static void click_event(Panel *p, float x, float y)
 {
+    Widget *close = find_widget(p, 7);
+    if (close && x >= close->box.x && y >= close->box.y &&
+        x < close->box.x + close->box.width && y < close->box.y + close->box.height) {
+        activate(p, close);
+        return;
+    }
     if (p->color_popup && !flow_popup_contains(p, x, y, "ColorPopup")) {
         p->color_popup = 0;
         stop_editing(p);
@@ -4135,6 +4141,7 @@ static void poll_client(Panel *p)
                     (saved.return_view != VIEW_SECTION ||
                      (saved.return_section >= 0 && saved.return_section < 6));
                 memset(p->view_scroll, 0, sizeof p->view_scroll);
+                memset(p->all_settings, 0, sizeof p->all_settings);
                 p->restore_scroll = true;
                 if (valid) {
                     memcpy(p->view_scroll, saved.scroll, sizeof saved.scroll);
