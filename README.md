@@ -76,7 +76,7 @@ them with `sudo pacman -S --needed sdl3 sdl3_ttf`, build with
 `./cast panel` alongside the daemon. Closing the panel leaves capture running.
 See [panel controls and capture visibility](docs/control-panel.md).
 
-![Cast control panel with pinned output lanes and Operate and Compose tabs](assets/control-panel.png)
+![Cast control panel with output task cards and Operate and Compose tabs](assets/control-panel.png)
 
 *Private synthetic fixture; capture capabilities depend on the selected backend.*
 
@@ -105,11 +105,12 @@ cp -n examples/cast.conf ~/.config/cast/cast.conf
 
 The panel and preview are Xorg utility windows (`CastPanel` and `CastPreview`);
 window managers that float utilities, including mwm, center them automatically.
-The panel follows the supplied **Operate / Compose** design. Its pinned header
-shows Virtual camera, Recording and Streaming, with global privacy and Preview
-controls. Compose opens dedicated pages from a flat section list; all settings
-are inline, with sticky Back and a pinned Apply/Revert bar. Alt+1…7 jump directly
-to sections, 1/2 switch tabs, and Escape goes back. Edits stay local until Apply
+The panel follows the supplied **Operate / Compose** design. Its slim header
+contains global privacy, Preview and Close. Operate has four always-expanded task
+cards with direct output actions and an Audio card. Compose has six dedicated pages,
+with Essentials first and **All settings** revealing the rest. Sticky Back and a
+pinned Apply/Revert bar stay accessible while scrolling. Alt+1…6 jump directly
+to sections, 1/2 switch tabs, and Escape goes back. Drafts stay local until Apply
 or Enter; page and scroll restore when reopening the panel in the same session. Preview remains a separate floating window with three target
 pills. A recording countdown temporarily uses it and hides it before recording
 begins.
@@ -184,7 +185,7 @@ Camera content is mirrored by default; the screen stays unmirrored. Use
 in the configuration's `[camera]` section.
 
 `./cast virtual message "Back in five minutes"` changes the solid pause title for
-this session. **Compose → Settings → Pause screen** and **Blur screen** edit optional titles,
+this session. **Compose → Pause & blur screens** edits optional titles,
 subtitles, footers, text spacing, colours and blur strength. **Operate** provides
 independent output controls and recording cut/resume. Successful start/resume actions
 select that output’s preview target; a later manual choice takes precedence.
