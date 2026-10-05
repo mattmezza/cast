@@ -10,25 +10,34 @@ has no effect on a `PANEL=0` daemon’s streaming capability.
 
 ## Operate
 
-The pinned header uses two rows: 44-pixel lane chips for **Virtual camera**,
-**Recording**, and **Streaming**, then 30-pixel privacy, preview and close actions with
-compact 11.5-pixel semibold labels. Each lane shows a text state, independent of
-colour. Selecting a chip opens that output’s controls in Operate.
-**Pause all** / **Resume** follows the daemon’s remembered group-pause restoration;
-independently paused outputs remain
-paused and stopped outputs remain stopped. **Preview on/off** controls the separate
-floating preview. The permanent capture-exclusion notice remains above the tabs;
-composition and connection feedback stay in the bottom status bar.
+The pinned header is one 36-pixel row: **Pause all / Resume**, **Preview on/off**,
+and **Close**. Output state and actions live on four always-expanded, single-column
+task cards: **Virtual camera**, **Recording**, **Streaming**, and **Audio**.
+The capture-exclusion notice and Operate/Compose tabs remain pinned below the header.
 
-Operate has focused output disclosures and an Audio disclosure. Virtual-camera
-start is privacy-paused; Resume virtual camera explicitly reveals the composition.
-Recording start uses its configured countdown, with Cancel. Cut time removes media
-time while preserving the same file; Resume uses the countdown again. Freeze and
-Blur retain their independent flags under solid Pause. Streaming starts connecting
-in solid pause; connection success never silently reveals content. **Resume
-streaming** is the explicit reveal action. Connecting, retrying, failed, stopping
-and paused states remain distinct; **Retry connection** after failure requests a
-new session. There is no streaming Cut control.
+Virtual camera and recording start directly from their cards. Virtual-camera start
+is privacy-paused; Resume explicitly reveals the composition. Recording uses its
+configured countdown, with Cancel. **Cut** removes media time; Resume continues the
+same file after another countdown. Solid pause, freeze and blur keep their separate
+flags and silence that lane's audio. Blur may cover freeze; solid pause overrides
+both; Resume clears only solid pause.
+
+An unconfigured Streaming card opens **Set up streaming…** as its primary action.
+Configured sessions start connecting in solid pause. Successful connection does
+not reveal composition: **Resume streaming** explicitly reveals it. Connecting,
+retrying, failed, stopping and presentation states remain distinct. Failed sessions
+show their reason and a Retry action. Streaming has no Cut.
+
+Each card's **⋯** opens one in-panel options surface. Recording options contain
+countdown, destination and encoding settings. Audio options contain discovered
+sources and gains; microphone and desktop-audio toggles remain directly on the card.
+Virtual-microphone controls stay with audio/output options. Streaming options show
+server and key-file path and link to the dedicated setup view. No stream secret is
+shown. Options never nest, close with Escape/outside click and close on navigation.
+
+**Pause all / Resume** follows the daemon's remembered group restoration: stopped
+outputs remain stopped and independently paused outputs remain paused. Preview is
+a separate floating window; its toggle is unavailable while countdown owns it.
 
 **Streaming setup…** exposes the service, RTMP/RTMPS server URL, stream-key file path,
 bitrates and encoder preset. It never contains the secret. Connection-affecting
@@ -39,7 +48,27 @@ recipes.
 
 ## Compose
 
-Compose opens a flat list of seven sections: **Source & layout**,
+Compose opens six section pages: **Source & layout**, **Camera**, **Background &
+stage**, **Overlays**, **Annotations & pointer**, and **Pause & blur screens**.
+Audio exists only on Operate; recording options exist only on its card; streaming
+connection fields exist only in Streaming setup.
+
+Each page begins with Essentials and ends with **All settings**, which reveals the
+remaining fields inline with labeled groups. This one-level disclosure retains drafts
+and page scroll. Layout diagrams represent the five actual layouts. Camera position
+uses eight points around a disabled center; no drag-in-preview or Free option is
+advertised. Free coordinates remain advanced controls for CLI-selected free positioning.
+Camera shape and backdrop source use chips; size, zoom, gains and countdown use sliders.
+Background fields change with the selected mode rather than exposing unrelated colors.
+Per-output click/keystroke visibility appears once as a three-column matrix.
+
+Enums and discovered devices use keyboard-operable, scrollable choice pickers.
+Color pickers offer swatches and editable #RRGGBB text, with invalid-value feedback.
+Boolean controls have explicit On/Off segments. Unavailable capabilities and active
+output locks keep their controls visible with explanatory notes. Missing-resource
+warnings do not substitute fake assets or silently change daemon behavior.
+
+**Source & layout**,
 **Camera**, **Background & stage**, **Overlays**, **Annotations & pointer**, **Audio**,
 and **Settings**. Selecting a section opens its dedicated page with a sticky
 **Compose** back control and all fields inline in labeled groups. Advanced screen
@@ -74,13 +103,13 @@ output font choices remain separate from the panel’s single bundled Inter fami
 Optional titles, subtitles and footers accept the existing date/time placeholders.
 Static composition text uses a runtime-selectable font and literal text.
 
-Use **1** / **2** to switch between Operate and Compose, and **Alt+1…7** to jump
-directly to the seven sections in the order above. **Escape** dismisses the current
+Use **1** / **2** to switch between Operate and Compose, and **Alt+1…6** to jump
+directly to the six sections in the order above. **Escape** dismisses the current
 sheet or choice picker first, then returns from a section page to the Compose list.
 Tab/Shift+Tab moves focus through controls.
 
 Each view remembers its own scroll position. Closing and reopening the panel
-restores the current page, output disclosure and scroll positions while the same
+restores the current page, Essentials/All state and scroll positions while the same
 daemon session runs. A new daemon session resets navigation to Operate. This
 navigation memory does not save drafts or write configuration; runtime Apply
 continues to leave the config file untouched.
@@ -115,7 +144,9 @@ floating rule; no window-manager configuration is changed.
 
 The 46-pixel status bar has two centered rows in 11-pixel text. Its first row shows
 source, layout and preset links to the relevant Compose pages; the zoom token
-resets zoom. Its second row shows connection state and marked pending, acknowledged
+resets zoom. Lane tokens jump directly to Operate cards, with recording elapsed time.
+At narrow widths the bar drops preset, then zoom, then lane tokens to preserve readable
+source/layout links. Its second row shows connection state and marked pending, acknowledged
 or failed command feedback. Long tokens and messages fit with ellipses. During
 disconnect, last-known state remains visible, commands are disabled and the panel
 reconnects automatically. The permanent exclusion notice reports the active
@@ -123,25 +154,13 @@ masking status; masking cannot reconstruct covered desktop content.
 
 ## Implementation handoff
 
-The production design comes from `redesign-prompt.md` and the supplied
-`design-proposal.html`, `cast-panel.html`, and `cast-preview.html` artifacts.
-Components reuse the existing Clay field tables, button/icon helpers, text cache,
-bounded panel transport and renderer. Settings use the existing atomic settings
-command; the panel does not call daemon/media functions directly. The private
-protocol remains version 1 and requires the same build on both ends, as before.
+The production design comes from the approved round-three `cast-panel.html` prototype.
+The native implementation preserves existing daemon commands, atomic setting batches,
+transport snapshots and preview behavior. Browser demo inventories and simulated state
+are replaced with acknowledged daemon state and discovered resources. The panel uses
+bundled Inter only: existing 13/16/19/25/48 slots plus compact status/meta roles. Output
+text font configuration is independent of the panel typeface.
 
-The streaming implementation intentionally supersedes the prototype’s unavailable
-capability and the incumbent `live` command names. It supplies real backend states
-and `virtual` commands. Browser demo chrome, simulated device/preset inventories,
-Unicode icons, browser window simulation and illustrative secrets are not
-production controls. Native typography uses Inter slots
-13/16/19/25/48 plus compact 11-pixel status and 11.5-pixel semibold meta-action
-roles, rasterized at actual display density. The setup copy correctly says
-the key stays out of UI/IPC/logs; authentication necessarily sends it to the ingest
-service. The setup sheet keeps global privacy controls accessible while
-editing, instead of blocking them behind browser demo modal chrome.
-
-Panel-owned shared memory retains only navigation and per-view scroll numbers
-for the current daemon session. This panel refinement uses the existing daemon
-commands and snapshots, with mask color added to the capture schema;
-the floating preview retains its existing controls and behavior.
+Panel-owned shared memory stores only navigation, per-page disclosure state and scroll
+for the current daemon session; no drafts, secrets, output state or config are persisted.
+No configuration keys or IPC commands are added by this redesign.
