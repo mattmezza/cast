@@ -103,7 +103,7 @@ jobs:
           pacman -Syu --noconfirm --needed \
             base-devel git ffmpeg pipewire glib2 libx11 libxext libxrandr \
             libxi libxfixes libxcomposite sdl3 sdl3_ttf fontconfig freetype2 noto-fonts python dbus \
-            xorg-server-xvfb xorg-xauth xorg-xprop libxtst xdotool xclip curl zsh fish openssl
+            xorg-server-xvfb xorg-xauth xorg-xprop xorg-xsetroot libxtst xdotool xclip curl zsh fish openssl
           useradd --create-home builder
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
