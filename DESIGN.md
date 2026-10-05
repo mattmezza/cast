@@ -64,58 +64,55 @@ components:
 
 # Design System: Cast control panel
 
-The visual authority is the supplied panel and preview prototypes: a compact
-three-output remote control with a pinned lane header and **Operate / Compose**
-tabs. Operate and Compose are native Operate surfaces. They share neutral dark
-colours, bundled Inter, square controls, authored line icons, visible focus and
-acknowledged daemon state. This replaces the former Home-and-five-sections layout.
+The visual authority is the approved round-three `cast-panel.html` prototype in the
+OpenDesign project. This is an Operate surface: direct task actions first, essential
+composition controls next, advanced controls one disclosure away. The existing dark
+palette, bundled Inter family, square buttons and acknowledged daemon state remain.
 
-The header has exactly two action rows: three equal 44px lane chips with fixed
-state indicators and ellipsized text, then 30px Pause all/Resume, Preview and Close
-buttons in 11.5px semibold Inter. Privacy and preview share equal widths; Close is
-compact to preserve preview state text at 360px. The titlebar contains only the
-window name.
-The permanent capture-exclusion line and full-width Operate/Compose tabs remain
-pinned. Connection state and acknowledged feedback live in a pinned 46px surface
-status bar: two centered 16px rows of quiet 11px text, with composition deep links
-above the connection label and marked, ellipsized feedback. Hovered summary links
-shift to foreground with dotted underlines. The body is the only scrolling region.
-An always-available square Close control beside Preview closes only the panel;
-wheel scrolling advances 60 logical pixels per notch with fractional motion preserved.
+The header is one 36px row containing global privacy, Preview and a fixed 76px Close
+slot. It contains no lane chips. The permanent capture-exclusion notice and two equal
+Operate/Compose tabs remain pinned. Only the body scrolls. Close always closes the
+panel alone, including while disconnected or waiting for an acknowledgement.
 
-Operate has four disclosures: Virtual camera, Recording, Streaming and Audio.
-Selecting a header chip opens the corresponding lane. Primary actions name their
-output. States distinguish run/connection lifecycle from paused/frozen/blurred
-presentation. Streaming setup edits only a stream-key file path, never a secret;
-Start connects privacy-paused and explicit Resume reveals content. Recording has
-countdown Cancel and omitted-time Cut/Resume. Global privacy restoration never
-reveals independently paused outputs or starts stopped ones.
+Operate consists of four always-expanded single-column cards: Virtual camera,
+Recording, Streaming and Audio. Each lane has a 25px title, state dot and text,
+quiet context, direct actions and one overflow menu. Starts remain privacy-safe:
+virtual camera and streaming start paused and require explicit reveal. Recording
+cut removes media time and resumes the same file after countdown. Failed streaming
+keeps its reason and Retry. Audio source/gain controls appear only on the Audio card.
+Recording configuration appears only in its overflow; six streaming connection fields
+appear only in the dedicated setup view, which exposes a key-file path rather than a
+secret. No browser demo inventory or state is treated as real.
 
-Compose is a static seven-row section list: Source & layout, Camera, Background &
-stage, Overlays, Annotations & pointer, Audio and Settings. Each row summarizes
-live values and opens a dedicated page with a sticky Compose back button. Every
-control is inline beneath visible group labels; no nested disclosures. List rows
-that straddle the scroll edge are hidden as a whole. Current-section dirty edits
-show a pinned Apply/Revert bar above the status bar. Apply and Enter submit a
-validated atomic batch without changing page or scroll; Revert discards unsent
-changes. Drafts survive navigation and failed commands. Alt+1…7 jump to sections,
-1/2 switch tabs and Escape closes a sheet first, otherwise returning to the list.
-Composition tokens deep-link to source/layout or background/stage; zoom has a reset
-link. Each view remembers its scroll in session memory across panel close/reopen
-against the same daemon. Navigation never writes config. Locked and unsupported
-fields explain why they are disabled; config-only output fonts show reload guidance.
-Source & layout includes an inline overlap mask-color control, applied through
-the same draft bar. Guidance explains unobstructed capture through a selected
-application window or moving controls outside the captured monitor/region;
-unsupported backends disable the field.
+Compose is a flat six-row list: Source & layout, Camera, Background & stage, Overlays,
+Annotations & pointer, Pause & blur screens. Dedicated pages retain a pinned Back
+header and per-page scroll. Essentials follow the prototype ordering; one All settings
+toggle reveals the remaining fields inline. Disclosure never nests. Camera anchors
+use eight selectable positions around a disabled center, with an honest layout note;
+no Free/drag-in-preview promise is shown. Five drawn thumbnails represent layouts.
+Backdrop chips switch the visible mode-specific fields. Annotation visibility uses
+one output matrix rather than repeated per-lane fields.
 
-The panel fills 360–520 logical pixels and centers at wider sizes. It uses the
-existing Inter slots: 13 secondary/chips, 16 controls/body, 19 section headings,
-25 lane headings and 48 countdown numerals. Compact secondary roles reuse Inter
-at their actual 11px and 11.5px raster sizes. Density changes rebuild raster
-fonts and text textures. Controls retain square corners, consistent spacing and
-visible pointer/keyboard states. No second UI font or system-font dependency is
-introduced. Every status has text; colour is supplementary.
+Reusable controls share existing drafts and IPC: full-width 36px choice triggers,
+scrollable 32px popup rows, 30px On/Off segments and chips, sliders with unit-bearing
+values, swatch/hex color pickers, focusable anchor grid and layout diagrams. Invalid
+colors show a warning border/message. Unsupported controls and output locks explain
+why they are unavailable. Output fonts remain separate from the panel typeface.
+The pinned draft bar shows edit count, Apply/Revert and session only; atomic batch
+acknowledgement preserves later typing, page and scroll. Navigation never writes config.
+
+The 46px status bar has two centered 16px rows of 11px Inter: composition and lane
+links above connection state and marked command feedback. At narrow widths it drops
+preset, zoom, then lane tokens; remaining links and feedback ellipsize. Hovered links
+shift to foreground with dotted underlines. Alt+1…6 opens sections, 1/2 switches tabs,
+Escape closes the active choice/menu/sheet before returning to the list, and keyboard
+controls operate choices, sliders and spatial grids. Per-view navigation/scroll and
+All settings state persist only in session memory for the same daemon socket session.
+
+The panel has a centered single column from 360 to 520 logical pixels. Wheel input
+advances 60 logical pixels per notch with fractional/natural motion retained. Inter's
+existing 13/16/19/25/48 roles remain: secondary/body/group/title/countdown respectively;
+compact status and semibold meta actions reuse the existing quiet raster roles.
 
 CastPanel and CastPreview remain separate utility windows that float under the
 existing mwm rule. Preview target pills select Virtual camera/Recording/Streaming.

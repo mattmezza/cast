@@ -32,11 +32,11 @@ must remain stable while an output is running, paused or frozen, and closing it 
 
 ## Capabilities and constraints
 
-The panel follows the supplied three-lane header and Operate/Compose prototype.
+The panel follows the approved flow-first Operate/Compose prototype.
 Operate exposes independent Virtual camera, Recording and Streaming controls plus
-Audio. Compose opens dedicated pages from a flat seven-section list, with inline groups,
+Audio. Compose opens six dedicated pages with Essentials/All settings, inline groups,
 a pinned draft bar, keyboard jumps and session navigation memory.
-Only the body scrolls; output state, global privacy, preview toggle and exclusion
+Only the body scrolls; global privacy, preview toggle and exclusion
 remain pinned. Drafts apply explicitly and commands use acknowledged IPC.
 Streaming is one configured RTMP/RTMPS destination, without OAuth or service APIs.
 Opening/closing the panel never changes any output state.
