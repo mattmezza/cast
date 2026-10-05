@@ -9,13 +9,13 @@ unit, IPC, mock portal, Xorg and native panel checks must pass before asset uplo
 Only the publishing job gets release write permission. External actions are pinned
 to commits, and the installed Arch package versions are recorded in the build manifest.
 
-For v0.7 (executable/package version 0.7.0):
+For v0.9 (executable/package version 0.9.0):
 
 ```sh
 git push origin main
-git tag -a v0.7 -m 'cast v0.7'
-git push origin refs/tags/v0.7
-make release-ci RELEASE_TAG=v0.7 RELEASE_NOTES=docs/release-notes/0.7.0.md
+git tag -a v0.9 -m 'cast v0.9'
+git push origin refs/tags/v0.9
+make release-ci RELEASE_TAG=v0.9 RELEASE_NOTES=docs/release-notes/0.9.0.md
 gh run list --workflow release-arch.yml
 ```
 
@@ -50,7 +50,7 @@ gh workflow run release-arch.yml --ref main
 
 An empty `release_tag` input tests the selected commit and preserves downloadable
 Actions artifacts for 14 days. To attach missing assets after a build/upload failure,
-dispatch with `-f release_tag=v0.7`; this verifies the existing release and exact
+dispatch with `-f release_tag=v0.9`; this verifies the existing release and exact
 tag before building. Any already-uploaded asset name causes publication to stop;
 inspect partial uploads rather than silently replacing them.
 

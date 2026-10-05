@@ -742,7 +742,10 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
                         action == A_PICK_COLOR || global_privacy;
     bool combo = action == A_DROPDOWN;
     float header_width = fminf(p->width, 520) - 32 - 18;
-    float compact_width = header_width * (id == 8 ? .32f : id == 9 ? .12f : .28f);
+    float compact_width = header_width * (id == 8   ? .32f
+                                          : id == 9 ? .125f
+                                          : id == 7 ? .285f
+                                                    : .27f);
     if (action != A_TAB && action != A_GROUP && action != A_PREVIEW && action != A_DROPDOWN &&
         action != A_BACK && action != A_CLOSE && action != A_QUIT_APP && action != A_QUIT_CANCEL &&
         action != A_ALL && action != A_MENU &&
@@ -774,10 +777,13 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
                                                                 ? 30
                                                             : card_action || combo ? 36
                                                                                    : 40)},
-                     .padding = {compact || small_action ? 7 : 10,
-                                 compact || small_action ? 7
-                                 : combo                 ? 26
-                                                         : 10,
+                     .padding = {compact        ? 5
+                                 : small_action ? 7
+                                                : 10,
+                                 compact        ? 5
+                                 : small_action ? 7
+                                 : combo        ? 26
+                                                : 10,
                                  compact || small_action ? 6 : 8, compact || small_action ? 6 : 8},
                      .childGap = 6,
                      .childAlignment = {.x = primary_action ? CLAY_ALIGN_X_CENTER
@@ -801,7 +807,11 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
             icon_slot(icon, enabled, selected);
         }
         if (compact) {
-            quiet_label(fit_text(p, text, compact_width - 14, FONT_META), ink, true);
+            float text_width = compact_width - 10;
+            if (p->pending_button == id && p->pending_button_request) {
+                text_width -= 20;
+            }
+            quiet_label(fit_text(p, text, text_width, FONT_META), ink, true);
         } else {
             const char *display =
                 id == 40
