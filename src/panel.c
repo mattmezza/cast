@@ -101,8 +101,6 @@ static const FieldSpec fields[] = {
     FE("composition.fit", "Screen fit", fit, "contain,cover", TAB_SOURCE, 0, 0),
     FN("zoom.factor", "Zoom factor", zoom_factor, 1, 20, TAB_SOURCE, 0, 0),
     FB("zoom.follow", "Follow pointer", zoom_follow, TAB_SOURCE, 0, REQUIRE_CURSOR),
-    FE("capture.exclusion", "Panel / preview overlap", capture_exclusion, "mask,transparent",
-       TAB_SOURCE, 1, REQUIRE_EXCLUSION),
     FC("capture.mask_color", "Overlap mask color", capture_mask_color, TAB_SOURCE, 1,
        REQUIRE_EXCLUSION),
     FI("capture.x", "Region X", region_x, 0, 16384, TAB_SOURCE, 1, REQUIRE_REGION),
@@ -606,6 +604,9 @@ static void state_marker(Clay_Color ink)
 }
 static Icon button_icon(const Panel *p, uint32_t id, Action action)
 {
+    if (id == 7) {
+        return ICON_CLOSE;
+    }
     if (id == 99 || id == 90 || id == 92 || id == 93 || id == 94 || id == 96 || id == 87) {
         return ICON_BACK;
     }
@@ -687,8 +688,13 @@ static Icon button_icon(const Panel *p, uint32_t id, Action action)
 static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool selected,
                    Action action, int index)
 {
+    /* Pinned secondary actions share one height/style. Close is compact so
+     * Preview retains its on/off label at the minimum window width. */
+    bool compact = id == 7 || id == 22 || id == 34;
+    float compact_width = id == 7 ? 76 : (fminf(p->width, 520) - 32 - 12 - 76) / 2;
     if (action != A_TAB && action != A_GROUP && action != A_PREVIEW && action != A_DROPDOWN &&
-        action != A_BACK && p->snapshot.command_queued > p->snapshot.command_completed) {
+        action != A_BACK && action != A_CLOSE &&
+        p->snapshot.command_queued > p->snapshot.command_completed) {
         enabled = false;
     }
     Widget *w = widget(p, id, W_BUTTON, action, enabled);
@@ -701,12 +707,13 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
                                          : control;
     Clay_Color ink = enabled ? selected ? accent : foreground : muted;
     CLAY({.id = element_id(id),
-          .layout = {.sizing = {.width = (id == 30 || id == 32 || id == 130 || id == 34 || id == 22)
-                                             ? CLAY_SIZING_GROW()
-                                             : CLAY_SIZING_FIT(),
-                                .height = CLAY_SIZING_FIXED(id == 22 || id == 34 ? 30 : 40)},
-                     .padding = {10, action == A_DROPDOWN ? 26 : 10, id == 22 || id == 34 ? 6 : 8,
-                                 id == 22 || id == 34 ? 6 : 8},
+          .layout = {.sizing = {.width = compact ? CLAY_SIZING_FIXED(compact_width)
+                                        : id == 30 || id == 32 || id == 130 ? CLAY_SIZING_GROW()
+                                                                         : CLAY_SIZING_FIT(),
+                                .height = CLAY_SIZING_FIXED(compact ? 30 : 40)},
+                     .padding = {compact ? 7 : 10,
+                                 compact ? 7 : action == A_DROPDOWN ? 26 : 10,
+                                 compact ? 6 : 8, compact ? 6 : 8},
                      .childGap = 6,
                      .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}},
           .backgroundColor = bg,
@@ -719,8 +726,8 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
         if (icon != ICON_NONE) {
             icon_slot(icon, enabled, selected);
         }
-        if (id == 22 || id == 34) {
-            quiet_label(text, ink, true);
+        if (compact) {
+            quiet_label(fit_text(p, text, compact_width - 36, FONT_META), ink, true);
         } else {
             label(text, 1, ink);
         }
@@ -1073,6 +1080,7 @@ static void pinned_header(Panel *p)
                                                : "Preview off",
                            s->connected && s->capabilities.preview && !s->countdown, "preview",
                            s->config.preview ? "off" : "on", NULL);
+            button(p, 7, "Close", true, false, A_CLOSE, 0);
         }
         CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
                          .padding = {10, 10, 7, 7},
@@ -1091,23 +1099,6 @@ static void pinned_header(Panel *p)
     {
         text_button(p, 5, "Operate", true, A_MAIN_TAB, 0, p->main_tab == 0);
         text_button(p, 6, "Compose", true, A_MAIN_TAB, 1, p->main_tab == 1);
-        /* Closing is local and remains available while disconnected or waiting
-         * for a daemon command. Keep the two output-action rows unchanged. */
-        widget(p, 7, W_BUTTON, A_CLOSE, true);
-        CLAY({.id = element_id(7),
-              .layout = {.sizing = {.width = CLAY_SIZING_FIXED(76),
-                                    .height = CLAY_SIZING_FIXED(42)},
-                         .childGap = 5,
-                         .childAlignment = {.x = CLAY_ALIGN_X_CENTER,
-                                            .y = CLAY_ALIGN_Y_CENTER}},
-              .backgroundColor = hot(7) ? hovered : background,
-              .border = {.color = p->focus == 7 ? accent : line,
-                         .width = p->focus == 7 ? outline_width
-                                               : (Clay_BorderWidth){.bottom = 1}}})
-        {
-            icon_slot(ICON_CLOSE, true, false);
-            quiet_label("Close", foreground, true);
-        }
     }
 }
 static void disclosure(Panel *p, uint32_t id, const char *title, const char *detail, Action action,
@@ -1499,8 +1490,8 @@ static void compose_body(Panel *p)
                 }
                 if (tab == TAB_SOURCE && group == 1) {
                     text_wrapped("Mask covers the panel and preview with your chosen color. "
-                                 "Transparent shows Cast's screen background through the overlap; "
-                                 "it cannot reveal desktop content hidden behind either window.",
+                                 "For unobstructed capture, select an application window or keep "
+                                 "the controls outside the captured monitor or region.",
                                  secondary);
                 }
                 if (tab == TAB_SETTINGS && group >= 4) {

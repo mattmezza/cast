@@ -46,9 +46,9 @@ the program never automatically writes user configuration.
 
 Controls use acknowledged user-only socket commands and daemon state. Slow panel
 rendering must not stall capture. Xorg monitor/region exclusion masks overlapping
-panel/preview pixels with a configurable colour, or reveals Cast's screen background
-through transparent holes. Hidden desktop content cannot be reconstructed. Selected
-application capture excludes the separate panel naturally. Wayland exclusion must
+panel/preview pixels with a configurable colour. Hidden desktop content cannot be
+reconstructed by root capture. Selected application capture excludes the separate
+panel naturally. Wayland exclusion must
 not be promised without compositor support.
 
 ## Evidence

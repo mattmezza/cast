@@ -167,11 +167,14 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
                 assert x >= 0 and y >= 0 and x+w <= width+1 and y+h <= height+1, (identifier, item, bounds)
                 if identifier in (10, 11, 12):
                     assert h == 44, ("chip height", item)
-                if identifier in (22, 34):
+                if identifier in (7, 22, 34):
                     assert h == 30, ("privacy/preview height", item)
                 if identifier == 7:
-                    assert item["enabled"] and h == 42, ("Close button unavailable", item)
+                    assert item["enabled"], ("Close button unavailable", item)
             assert abs(widget(22)["box"][2]-widget(34)["box"][2]) < 1, "meta-actions have unequal widths"
+            close, preview = widget(7)["box"], widget(22)["box"]
+            assert close[1] == preview[1] and close[0] >= preview[0]+preview[2], "Close is not beside Preview"
+            assert close[2] == 76 and preview[2] >= 120, "Close displaced preview state text"
             status = ui()["status_bar"]
             assert status[3] == 46, "status rows changed height"
             assert status[0] >= 0 and status[0]+status[2] <= width+1
@@ -276,27 +279,22 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             capture("operate-collapsed")
             if focused_exclusion:
                 navigate(0)
-                assert widget("capture.exclusion")["enabled"]
+                assert not widget("capture.exclusion"), "removed transparency selector remains"
                 assert widget("capture.mask_color")["enabled"]
                 edit("capture.mask_color", "#314159")
-                click_widget("capture.exclusion")
-                # The existing enum picker lists mask first, transparent second.
-                click_widget(401)
                 pinned_draft(0)
                 click_widget(700)
-                wait_until(lambda: state()["source"]["exclusion"] == "transparent"
-                           and state()["source"]["mask_color"] == "#314159",
-                           "panel exclusion draft did not apply atomically")
+                wait_until(lambda: state()["source"]["mask_color"] == "#314159",
+                           "panel mask color draft did not apply")
                 wait_until(lambda: not widget(700), "acknowledged exclusion draft did not clear")
                 assert ui()["open_section"] == 0
                 assert config.read_bytes() == original_config
-                capture("capture-transparent")
-                cli("capture", "exclusion", "mask")
+                capture("capture-mask-color")
                 cli("capture", "mask-color", "#8090a0")
-                wait_until(lambda: widget("capture.exclusion")["value"] == "mask"
-                           and widget("capture.mask_color")["value"] == "#8090a0"
+                wait_until(lambda: widget("capture.mask_color")["value"] == "#8090a0"
                            and "neutral-masked" in ui()["exclusion"],
                            "CLI exclusion changes did not reach panel")
+                cli("capture", "exclusion", "transparent", success=False)
                 edit("capture.mask_color", "#abcdef")
                 click_widget(701)
                 wait_until(lambda: not widget(700), "Revert kept dirty exclusion draft")
@@ -375,6 +373,7 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             try:
                 click_widget(31)
                 wait_until(lambda: ui().get("command_pending"), "Pending feedback missing", timeout=1)
+                assert widget(7)["enabled"], "Close disabled while waiting for daemon"
                 before = ui()["frame"]
                 wait_until(lambda: ui()["frame"] > before, "panel blocked on daemon acknowledgement", timeout=1)
             finally:
@@ -607,6 +606,7 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             daemon.wait(timeout=8)
             wait_until(lambda: not ui()["connected"], "disconnect banner state did not appear")
             assert not widget(34)["enabled"]
+            assert widget(7)["enabled"], "Close disabled while disconnected"
             capture("daemon-disconnected")
             daemon = start_daemon()
             wait_until(lambda: ui()["connected"], "panel did not reconnect")

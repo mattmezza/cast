@@ -2,7 +2,7 @@
 
 Build with `PANEL=1` and run `cast panel`. The panel is an independent client of the
 existing daemon. Opening, navigating, closing or reconnecting the panel never
-starts, stops, pauses or reveals an output. **Close**, beside the pinned tabs,
+starts, stops, pauses or reveals an output. **Close**, beside **Preview**,
 or `Ctrl+Q` closes only this window, including while disconnected or waiting for
 a command acknowledgement.
 The optional Clay/SDL3 renderer uses bundled Inter at native display density and
@@ -11,7 +11,7 @@ has no effect on a `PANEL=0` daemon’s streaming capability.
 ## Operate
 
 The pinned header uses two rows: 44-pixel lane chips for **Virtual camera**,
-**Recording**, and **Streaming**, then 30-pixel privacy and preview actions with
+**Recording**, and **Streaming**, then 30-pixel privacy, preview and close actions with
 compact 11.5-pixel semibold labels. Each lane shows a text state, independent of
 colour. Selecting a chip opens that output’s controls in Operate.
 **Pause all** / **Resume** follows the daemon’s remembered group-pause restoration;
@@ -47,15 +47,17 @@ styling, geometry, gradient stops, overlay anchors, annotation policies, recordi
 formats and presentation typography remain on the appropriate page. Every existing
 setting remains reachable.
 
-**Source & layout → Capture & exclusion** selects **mask** or **transparent** for
-panel/preview overlaps and sets the mask color independently of the pause screen.
-Mask is the default. Transparent reveals Cast's configured screen background in
-the overlap; it does not recover desktop content hidden behind the windows. The
-same controls are available as `cast capture exclusion mask|transparent` and
-`cast capture mask-color '#RRGGBB'`. Apply changes the session only; persist them
-as `[capture] exclusion` and `mask_color` in the config file. The controls are
-disabled on capture backends without panel exclusion. Selected application
-capture naturally excludes both separate windows.
+**Source & layout → Capture & exclusion** sets the color that masks panel/preview
+overlaps independently of the pause screen. The same control is available as
+`cast capture mask-color '#RRGGBB'`. Apply changes the session only; persist the
+color as `[capture] mask_color` in the config file. The control is disabled on
+capture backends without panel exclusion. Selected application capture naturally
+excludes both separate windows. For unobstructed monitor/region capture, keep the
+controls outside the captured area.
+
+The experimental transparent mode has been removed: it only revealed Cast's
+background, rather than the desktop hidden behind the control windows. Remove
+`[capture] exclusion` from configurations that used that unreleased setting.
 
 Text, numeric, enum and boolean composition edits are local drafts. **Apply** sends
 one validated settings batch for the current section; **Revert** discards its unsent
@@ -117,7 +119,7 @@ resets zoom. Its second row shows connection state and marked pending, acknowled
 or failed command feedback. Long tokens and messages fit with ellipses. During
 disconnect, last-known state remains visible, commands are disabled and the panel
 reconnects automatically. The permanent exclusion notice reports the active
-capture policy; neither policy reconstructs covered desktop content.
+masking status; masking cannot reconstruct covered desktop content.
 
 ## Implementation handoff
 
@@ -141,5 +143,5 @@ editing, instead of blocking them behind browser demo modal chrome.
 
 Panel-owned shared memory retains only navigation and per-view scroll numbers
 for the current daemon session. This panel refinement uses the existing daemon
-commands and snapshots, with overlap policy/color added to the capture schema;
+commands and snapshots, with mask color added to the capture schema;
 the floating preview retains its existing controls and behavior.

@@ -71,14 +71,16 @@ colours, bundled Inter, square controls, authored line icons, visible focus and
 acknowledged daemon state. This replaces the former Home-and-five-sections layout.
 
 The header has exactly two action rows: three equal 44px lane chips with fixed
-state indicators and ellipsized text, then equal 30px Pause all/Resume and Preview
-buttons in 11.5px semibold Inter. The titlebar contains only the window name.
+state indicators and ellipsized text, then 30px Pause all/Resume, Preview and Close
+buttons in 11.5px semibold Inter. Privacy and preview share equal widths; Close is
+compact to preserve preview state text at 360px. The titlebar contains only the
+window name.
 The permanent capture-exclusion line and full-width Operate/Compose tabs remain
 pinned. Connection state and acknowledged feedback live in a pinned 46px surface
 status bar: two centered 16px rows of quiet 11px text, with composition deep links
 above the connection label and marked, ellipsized feedback. Hovered summary links
 shift to foreground with dotted underlines. The body is the only scrolling region.
-An always-available square Close control beside the tabs closes only the panel;
+An always-available square Close control beside Preview closes only the panel;
 wheel scrolling advances 60 logical pixels per notch with fractional motion preserved.
 
 Operate has four disclosures: Virtual camera, Recording, Streaming and Audio.
@@ -102,10 +104,10 @@ Composition tokens deep-link to source/layout or background/stage; zoom has a re
 link. Each view remembers its scroll in session memory across panel close/reopen
 against the same daemon. Navigation never writes config. Locked and unsupported
 fields explain why they are disabled; config-only output fonts show reload guidance.
-Source & layout includes inline overlap policy and mask-color controls, applied
-through the same draft bar. Transparent reveals Cast's background, with explicit
-copy that hidden desktop content cannot be recovered; unsupported backends disable
-the fields.
+Source & layout includes an inline overlap mask-color control, applied through
+the same draft bar. Guidance explains unobstructed capture through a selected
+application window or moving controls outside the captured monitor/region;
+unsupported backends disable the field.
 
 The panel fills 360–520 logical pixels and centers at wider sizes. It uses the
 existing Inter slots: 13 secondary/chips, 16 controls/body, 19 section headings,
