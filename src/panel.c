@@ -408,7 +408,7 @@ typedef struct {
     uint32_t color_popup, slider_drag;
     int color_field, pick_field;
     PanelColorPick *color_pick;
-    bool picking_color;
+    bool picking_color, pick_requested;
     uint64_t device_request;
     int device_count;
     char device_values[64][256], device_labels[64][256];
@@ -4002,6 +4002,22 @@ static void flow_read_devices(Panel *p, const PanelSnapshot *fresh)
     }
 }
 
+static void start_color_pick(Panel *p)
+{
+    p->pick_requested = false;
+    if (p->quit || !writable(p, &fields[p->pick_field])) {
+        return;
+    }
+    if (panel_color_pick_begin(p->color_pick, SDL_GetCurrentVideoDriver(), NULL)) {
+        snprintf(p->error, sizeof p->error, "%s", panel_color_pick_error(p->color_pick));
+    } else {
+        p->color_popup = 0;
+        p->picking_color = true;
+        p->error[0] = 0;
+        p->reply[0] = 0;
+    }
+}
+
 static void activate(Panel *p, Widget *w)
 {
     if (!w || !w->enabled) {
@@ -4032,13 +4048,12 @@ static void activate(Panel *p, Widget *w)
     case A_PICK_COLOR:
         stop_editing(p);
         p->pick_field = w->index;
-        if (panel_color_pick_begin(p->color_pick, SDL_GetCurrentVideoDriver(), NULL)) {
-            snprintf(p->error, sizeof p->error, "%s", panel_color_pick_error(p->color_pick));
+        if (p->mouse_down) {
+            /* SDL owns an implicit pointer grab until the opening button is
+             * released. The picker uses its own X11 connection. */
+            p->pick_requested = true;
         } else {
-            p->color_popup = 0;
-            p->picking_color = true;
-            p->error[0] = 0;
-            p->reply[0] = 0;
+            start_color_pick(p);
         }
         break;
     case A_CLOSE:
@@ -4472,6 +4487,11 @@ static void click_event(Panel *p, float x, float y)
                 continue;
             }
         }
+        if (w->action == A_REVERT || w->action == A_APPLY_SECTION || w->action == A_APPLY) {
+            /* An explicit draft action owns the edit. Focus loss must not submit
+             * it first, particularly when the user chose Revert. */
+            cancel_editing(p);
+        }
         set_focus(p, w);
         if (w->type == W_SLIDER) {
             p->slider_drag = w->id;
@@ -4515,6 +4535,9 @@ static void event(Panel *p, const SDL_Event *e)
     case SDL_EVENT_MOUSE_BUTTON_UP:
         if (e->button.button == SDL_BUTTON_LEFT) {
             p->mouse_down = false;
+            if (p->pick_requested) {
+                start_color_pick(p);
+            }
             if (p->slider_drag) {
                 flow_slider_commit(p, find_widget(p, p->slider_drag));
                 p->slider_drag = 0;
@@ -4531,7 +4554,11 @@ static void event(Panel *p, const SDL_Event *e)
         insert_text(p, e->text.text);
         break;
     case SDL_EVENT_WINDOW_FOCUS_LOST:
+        p->pick_requested = false;
         p->mouse_down = false;
+        if (p->slider_drag) {
+            flow_slider_commit(p, find_widget(p, p->slider_drag));
+        }
         p->slider_drag = 0;
         p->dropdown = 0;
         p->color_popup = 0;
@@ -4855,6 +4882,9 @@ int panel_run(const Config *config, char *error, size_t n)
     p->density = 1;
     p->input_scale = 1;
     SDL_SetHint(SDL_HINT_APP_ID, "org.cast.Panel");
+    /* Returning from screen picking should activate the clicked control on the
+     * first click, rather than consuming it just to restore SDL mouse focus. */
+    SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
     SDL_SetHint(SDL_HINT_X11_WINDOW_TYPE, "_NET_WM_WINDOW_TYPE_UTILITY");
     if (!SDL_Init(SDL_INIT_VIDEO) || !TTF_Init()) {
         snprintf(error, n, "cannot initialize control panel: %s", SDL_GetError());
