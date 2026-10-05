@@ -164,6 +164,8 @@ The following table is the supported schema. `examples/cast.conf` includes every
 | text | opacity | `1` | 0–1 |
 | capture | monitor | `` | Literal string |
 | capture | kind | `monitor` | monitor,region,window |
+| capture | exclusion | `mask` | mask,transparent; Xorg panel/preview overlap only |
+| capture | mask_color | `#20252b` | #RRGGBB; independent of pause background |
 | capture | x | `0` | 0–16384 (integer) |
 | capture | y | `0` | 0–16384 (integer) |
 | capture | width | `0` | 0–16384 (integer) |

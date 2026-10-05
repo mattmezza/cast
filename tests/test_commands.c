@@ -485,6 +485,15 @@ int main(void)
     snprintf(recording_path, sizeof recording_path, "%s/control.mkv", directory);
     write_config(configuration, "[camera]\nwidth_percent=25\n");
     App *app = new_app(configuration, socket_pathname);
+    Config exclusion_before = app->config;
+    State exclusion_state = app->state;
+    COMMAND(app, false, "capture", "exclusion", "transparent");
+    COMMAND(app, false, "capture", "mask-color", "#123456");
+    COMMAND(app, false, "settings", "capture.exclusion", "transparent");
+    COMMAND(app, false, "settings", "batch", "capture.mask_color", "#abcdef",
+            "output.pause_background", "#123456");
+    assert(!memcmp(&exclusion_before, &app->config, sizeof exclusion_before));
+    assert(!memcmp(&exclusion_state, &app->state, sizeof exclusion_state));
     Config initial_config = app->config;
     State initial_state = app->state;
     COMMAND(app, false, "live", "resume");

@@ -63,7 +63,10 @@ and read-only sealed shared memory carry acknowledged state and small actual-out
 frames in the internal transport; the control-only panel does not request or render
 frames. Preview uses the independent platform presentation window. The daemon never
 waits for panel rendering. Xorg validates the peer's panel
-window identity and neutral-masks its frame in monitor/region captures.
+window identity and excludes its frame in monitor/region captures using an opaque
+configurable mask or a transparent screen-layer hole. The latter reveals the Cast
+background, not the underlying desktop. The compositor ignores excluded RGB even
+when constructing blurred backdrops. Countdown footprints always remain opaque.
 
 Setup and completion instructions are local commands, independent of configuration
 and daemon availability. Completion scripts and the Arch installer are embedded so

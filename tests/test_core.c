@@ -26,6 +26,18 @@ static void load_test(const char *text, bool pass, Config *c)
     }
     unlink(path);
 }
+static void test_capture_exclusion_config(void)
+{
+    Config c;
+    config_defaults(&c);
+    assert(!strcmp(c.capture_exclusion, "mask") && c.capture_mask_color == 0x20252b);
+    load_test("[capture]\nexclusion=transparent\nmask_color=#123abc\n"
+              "[output]\npause_background=#987654\n", true, &c);
+    assert(!strcmp(c.capture_exclusion, "transparent") && c.capture_mask_color == 0x123abc);
+    assert(c.pause_color == 0x987654);
+    load_test("[capture]\nexclusion=none\n", false, &c);
+    load_test("[capture]\nmask_color=#xyz123\n", false, &c);
+}
 static void test_presentation_config(void)
 {
     Config c;
@@ -201,6 +213,7 @@ int main(void)
     load_test("[text]\nfont=\n", false, &stage);
     load_test("[text]\nsize=7\n", false, &stage);
     load_test("[text]\nmargin_x=-1\n", false, &stage);
+    test_capture_exclusion_config();
     test_presentation_config();
     Config c;
     config_defaults(&c);

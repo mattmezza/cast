@@ -55,6 +55,14 @@ capture fit contain|cover selects letterboxing or cropping. Source changes reset
 zoom and annotation history, and do not resume any output. Unsupported backend
 selection commands fail explicitly.
 .PP
+On Xorg, capture exclusion mask|transparent controls panel and preview overlap in
+monitor/region captures. capture mask\-color '#112233' sets the opaque mask color.
+Transparent exclusion reveals the configured Cast screen background, not the
+underlying desktop. Outgoing frames remain opaque. Countdown guides always use
+opaque masking. Persistent defaults are capture.exclusion and capture.mask_color;
+ordinary settings commands can edit both at runtime. Wayland does not support
+this policy. Changing exclusion does not resume any output.
+.PP
 zoom toggle alternates 1 and the last/configured non\-1 factor; zoom in|out
 adds/subtracts zoom.step within limits; zoom set FACTOR sets a finite factor;
 zoom reset returns to 1. zoom follow on|off selects smoothed cursor tracking or

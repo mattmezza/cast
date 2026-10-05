@@ -242,7 +242,8 @@ static int status(App *a, bool json, char *out, size_t n)
             "{\"version\":\"%s\",\"backend\":%s,\"capabilities\":{\"capture\":%s,\"cursor_"
             "metadata\":%s,\"embedded_cursor\":%s,\"input\":%s,\"region_selection\":%s,"
             "\"window_selection\":%s,\"preview\":%s},\"source\":{\"monitor\":%s,\"kind\":\"%"
-            "s\",\"region\":[%d,%d,%d,%d]},\"virtual\":{\"enabled\":%s,\"state\":\"%s\","
+            "s\",\"region\":[%d,%d,%d,%d],\"exclusion\":\"%s\",\"mask_color\":\"#%06x\"},"
+            "\"virtual\":{\"enabled\":%s,\"state\":\"%s\","
             "\"message\":%"
             "s,\"paused\":%s,\"frozen\":%s,\"blurred\":%s},"
             "\"record\":{\"state\":\"%s\",\"path\":%s,\"duration\":%.3f,\"countdown\":%s,"
@@ -259,6 +260,7 @@ static int status(App *a, bool json, char *out, size_t n)
             cap.input ? "true" : "false", cap.region_selection ? "true" : "false",
             cap.window_selection ? "true" : "false", cap.preview ? "true" : "false", source,
             c->capture_kind, c->region_x, c->region_y, c->region_w, c->region_h,
+            c->capture_exclusion, c->capture_mask_color,
             c->virtual_enabled ? "true" : "false",
             !c->virtual_enabled  ? "stopped"
             : s->virtual_paused  ? "paused"
@@ -506,6 +508,11 @@ static int apply_candidate(App *a, Config *c, char *e, size_t n)
                          "stream connection/encoder settings are locked; cast stream stop first");
     }
     Capabilities cap = platform_capabilities(a->platform);
+    if (!cap.panel_exclusion &&
+        (strcmp(c->capture_exclusion, a->config.capture_exclusion) ||
+         c->capture_mask_color != a->config.capture_mask_color)) {
+        return app_error(e, n, "capture exclusion settings require the Xorg backend");
+    }
     if ((c->keys || c->clicks) && !cap.input) {
         return app_error(e, n, "backend does not support global keys/click observation");
     }
@@ -542,8 +549,19 @@ static int apply_candidate(App *a, Config *c, char *e, size_t n)
         }
         return -1;
     }
+    bool exclusion_only =
+        (strcmp(a->config.capture_exclusion, c->capture_exclusion) ||
+         a->config.capture_mask_color != c->capture_mask_color) &&
+        !strcmp(a->config.capture_kind, c->capture_kind) &&
+        !strcmp(a->config.monitor, c->monitor) && a->config.region_x == c->region_x &&
+        a->config.region_y == c->region_y && a->config.region_w == c->region_w &&
+        a->config.region_h == c->region_h;
     a->config = *c;
     app_sync_source(a);
+    if (exclusion_only) {
+        /* Retire source pixels without changing the user's current zoom. */
+        a->config.zoom_factor = c->zoom_factor;
+    }
     compositor_clear(a->compositor);
     frame_free(&a->virtual_raw);
     frame_free(&a->record_raw);
@@ -1451,7 +1469,22 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
         }
         change = true;
     } else if (IS(0, "screen") || IS(0, "capture") || IS(0, "preview")) {
-        if (IS(0, "preview") && ac == 3 && IS(1, "target")) {
+        if (IS(0, "capture") && ac >= 2 &&
+            (IS(1, "exclusion") || IS(1, "mask-color"))) {
+            ARITY(3);
+            if (!cap.panel_exclusion) {
+                return app_error(out, n, "capture exclusion settings require the Xorg backend");
+            }
+            const char *key = IS(1, "exclusion") ? "capture.exclusion" : "capture.mask_color";
+            if (config_set_value(&c, key, av[2], out, n)) {
+                return -1;
+            }
+            if (apply_candidate(a, &c, out, n)) {
+                return -1;
+            }
+            snprintf(out, n, "%s: %s", key, av[2]);
+            return 0;
+        } else if (IS(0, "preview") && ac == 3 && IS(1, "target")) {
             ENUM(c.preview_target, av[2], "virtual,record,stream");
             change = true;
         } else {

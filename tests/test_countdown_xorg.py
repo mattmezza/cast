@@ -38,9 +38,11 @@ def main():
         socket = temporary / 'control.sock'
         configuration = temporary / 'cast.conf'
         configuration.write_text('[output]\npause_color=#203040\n'
+                                 '[capture]\nmask_color=#203040\nexclusion=transparent\n'
+                                 '[screen]\nbackground=solid\nbackground_color=#13579b\n'
                                  '[record]\ncountdown=2\nvideo_codec=ffv1\n'
                                  f'directory={temporary}\n')
-        base = [str(ROOT / 'cast'), '--config', str(configuration), '--socket', str(socket)]
+        base = [os.environ.get('CAST_XORG_TEST_BINARY', str(ROOT / 'cast')), '--config', str(configuration), '--socket', str(socket)]
         environment = dict(os.environ, XDG_RUNTIME_DIR=directory)
         panel = None
         with (temporary / 'daemon.log').open('w+') as log:
@@ -151,8 +153,45 @@ def main():
                         pixel = first[(y * 320 + x) * 3:(y * 320 + x + 1) * 3]
                         assert all(value <= 3 for value in pixel) or all(
                             abs(value - neutral) <= 3
-                            for value, neutral in zip(pixel, (32, 48, 64))), \
+                            for value, neutral in zip(pixel, (19, 87, 155))), \
                             'countdown guide leaked into the first recording frame'
+                # Decode real recording frames with a mapped native preview. Exclusion
+                # pixels survive media conversion without carrying UI chrome or recursion.
+                command('settings', 'record.countdown', '0')
+                command('layout', 'screen')
+                command('zoom', 'reset')
+                command('capture', 'mask-color', '#4b697d')
+                for policy, expected in [('mask', (75, 105, 125)),
+                                         ('transparent', (19, 87, 155))]:
+                    command('capture', 'exclusion', policy)
+                    video = temporary / f'exclusion-{policy}.mkv'
+                    command('record', 'start', str(video))
+                    command('record', 'resume')
+                    command('preview', 'on')
+                    wait_until(lambda: bool(guides()), 'native preview did not map')
+                    window = guides()[0]
+                    subprocess.run(['xdotool', 'windowsize', window, '640', '400',
+                                    'windowmove', window, '80', '100'], check=True)
+                    time.sleep(.5)
+                    command('record', 'stop')
+                    wait_until(lambda: not state()['record']['finalizing'],
+                               'exclusion recording did not finalize')
+                    decoded = subprocess.check_output(
+                        ['ffmpeg', '-v', 'error', '-i', str(video), '-f', 'rawvideo',
+                         '-pix_fmt', 'rgb24', 'pipe:1'])
+                    frame_bytes = 320 * 180 * 3
+                    assert len(decoded) >= 3 * frame_bytes and len(decoded) % frame_bytes == 0
+                    # Admission hides an existing preview; check settled frames after reopening it.
+                    for start in range(len(decoded) - 3 * frame_bytes, len(decoded), frame_bytes):
+                        offset = start + (90 * 320 + 160) * 3
+                        actual = decoded[offset:offset + 3]
+                        assert all(abs(a - b) <= 3 for a, b in zip(actual, expected)), \
+                            (policy, tuple(actual), expected, state(),
+                             subprocess.check_output(['xdotool', 'getwindowgeometry', '--shell', window], text=True))
+                    acknowledged = state()['source']
+                    assert acknowledged['exclusion'] == policy
+                    assert acknowledged['mask_color'] == '#4b697d'
+                    command('preview', 'off')
                 command('quit')
                 assert daemon.wait(timeout=5) == 0
                 print('Xorg temporary film preview, start/cut-resume countdown, cancellation and recording exclusion passed')

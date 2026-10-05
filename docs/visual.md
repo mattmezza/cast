@@ -186,17 +186,21 @@ current frame, so the first display has its local header and image together.
 
 Cast prefers preview placement on a monitor outside the captured root rectangle.
 If it overlaps monitor/region capture, cast replaces its full window rectangle,
-including the header and border, with the configured `pause_color` in the owned
-capture frame before composition. Its current screen position and dimensions are
-queried for each capture, so moving or resizing it moves that neutral rectangle.
-The mask follows the source's zoom and fit into each output. This deliberately
+including the header and border, using `[capture] exclusion` before composition.
+The default `mask` fills it with `capture.mask_color` (default `#20252b`), independent
+of the pause-screen color. `transparent` removes the screen layer there and reveals
+the configured Cast screen background; outgoing frames remain opaque. Hidden RGB
+is cleared and ignored by screen scaling and backdrop filtering. Its current screen
+position and dimensions are queried for each capture, so moving or resizing it moves
+the excluded rectangle.
+The excluded rectangle follows the source's zoom and fit into each output. This
 covers the desktop content beneath the preview; cast does not recover hidden pixels.
 Place the preview outside the captured source when all source content must remain
 visible. The preview's status labels and image are never copied into this rectangle,
 preventing recursive preview capture without per-frame unmapping or desktop flashes.
 An XComposite application-window capture reads that application's named pixmap,
 which excludes cast's separate preview window and requires no neutral rectangle.
-The optional separate-process control panel uses the same source neutral masking on
+The optional separate-process control panel uses the same source exclusion policy on
 Xorg. Only the authenticated panel connection can register an X window; cast checks
 its `_NET_WM_PID` against the socket peer PID, its `CastPanel` class and its normal
 window type. X11 window properties are integrity checks within the user's desktop,
@@ -209,9 +213,8 @@ content is being replaced. Separate application-window capture retains the appli
 pixmap pixels even beneath the panel. The panel cannot be selected as a source while
 registered, including selecting its enclosing WM frame. Closing its authenticated connection removes registration.
 
-Panel and preview masking occurs before composition, so virtual, recording, zoom, fit,
-freeze and the panel's program preview receive already-masked source pixels. This
-covers underlying desktop content; it does not recover that content or remove arbitrary
+Panel and preview exclusion occurs before composition, so virtual, recording, streaming,
+zoom, fit and freeze receive already-excluded source pixels. This covers underlying desktop content; it does not recover that content or remove arbitrary
 windows. The panel remains mapped throughout ordinary acquisition. Wayland portals
 provide no equivalent exclusion guarantee; see [wayland.md](wayland.md).
 
@@ -264,14 +267,14 @@ latency or frame-drop measurements are asserted without a usable capture session
 ## Recording countdown
 
 A configured `[record] countdown` or startup `--countdown SECONDS` delays only
-recording. The panel shows a numbered film-style guide over its local preview on
-all screens. Without an attached panel, Xorg opens a centered utility guide
-(`cast-countdown` / `CastCountdown`); Escape or closing it cancels the pending start.
+recording. Xorg shows a numbered film-style guide in the temporary native preview;
+Escape or closing it cancels the pending start.
 `cast record stop` and `cast pause` also cancel. The guide is hidden before the
 encoder starts and is excluded from Xorg monitor/region capture together with its
-window-manager frame. It is not an output overlay. Neutral masking covers screen
-content underneath the guide while it is visible; application-window capture
-excludes it naturally. Wayland uses the panel guide; it has no standalone guide.
+window-manager frame. It is not an output overlay. The configured opaque
+`capture.mask_color` covers content underneath the guide even when panel/preview
+exclusion is set to transparent; application-window capture excludes it naturally.
+Wayland uses the panel guide; it has no standalone guide.
 
 The native recording countdown uses bundled Inter numerals and a film-leader guide
 with Cancel (also Escape). Initial recording and cut-resume hide and acknowledge the

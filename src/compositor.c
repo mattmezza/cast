@@ -623,6 +623,20 @@ static Transform fit(double sx, double sy, double sw, double sh, double dx, doub
     }
     return t;
 }
+/* Screen exclusions are alpha holes over the already-painted opaque backdrop. */
+static void screen_pixel(uint8_t *dest, const uint8_t *source)
+{
+    unsigned alpha = source[3];
+    if (alpha == 255) {
+        memcpy(dest, source, 4);
+    } else if (alpha) {
+        for (int channel = 0; channel < 3; channel++) {
+            dest[channel] =
+                (uint8_t)((source[channel] * alpha + dest[channel] * (255 - alpha) + 127) / 255);
+        }
+        dest[3] = 255;
+    }
+}
 static void screen_blit(Frame *dst, const Frame *src, Transform t)
 {
     int x0 = (int)ceil(t.dx), y0 = (int)ceil(t.dy), x1 = (int)ceil(t.dx + t.dw),
@@ -636,9 +650,9 @@ static void screen_blit(Frame *dst, const Frame *src, Transform t)
         t.dh == dst->height) {
         for (int y = 0; y < dst->height; y++) {
             uint8_t *d = dst->data + (size_t)y * dst->stride;
-            memcpy(d, src->data + (size_t)y * src->stride, (size_t)dst->width * 4);
+            const uint8_t *row = src->data + (size_t)y * src->stride;
             for (int x = 0; x < dst->width; x++) {
-                d[x * 4 + 3] = 255;
+                screen_pixel(d + x * 4, row + x * 4);
             }
         }
         return;
@@ -654,8 +668,7 @@ static void screen_blit(Frame *dst, const Frame *src, Transform t)
         const uint8_t *row = src->data + (size_t)sy * src->stride;
         for (int x = x0; x < x1; x++, d += 4) {
             const uint8_t *s = row + columns[x] * 4;
-            memcpy(d, s, 4);
-            d[3] = 255;
+            screen_pixel(d, s);
         }
     }
 }
@@ -772,8 +785,7 @@ static Clip screen_layer_draw(Frame *out, const Frame *source, const Config *cfg
         uint8_t *dest = out->data + (size_t)y * out->stride + inner_left * 4;
         const uint8_t *source_row = source->data + (size_t)row * source->stride;
         for (int x = inner_left; x < inner_right; x++, dest += 4) {
-            memcpy(dest, source_row + columns[x] * 4, 4);
-            dest[3] = 255;
+            screen_pixel(dest, source_row + columns[x] * 4);
         }
     }
     return clip;
@@ -911,6 +923,9 @@ static int background_draw(Backdrop *cache, const Config *cfg, const Frame *sour
         }
         if (dynamic) {
             Transform cover = fit(0, 0, source->width, source->height, 0, 0, width, height, true);
+            /* Transparent source pixels use the configured background color before blur.
+             * Initialize on every frame so neither excluded RGB nor stale cache pixels leak. */
+            fill(&cache->pixels, color);
             screen_blit(&cache->pixels, source, cover);
             for (int j = 0; j < height; j++) {
                 uint8_t *row = cache->pixels.data + (size_t)j * cache->pixels.stride;

@@ -163,10 +163,10 @@ paths passed after the worker and preview changes.
 
 The preview stays mapped as an unmanaged floating window (WM_CLASS cast-preview /
 CastPreview), supports header dragging, and clears to neutral across privacy epochs.
-Its geometric overlap is neutral-masked in root/region frames; named application
-pixmaps exclude it without that mask. Tests verify no map/unmap notifications across
-capture or output state changes, exact opaque mask pixels including borders, moved/
-resized/clipped geometry and privacy-safe worker publication. No tiling rule is needed.
+Its geometric overlap uses configurable masking or transparent Cast-background holes
+in root/region frames; named application pixmaps exclude it without that mask. Tests verify no map/unmap notifications across
+capture or output state changes, exact opaque masks and cleared alpha holes including
+borders, moved/resized/clipped geometry and privacy-safe worker publication. No tiling rule is needed.
 
 The final kernel-loopback test also verified the asymmetric synthetic screen's
 left-to-right orientation before and after camera mirror on/off. The screen remains
@@ -493,3 +493,10 @@ on the Compose list. A batched visual inspection and one confirmation cover
 Operate, the section list, long dirty pages, setup, failure and disconnection.
 No preview, daemon, IPC, command identifier, configuration schema, palette or
 bundled-font slot is changed by this refinement.
+
+Capture-exclusion tests use independent pause and mask colors, runtime policy/color
+changes, panel/preview decoration footprints and clipped regions. Poisoned RGB behind
+transparent pixels must leave the same composition across solid, gradient and blurred
+backdrops, zoomed scaling and rounded/bordered screen paths. Countdown footprints
+remain opaque even with transparent exclusion, and its decoded first recording frame
+contains no guide pixels. These fixtures run only on private Xvfb displays.

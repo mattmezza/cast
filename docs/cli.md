@@ -51,6 +51,18 @@ movement and failures are handled without silently returning to the desktop.
 zoom and annotation history, and do not resume any output. Unsupported backend
 selection commands fail explicitly.
 
+On Xorg, `capture exclusion mask|transparent` controls panel and native-preview
+overlap in monitor/region captures. `mask` fills the covered rectangle with
+`capture.mask_color`; change it with `cast capture mask-color '#112233'`.
+`transparent` reveals the configured Cast screen background, not the desktop
+content underneath. Encoded and virtual-camera frames remain opaque. Window
+capture already excludes unrelated windows. Countdown guides always use the
+opaque mask, including their retiring footprint. Set `[capture] exclusion` and
+`mask_color` for persistent defaults, or use `settings capture.exclusion` and
+`settings capture.mask_color` at runtime. Changing these settings keeps outputs
+paused/resumed as they were and retires old source frames. Wayland does not
+support this exclusion policy.
+
 `zoom toggle` alternates 1 and the last/configured non-1 factor; `zoom in|out`
 adds/subtracts zoom.step within limits; `zoom set FACTOR` sets a finite factor;
 `zoom reset` returns to 1. `zoom follow on|off` selects smoothed cursor tracking or

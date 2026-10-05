@@ -47,7 +47,7 @@ require metadata. No second cursor is drawn over an embedded cursor.
 | Embedded cursor | Desktop capture excludes cursor; drawn separately | Implemented when portal advertises it |
 | Passive keys and click observation | Implemented XI2; desktop acceptance pending | Unsupported |
 | Preview | Implemented; recursion constraints apply | Unsupported |
-| Separate panel exclusion | Authenticated panel and WM frame neutral-masked in monitor/region; absent from application pixmaps | Unsupported; portal captures may include the panel |
+| Separate panel exclusion | Panel/WM frame and preview use configurable opaque mask or transparent Cast-background holes in monitor/region; absent from application pixmaps | Unsupported; portal captures may include the panel |
 | V4L2 camera/output, layouts, recording/audio | Shared implementation | Shared implementation |
 | RTMP/RTMPS streaming | Shared H.264/AAC implementation; local ingest tested | Same shared implementation; no X11/SDL dependency |
 
