@@ -1,4 +1,5 @@
 #include "panel.h"
+#include "panel_color_pick.h"
 #include "panel_transport.h"
 #define CLAY_IMPLEMENTATION
 #pragma GCC diagnostic push
@@ -279,7 +280,7 @@ static const FieldSpec fields[] = {
 #define TEXT_CACHE_MAX 384
 typedef struct {
     char value[PATH_MAX];
-    bool dirty;
+    bool dirty, auto_apply;
     uint64_t pending, revision, submitted_revision;
 } FieldEdit;
 typedef enum {
@@ -315,6 +316,7 @@ typedef enum {
     A_ALL,
     A_COLOR,
     A_SWATCH,
+    A_PICK_COLOR,
     A_MENU
 } Action;
 typedef enum {
@@ -341,6 +343,7 @@ typedef enum {
     ICON_INFO,
     ICON_CHEVRON,
     ICON_CHEVRON_UP,
+    ICON_EYEDROPPER,
     ICON_DOT
 } Icon;
 #define ICON_DATA_BASE 4096
@@ -403,7 +406,9 @@ typedef struct {
     int menu_start, menu_end, dropdown_start, dropdown_end, color_start, color_end;
     int lane_jump;
     uint32_t color_popup, slider_drag;
-    int color_field;
+    int color_field, pick_field;
+    PanelColorPick *color_pick;
+    bool picking_color;
     uint64_t device_request;
     int device_count;
     char device_values[64][256], device_labels[64][256];
@@ -626,6 +631,9 @@ static void state_marker(Clay_Color ink)
 }
 static Icon button_icon(const Panel *p, uint32_t id, Action action)
 {
+    if (action == A_PICK_COLOR) {
+        return ICON_EYEDROPPER;
+    }
     if (action == A_ALL) {
         return p->all_settings[p->open_section] ? ICON_CHEVRON_UP : ICON_CHEVRON;
     }
@@ -720,7 +728,8 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
                        (id >= 137 && id <= 141) || id == 150 || id == 154 || id == 151;
     bool primary_action = id == 30 || id == 32 || id == 130 || id == 150;
     bool draft_action = id >= 700 && id <= 717;
-    bool small_action = (card_action && !primary_action) || draft_action || action == A_ALL;
+    bool small_action = (card_action && !primary_action) || draft_action || action == A_ALL ||
+                        action == A_PICK_COLOR;
     bool combo = action == A_DROPDOWN;
     float compact_width = id == 7 ? 76 : (fminf(p->width, 520) - 32 - 12 - 76) / 2;
     if (action != A_TAB && action != A_GROUP && action != A_PREVIEW && action != A_DROPDOWN &&
@@ -745,10 +754,11 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
                                          : id == 30 || id == 32 || id == 130 ? CLAY_SIZING_GROW()
                                          : card_action || combo              ? CLAY_SIZING_GROW()
                                                                              : CLAY_SIZING_FIT(),
-                                .height = CLAY_SIZING_FIXED(compact                           ? 36
-                                                            : draft_action || action == A_ALL ? 30
-                                                            : card_action || combo ? 36
-                                                                                   : 40)},
+                                .height = CLAY_SIZING_FIXED(
+                                    compact                                                     ? 36
+                                    : draft_action || action == A_ALL || action == A_PICK_COLOR ? 30
+                                    : card_action || combo ? 36
+                                                           : 40)},
                      .padding = {compact || small_action ? 7 : 10,
                                  compact || small_action ? 7
                                  : combo                 ? 26
@@ -1084,11 +1094,14 @@ static int find_field(const char *key)
 #define FLOW_OVERFLOW_DATA 7
 static void stage_field(Panel *, int, const char *);
 static void apply_setting(Panel *, int, const char *, bool);
+static void commit_field(Panel *, int);
+static void choose_field(Panel *, int, const char *);
 static void lane_menu_body(Panel *, int);
 static const char *flow_value(Panel *p, size_t index)
 {
     FieldEdit *edit = &p->edit[index];
-    if (!edit->dirty && p->active_text != 1000 + index * 3) {
+    if (!edit->dirty && p->active_text != 1000 + index * 3 && p->active_text != 1002 + index * 3 &&
+        !(p->active_text == 6500 && p->color_field == (int)index)) {
         field_value(&fields[index], &p->snapshot.config, edit->value, sizeof edit->value);
     }
     return edit->value;
@@ -1146,14 +1159,108 @@ static void flow_choice(Panel *p, uint32_t id, const char *text, size_t index, c
         label(text, 0, enabled ? selected ? accent : foreground : muted);
     }
 }
+static bool field_is_pixels(const FieldSpec *field)
+{
+    static const char *const keys[] = {
+        "capture.x",
+        "capture.y",
+        "capture.width",
+        "capture.height",
+        "zoom.deadzone",
+        "screen.margin",
+        "screen.radius",
+        "screen.border_width",
+        "screen.background_blur_radius",
+        "camera.x",
+        "camera.y",
+        "camera.crop_x",
+        "camera.crop_y",
+        "camera.margin",
+        "camera.radius",
+        "camera.border_width",
+        "camera.background_blur_radius",
+        "cursor.size",
+        "clicks.radius",
+        "keys.font_size",
+        "logo.margin_x",
+        "logo.margin_y",
+        "text.size",
+        "text.margin_x",
+        "text.margin_y",
+        "output.pause_title_size",
+        "output.pause_subtitle_size",
+        "output.pause_footer_size",
+        "output.pause_text_gap",
+        "output.blur_radius",
+        "output.blur_title_size",
+        "output.blur_subtitle_size",
+        "output.blur_footer_size",
+        "output.blur_text_gap",
+        "output.width",
+        "output.height",
+    };
+    for (size_t i = 0; i < sizeof keys / sizeof *keys; i++) {
+        if (!strcmp(field->key, keys[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+/* Dragging covers common presentation sizes. Exact inputs retain the field's
+ * full validation range, including values beyond the slider's useful span. */
+static void flow_slider_range(const Panel *p, size_t index, double *minimum, double *maximum)
+{
+    const FieldSpec *f = &fields[index];
+    const char *key = f->key;
+    *minimum = f->minimum;
+    *maximum = f->maximum;
+    if (!field_is_pixels(f)) {
+        return;
+    }
+    double width = p->snapshot.config.width > 0 ? p->snapshot.config.width : 1920;
+    double height = p->snapshot.config.height > 0 ? p->snapshot.config.height : 1080;
+    double span = *maximum;
+    if (!strcmp(key, "camera.x") || !strcmp(key, "camera.crop_x")) {
+        span = width;
+        *minimum = fmax(f->minimum, -span);
+    } else if (!strcmp(key, "camera.y") || !strcmp(key, "camera.crop_y")) {
+        span = height;
+        *minimum = fmax(f->minimum, -span);
+    } else if (!strcmp(key, "capture.x") || !strcmp(key, "capture.width")) {
+        span = fmax(width, 1920);
+    } else if (!strcmp(key, "capture.y") || !strcmp(key, "capture.height")) {
+        span = fmax(height, 1080);
+    } else if (!strcmp(key, "screen.margin") || !strcmp(key, "camera.margin") ||
+               !strcmp(key, "screen.radius") || !strcmp(key, "camera.radius")) {
+        span = fmin(512, fmin(width, height) / 2);
+    } else if (!strcmp(key, "screen.border_width") || !strcmp(key, "camera.border_width")) {
+        span = 32;
+    } else if (!strcmp(key, "zoom.deadzone") || !strcmp(key, "clicks.radius")) {
+        span = 256;
+    } else if (!strcmp(key, "logo.margin_x") || !strcmp(key, "text.margin_x")) {
+        span = width;
+    } else if (!strcmp(key, "logo.margin_y") || !strcmp(key, "text.margin_y")) {
+        span = height;
+    } else if (strcmp(key, "output.width") && strcmp(key, "output.height")) {
+        span = 128;
+    }
+    *maximum = fmax(*minimum + 1, fmin(f->maximum, span));
+}
 static bool flow_slider_key(const char *key)
 {
+    int index = find_field(key);
+    if (index >= 0 && field_is_pixels(&fields[index])) {
+        return true;
+    }
     return !strcmp(key, "camera.width_percent") || !strcmp(key, "screen.width_percent") ||
            !strcmp(key, "zoom.factor") || !strcmp(key, "audio.mic_gain") ||
            !strcmp(key, "audio.desktop_gain") || !strcmp(key, "record.countdown");
 }
 static const char *flow_slider_label(Panel *p, size_t index, double value)
 {
+    if (field_is_pixels(&fields[index])) {
+        return format(p, "%.0f px", value);
+    }
     const char *key = fields[index].key;
     if (strstr(key, "width_percent")) {
         return format(p, "%.0f%%", value);
@@ -1174,8 +1281,12 @@ static void flow_slider(Panel *p, const char *key)
     }
     const FieldSpec *f = &fields[index];
     uint32_t id = 1000 + (uint32_t)index * 3;
-    flow_value(p, (size_t)index);
+    const char *value = flow_value(p, (size_t)index);
     bool enabled = flow_enabled(p, (size_t)index);
+    bool pixels = field_is_pixels(f);
+    char validation[CAST_ERR];
+    bool invalid =
+        pixels && p->edit[index].dirty && validate_field(f, value, validation, sizeof validation);
     CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
                      .layoutDirection = CLAY_TOP_TO_BOTTOM,
                      .childGap = 6,
@@ -1200,12 +1311,39 @@ static void flow_slider(Panel *p, const char *key)
                                                                (index << 4))}})
             {
             }
-            CLAY({.layout = {.sizing = {.width = CLAY_SIZING_FIXED(72),
-                                        .height = CLAY_SIZING_FIXED(30)}},
-                  .custom = {.customData = (void *)(uintptr_t)(FLOW_DATA_BASE + FLOW_VALUE_DATA +
-                                                               (index << 4))}})
-            {
+            if (pixels) {
+                Widget *input = widget(p, id + 2, W_FIELD, A_FIELD, enabled);
+                if (input) {
+                    input->index = index;
+                    input->draft = p->draft_context;
+                }
+                CLAY({.id = element_id(id + 2),
+                      .layout = {.sizing = {.width = CLAY_SIZING_FIXED(84),
+                                            .height = CLAY_SIZING_FIXED(36)}},
+                      .backgroundColor = surface,
+                      .border = {.color = invalid              ? danger
+                                          : p->focus == id + 2 ? accent
+                                                               : line,
+                                 .width = outline_width},
+                      .custom = {.customData = (void *)(uintptr_t)(index + 1)}})
+                {
+                }
+                label("px", 0, enabled ? secondary : muted);
+            } else {
+                CLAY(
+                    {.layout = {.sizing = {.width = CLAY_SIZING_FIXED(72),
+                                           .height = CLAY_SIZING_FIXED(30)}},
+                     .custom = {.customData = (void *)(uintptr_t)(FLOW_DATA_BASE + FLOW_VALUE_DATA +
+                                                                  (index << 4))}})
+                {
+                }
             }
+        }
+        if (invalid) {
+            text_wrapped(format(p, "%s", validation), danger);
+        }
+        if (pixels && !p->draft_context && p->edit[index].dirty && !(f->flags & READ_ONLY)) {
+            button(p, id + 1, "Apply", enabled, false, A_APPLY, index);
         }
         flow_note(p, (size_t)index);
     }
@@ -1285,6 +1423,35 @@ static void flow_color(Panel *p, const char *key)
         }
         flow_note(p, (size_t)index);
     }
+}
+/* Coupled connection, capture and encoding fields retain their atomic Apply.
+ * Independent composition controls commit at the end of the interaction. */
+static bool field_applies_immediately(const FieldSpec *field)
+{
+    static const char *const grouped[] = {
+        "capture.x",
+        "capture.y",
+        "capture.width",
+        "capture.height",
+        "zoom.min",
+        "zoom.max",
+        "composition.layout_order",
+        "composition.preset_order",
+        "camera.corner_order",
+        "record.container",
+        "record.video_codec",
+        "record.audio_codec",
+        "record.preset",
+    };
+    if (field->flags & (STREAM_LOCK | READ_ONLY)) {
+        return false;
+    }
+    for (size_t i = 0; i < sizeof grouped / sizeof *grouped; i++) {
+        if (!strcmp(field->key, grouped[i])) {
+            return false;
+        }
+    }
+    return true;
 }
 static void flow_field_control(Panel *p, size_t index)
 {
@@ -1867,7 +2034,7 @@ static void section_actions(Panel *p, int section)
     (void)p;
     if (section == 2) {
         text_wrapped("Screen margins, radius, borders and camera-slot backdrop use the same "
-                     "session-only Apply flow.",
+                     "session-only controls; selections apply immediately.",
                      muted);
     } else if (section == 3) {
         text_wrapped("Overlays sit above sources; pause replaces them, freeze/blur include them. "
@@ -2407,7 +2574,8 @@ static void footer(Panel *p)
     if (!error[0] && s->stream.state == STREAM_FAILED && s->stream.error[0]) {
         error = format(p, "Streaming failed — %s", s->stream.error);
     }
-    const char *message = error[0] ? error
+    const char *message = error[0]           ? error
+                          : p->picking_color ? "Pick a screen color · Escape cancels"
                           : s->command_queued > s->command_completed
                               ? "Waiting for daemon acknowledgement…"
                           : p->reply[0] ? p->reply
@@ -2615,7 +2783,7 @@ static void flow_color_layout(Panel *p)
         p->color_popup = 0;
         return;
     }
-    float width = 304, height = 272;
+    float width = 304, height = 348;
     float x = fmaxf(16, fminf(anchor.boundingBox.x, p->width - width - 16));
     float y = anchor.boundingBox.y + anchor.boundingBox.height + 4;
     if (y + height > p->height - 58) {
@@ -2690,6 +2858,9 @@ static void flow_color_layout(Panel *p)
         if (invalid) {
             text_wrapped("Enter a valid #RRGGBB color.", danger);
         }
+        button(p, 6501, "Pick from screen", flow_enabled(p, (size_t)index), false, A_PICK_COLOR,
+               index);
+        text_wrapped("Click a screen color; Escape or right-click cancels.", secondary);
     }
 }
 
@@ -2952,6 +3123,17 @@ static void draw_icon(Panel *p, SDL_FRect box, uintptr_t data)
         L(4, 10, 8, 6);
         L(8, 6, 12, 10);
         break;
+    case ICON_EYEDROPPER:
+        L(2, 11, 8, 5);
+        L(5, 14, 11, 8);
+        L(2, 11, 2, 14);
+        L(2, 14, 5, 14);
+        L(7, 4, 12, 9);
+        L(9, 3, 13, 7);
+        L(9, 3, 11, 1);
+        L(11, 1, 15, 5);
+        L(15, 5, 13, 7);
+        break;
     case ICON_DOT:
         color(p, (Clay_Color){(float)((data >> 40) & 255), (float)((data >> 32) & 255),
                               (float)((data >> 24) & 255), 255});
@@ -3124,7 +3306,8 @@ static void draw_field(Panel *p, size_t index, Clay_BoundingBox b, SDL_Rect oute
     int before = 0, height = 0, total = 0;
     TTF_GetStringSize(p->font[1], value, strlen(value), &total, &height);
     float x = b.x + 10, y = b.y + (b.height - (float)TTF_GetFontHeight(p->font[1])) / 2;
-    if (p->active_text == id || (p->active_text == 6500 && p->color_field == (int)index)) {
+    if (p->active_text == id || (field_is_pixels(&fields[index]) && p->active_text == id + 2) ||
+        (p->active_text == 6500 && p->color_field == (int)index)) {
         size_t caret = p->caret < strlen(value) ? p->caret : strlen(value);
         if (caret) {
             TTF_GetStringSize(p->font[1], value, caret, &before, &height);
@@ -3150,7 +3333,8 @@ static void draw_field(Panel *p, size_t index, Clay_BoundingBox b, SDL_Rect oute
             ? "No title"
             : "Default";
     const char *text = value[0] ? value : placeholder;
-    draw_text(p, text, strlen(text), 1, value[0] ? foreground : muted, x, y);
+    draw_text(p, text, strlen(text), 1, value[0] && flow_enabled(p, index) ? foreground : muted, x,
+              y);
     SDL_SetRenderClipRect(p->renderer, &outer_clip);
 }
 static bool list_command_visible(const Panel *p, Clay_BoundingBox box)
@@ -3238,16 +3422,18 @@ static void flow_draw_control(Panel *p, SDL_FRect box, uintptr_t data)
                     i == bright ? accent : muted);
         }
     } else if (kind == FLOW_SLIDER_DATA && index < FIELD_COUNT) {
-        const FieldSpec *f = &fields[index];
+        double minimum, maximum;
+        flow_slider_range(p, index, &minimum, &maximum);
         double current = strtod(p->edit[index].value, NULL);
-        float ratio = (float)fmax(0, fmin(1, (current - f->minimum) / (f->maximum - f->minimum)));
+        float ratio = (float)fmax(0, fmin(1, (current - minimum) / (maximum - minimum)));
         float x = box.x + 7, y = box.y + box.h / 2;
         float track = box.w - 14;
         rounded(p, (SDL_FRect){x, y - 2, track, 4}, 2, control);
-        rounded(p, (SDL_FRect){x, y - 2, ratio * track, 4}, 2, writable(p, f) ? accent : muted);
+        rounded(p, (SDL_FRect){x, y - 2, ratio * track, 4}, 2,
+                flow_enabled(p, index) ? accent : muted);
         float thumb = x + ratio * track;
         rounded(p, (SDL_FRect){thumb - 7, y - 7, 14, 14}, 7, surface);
-        color(p, writable(p, f) ? accent : muted);
+        color(p, flow_enabled(p, index) ? accent : muted);
         circle(p, thumb, y, 6.5f, 1.5f);
     } else if (kind == FLOW_COLOR_DATA && index < FIELD_COUNT) {
         const char *value_text = p->edit[index].value;
@@ -3447,11 +3633,19 @@ static bool widget_in_scroll(const Panel *p, const Widget *w)
            !(w->id >= 10 && w->id <= 12) && w->id != 99 && !(w->id >= 160 && w->id <= 166) &&
            !(w->id >= 700 && w->id <= 717) && w->type != W_OPTION;
 }
-static void stop_editing(Panel *p)
+static void cancel_editing(Panel *p)
 {
     p->active_text = 0;
     p->select_all = false;
     SDL_StopTextInput(p->window);
+}
+static void stop_editing(Panel *p)
+{
+    Widget *active = find_widget(p, p->active_text);
+    if (active && active->type == W_FIELD && field_applies_immediately(&fields[active->index])) {
+        commit_field(p, active->index);
+    }
+    cancel_editing(p);
 }
 static void set_focus(Panel *p, Widget *w)
 {
@@ -3587,9 +3781,9 @@ static void apply_setting(Panel *p, int index, const char *value, bool draft)
     }
     p->reply[0] = 0;
     p->pending_button = p->focus;
-    p->pending_button_request = p->snapshot.command_queued + 1;
+    p->pending_button_request = ++p->snapshot.command_queued;
     if (draft) {
-        p->edit[index].pending = p->snapshot.command_queued + 1;
+        p->edit[index].pending = p->snapshot.command_queued;
         p->edit[index].submitted_revision = p->edit[index].revision;
     }
 }
@@ -3620,6 +3814,48 @@ static void stage_field(Panel *p, int index, const char *value)
             stage_field(p, quality_index, selected);
         }
     }
+}
+static void commit_field(Panel *p, int index)
+{
+    if (index < 0 || (size_t)index >= FIELD_COUNT || !field_applies_immediately(&fields[index])) {
+        return;
+    }
+    FieldEdit *edit = &p->edit[index];
+    if (!edit->dirty || !writable(p, &fields[index])) {
+        edit->auto_apply = false;
+        return;
+    }
+    if (validate_field(&fields[index], edit->value, p->error, sizeof p->error)) {
+        edit->auto_apply = false;
+        return;
+    }
+    if (edit->pending) {
+        edit->auto_apply = edit->revision != edit->submitted_revision;
+        return;
+    }
+    if (p->snapshot.command_queued > p->snapshot.command_completed) {
+        edit->auto_apply = true;
+        return;
+    }
+    edit->auto_apply = false;
+    /* The settings path preserves camera geometry when changing its width. */
+    if (!strcmp(fields[index].key, "camera.width_percent")) {
+        if (!panel_client_setting(p->client, fields[index].key, edit->value, p->error,
+                                  sizeof p->error)) {
+            edit->pending = ++p->snapshot.command_queued;
+            edit->submitted_revision = edit->revision;
+            p->pending_button = p->focus;
+            p->pending_button_request = edit->pending;
+            p->reply[0] = 0;
+        }
+    } else {
+        apply_setting(p, index, edit->value, true);
+    }
+}
+static void choose_field(Panel *p, int index, const char *value)
+{
+    stage_field(p, index, value);
+    commit_field(p, index);
 }
 static void apply_section(Panel *p, int section)
 {
@@ -3658,10 +3894,10 @@ static void apply_section(Panel *p, int section)
     }
     p->reply[0] = 0;
     p->pending_button = p->focus;
-    p->pending_button_request = p->snapshot.command_queued + 1;
+    p->pending_button_request = ++p->snapshot.command_queued;
     for (size_t i = 0; i < submitted; i++) {
         FieldEdit *edit = &p->edit[indexes[i]];
-        edit->pending = p->snapshot.command_queued + 1;
+        edit->pending = p->snapshot.command_queued;
         edit->submitted_revision = edit->revision;
     }
 }
@@ -3673,11 +3909,13 @@ static void flow_slider_update(Panel *p, Widget *w, float x)
     const FieldSpec *f = &fields[w->index];
     float track = fmaxf(1, w->box.width - 14);
     double ratio = fmax(0, fmin(1, (x - w->box.x - 7) / track));
-    double value = f->minimum + ratio * (f->maximum - f->minimum);
+    double minimum, maximum;
+    flow_slider_range(p, (size_t)w->index, &minimum, &maximum);
+    double value = minimum + ratio * (maximum - minimum);
     double step = f->type == FIELD_INT || strstr(f->key, "width_percent") ? 1
                   : strstr(f->key, "gain")                                ? .01
                                                                           : .05;
-    value = fmax(f->minimum, fmin(f->maximum, round(value / step) * step));
+    value = fmax(minimum, fmin(maximum, round(value / step) * step));
     char formatted[64];
     snprintf(formatted, sizeof formatted, "%.6g", value);
     if (strcmp(formatted, p->edit[w->index].value)) {
@@ -3689,19 +3927,7 @@ static void flow_slider_commit(Panel *p, Widget *w)
     if (!w || w->type != W_SLIDER || !p->edit[w->index].dirty) {
         return;
     }
-    /* Geometry has no preview-only IPC. Draft-only dragging stays local;
-     * this single existing settings message is emitted on release. */
-    if (!strcmp(fields[w->index].key, "camera.width_percent") ||
-        !strcmp(fields[w->index].key, "screen.width_percent") || !w->draft) {
-        FieldEdit *edit = &p->edit[w->index];
-        if (!validate_field(&fields[w->index], edit->value, p->error, sizeof p->error) &&
-            !panel_client_setting(p->client, fields[w->index].key, edit->value, p->error,
-                                  sizeof p->error)) {
-            edit->pending = p->snapshot.command_queued + 1;
-            edit->submitted_revision = edit->revision;
-            p->reply[0] = 0;
-        }
-    }
+    commit_field(p, w->index);
 }
 static bool flow_popup_contains(Panel *p, float x, float y, const char *name)
 {
@@ -3720,7 +3946,7 @@ static void flow_discover_devices(Panel *p, int index)
                                                             : "audio",
                           "list"};
     if (!panel_client_command(p->client, 2, args, p->error, sizeof p->error)) {
-        p->device_request = p->snapshot.command_queued + 1;
+        p->device_request = ++p->snapshot.command_queued;
     }
 }
 static void flow_read_devices(Panel *p, const PanelSnapshot *fresh)
@@ -3800,7 +4026,20 @@ static void activate(Panel *p, Widget *w)
         p->color_field = w->index;
         break;
     case A_SWATCH:
-        stage_field(p, w->index, w->value);
+        stop_editing(p);
+        choose_field(p, w->index, w->value);
+        break;
+    case A_PICK_COLOR:
+        stop_editing(p);
+        p->pick_field = w->index;
+        if (panel_color_pick_begin(p->color_pick, SDL_GetCurrentVideoDriver(), NULL)) {
+            snprintf(p->error, sizeof p->error, "%s", panel_color_pick_error(p->color_pick));
+        } else {
+            p->color_popup = 0;
+            p->picking_color = true;
+            p->error[0] = 0;
+            p->reply[0] = 0;
+        }
         break;
     case A_CLOSE:
         p->quit = true;
@@ -3809,16 +4048,12 @@ static void activate(Panel *p, Widget *w)
         p->error[0] = 0;
         if (!panel_client_command(p->client, w->argc, w->arg, p->error, sizeof p->error)) {
             p->pending_button = w->id;
-            p->pending_button_request = p->snapshot.command_queued + 1;
+            p->pending_button_request = ++p->snapshot.command_queued;
             p->reply[0] = 0;
         }
         break;
     case A_SETTING:
-        if (w->draft) {
-            stage_field(p, w->index, w->value);
-        } else {
-            apply_setting(p, w->index, w->value, false);
-        }
+        choose_field(p, w->index, w->value);
         break;
     case A_APPLY:
         apply_setting(p, w->index, p->edit[w->index].value, true);
@@ -3871,15 +4106,10 @@ static void activate(Panel *p, Widget *w)
             const char *args[] = {"preset", w->value};
             if (!panel_client_command(p->client, 2, args, p->error, sizeof p->error)) {
                 p->pending_button = p->dropdown;
-                p->pending_button_request = p->snapshot.command_queued + 1;
+                p->pending_button_request = ++p->snapshot.command_queued;
             }
         } else {
-            Widget *selector = find_widget(p, p->dropdown);
-            if (selector && selector->draft) {
-                stage_field(p, p->dropdown_field, w->value);
-            } else {
-                apply_setting(p, p->dropdown_field, w->value, false);
-            }
+            choose_field(p, p->dropdown_field, w->value);
         }
         p->focus = p->dropdown;
         p->dropdown = 0;
@@ -3921,12 +4151,13 @@ static void activate(Panel *p, Widget *w)
         stop_editing(p);
         break;
     case A_REVERT:
-        stop_editing(p);
+        cancel_editing(p);
         for (size_t i = 0; i < FIELD_COUNT; i++) {
             if (field_in_section(&fields[i], w->index)) {
                 field_value(&fields[i], &p->snapshot.config, p->edit[i].value,
                             sizeof p->edit[i].value);
                 p->edit[i].dirty = false;
+                p->edit[i].auto_apply = false;
                 p->edit[i].revision++;
             }
         }
@@ -3939,7 +4170,7 @@ static void activate(Panel *p, Widget *w)
         p->error[0] = 0;
         if (!panel_client_command(p->client, 3, args, p->error, sizeof p->error)) {
             p->pending_button = w->id;
-            p->pending_button_request = p->snapshot.command_queued + 1;
+            p->pending_button_request = ++p->snapshot.command_queued;
         }
     } break;
     default:
@@ -4046,7 +4277,7 @@ static void key_event(Panel *p, const SDL_KeyboardEvent *event)
         if (p->color_popup) {
             p->focus = p->color_popup;
             p->color_popup = 0;
-            stop_editing(p);
+            cancel_editing(p);
             return;
         }
         if (p->dropdown) {
@@ -4057,10 +4288,10 @@ static void key_event(Panel *p, const SDL_KeyboardEvent *event)
         if (p->open_menu) {
             p->focus = 8600 + (uint32_t)p->open_menu - 1;
             p->open_menu = 0;
-            stop_editing(p);
+            cancel_editing(p);
             return;
         }
-        stop_editing(p);
+        cancel_editing(p);
         if (p->view == VIEW_SETUP || p->view == VIEW_SECTION) {
             navigate_view(p, p->view == VIEW_SETUP ? p->return_view : VIEW_COMPOSE,
                           p->view == VIEW_SETUP ? p->return_section : -1);
@@ -4163,13 +4394,13 @@ static void key_event(Panel *p, const SDL_KeyboardEvent *event)
             edit->revision++;
         } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
             if (edit->dirty) {
-                if (p->view == VIEW_SECTION || p->view == VIEW_SETUP) {
-                    apply_section(p, p->view == VIEW_SETUP ? 7 : p->open_section);
+                if (field_applies_immediately(&fields[index])) {
+                    commit_field(p, index);
                 } else {
-                    apply_setting(p, index, edit->value, true);
+                    apply_section(p, field_section(&fields[index]));
                 }
             }
-            stop_editing(p);
+            cancel_editing(p);
         }
         return;
     }
@@ -4259,6 +4490,10 @@ static float wheel_delta(const SDL_MouseWheelEvent *wheel)
 }
 static void event(Panel *p, const SDL_Event *e)
 {
+    if (p->picking_color && e->type != SDL_EVENT_QUIT &&
+        e->type != SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
+        return;
+    }
     switch (e->type) {
     case SDL_EVENT_QUIT:
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
@@ -4312,8 +4547,35 @@ static void acknowledge_edit(FieldEdit *edit, bool failed)
     /* An acknowledgement belongs to the submitted draft, not later typing. */
     if (!failed && edit->revision == edit->submitted_revision) {
         edit->dirty = false;
+        edit->auto_apply = false;
     }
     edit->pending = 0;
+}
+
+static void poll_color_pick(Panel *p)
+{
+    if (!p->picking_color) {
+        return;
+    }
+    if (!p->snapshot.connected || !writable(p, &fields[p->pick_field])) {
+        panel_color_pick_cancel(p->color_pick);
+        p->picking_color = false;
+        return;
+    }
+    uint8_t rgb[3];
+    PanelColorPickStatus status = panel_color_pick_poll(p->color_pick, rgb);
+    if (status == PANEL_COLOR_PICK_PENDING) {
+        return;
+    }
+    p->picking_color = false;
+    p->mouse_down = false;
+    if (status == PANEL_COLOR_PICK_SUCCESS) {
+        char value[8];
+        snprintf(value, sizeof value, "#%02x%02x%02x", rgb[0], rgb[1], rgb[2]);
+        choose_field(p, p->pick_field, value);
+    } else if (status == PANEL_COLOR_PICK_ERROR) {
+        snprintf(p->error, sizeof p->error, "%s", panel_color_pick_error(p->color_pick));
+    }
 }
 
 static void poll_client(Panel *p)
@@ -4393,7 +4655,19 @@ static void poll_client(Panel *p)
 
         if (!fresh.connected) {
             p->dropdown = 0;
-            stop_editing(p);
+            p->color_popup = 0;
+            cancel_editing(p);
+            for (size_t i = 0; i < FIELD_COUNT; i++) {
+                p->edit[i].auto_apply = false;
+                p->edit[i].pending = 0;
+            }
+        } else if (fresh.command_completed >= fresh.command_queued) {
+            for (size_t i = 0; i < FIELD_COUNT; i++) {
+                if (p->edit[i].auto_apply && !p->edit[i].pending) {
+                    commit_field(p, (int)i);
+                    break;
+                }
+            }
         }
     }
 }
@@ -4430,6 +4704,7 @@ static void cleanup(Panel *p, void *clay_memory)
     if (p->navigation) {
         munmap(p->navigation, sizeof *p->navigation);
     }
+    panel_color_pick_free(p->color_pick);
     panel_client_close(p->client);
     for (int i = 0; i < TEXT_CACHE_MAX; i++) {
         SDL_DestroyTexture(p->cache[i].texture);
@@ -4549,6 +4824,7 @@ static void write_ui_state(Panel *p, const char *path)
     json_string(file, panel_stream_status(&p->snapshot));
     fputs(",\"record_status\":", file);
     json_string(file, record_status(&p->snapshot));
+    fprintf(file, ",\"color_picking\":%s", p->picking_color ? "true" : "false");
     fputs(",\"error\":", file);
     json_string(file, p->error[0] ? p->error : p->snapshot.error);
     fputs(",\"exclusion\":", file);
@@ -4563,6 +4839,12 @@ int panel_run(const Config *config, char *error, size_t n)
     Panel *p = calloc(1, sizeof *p);
     if (!p) {
         snprintf(error, n, "cannot allocate control panel");
+        return -1;
+    }
+    p->color_pick = panel_color_pick_new();
+    if (!p->color_pick) {
+        snprintf(error, n, "cannot allocate screen color picker");
+        cleanup(p, NULL);
         return -1;
     }
     p->snapshot.config = *config;
@@ -4707,6 +4989,7 @@ int panel_run(const Config *config, char *error, size_t n)
         Clay_UpdateScrollContainers(false, (Clay_Vector2){0, p->scroll}, 1.f / 60);
         p->scroll = 0;
         poll_client(p);
+        poll_color_pick(p);
         commands = layout(p);
         render(p, commands);
         save_navigation(p);

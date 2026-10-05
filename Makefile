@@ -48,7 +48,7 @@ endif
 endif
 PANEL_CFLAGS = $(shell $(PKG_CONFIG) --cflags sdl3 sdl3-ttf)
 PANEL_LIBS = $(shell $(PKG_CONFIG) --libs sdl3 sdl3-ttf)
-SOURCES += src/panel.c
+SOURCES += src/panel.c src/panel_color_pick.c
 CPPFLAGS += -DWITH_PANEL -Ivendor/clay $(PANEL_CFLAGS)
 LDLIBS += $(PANEL_LIBS)
 BUILD = build/x$(X11)-w$(WAYLAND)-p1
@@ -103,7 +103,12 @@ ifeq ($(PANEL),1)
 $(BUILD)/test_panel_routes: tests/test_panel_routes.c $(SOURCES) src/panel_transport.h $(BUILD)/src/panel_font.o $(COMMAND_ASSETS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_panel_routes.c $(filter-out src/main.c src/panel.c,$(SOURCES)) $(BUILD)/src/panel_font.o $(COMMAND_ASSETS) $(PKG_LIBS) $(LDLIBS)
-check-unit: check-panel-routes
+$(BUILD)/test_panel_color_pick: tests/test_panel_color_pick.c src/panel_color_pick.c src/panel_color_pick.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_panel_color_pick.c src/panel_color_pick.c $(PKG_LIBS) $(LDLIBS)
+check-panel-color-pick: $(BUILD)/test_panel_color_pick
+	$(BUILD)/test_panel_color_pick
+check-unit: check-panel-routes check-panel-color-pick
 check-panel-routes: $(BUILD)/test_panel_routes
 	$(BUILD)/test_panel_routes
 endif
