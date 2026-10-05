@@ -19,7 +19,7 @@ _cast_complete()
     local cur=${words[current]} raw=${COMP_WORDS[COMP_CWORD]} offer='' mode=''
     local trim=$((${#cur} - ${#raw})) command_index=1 command='' argument=0
     local commands='layout split camera screen logo text capture zoom cursor clicks keys annotations pause resume virtual stream record audio preset preview status doctor config settings panel reset quit completions setup update help'
-    local flags='--config --socket --backend --output-device --camera-device --width --height --fps --no-virtual --no-camera --mic-source --desktop-source --record-dir --container --video-codec --audio-codec --countdown --help --version'
+    local flags='--headless --config --socket --backend --output-device --camera-device --width --height --fps --no-virtual --no-camera --mic-source --desktop-source --record-dir --container --video-codec --audio-codec --countdown --help --version'
     while ((command_index < current)); do
         token=${words[command_index]}
         case $token in
@@ -33,7 +33,7 @@ _cast_complete()
                     break
                 fi
                 ((command_index += 2)) ;;
-            --no-virtual|--no-camera) ((command_index++)) ;;
+            --headless|--no-virtual|--no-camera) ((command_index++)) ;;
             *) command=${words[command_index]}; break ;;
         esac
     done

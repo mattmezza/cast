@@ -1,11 +1,12 @@
-.TH CAST 1 "October 2026" "cast 0.8.0" "User Commands"
+.TH CAST 1 "October 2026" "cast 0.9.0" "User Commands"
 .SH NAME
 cast \- presentation camera, recorder and RTMP streamer
 .SH SYNOPSIS
 .B cast
 [options] [command]
 .SH DESCRIPTION
-cast runs one foreground instance. cast COMMAND sends a bounded request to its
+cast opens the app and starts or attaches to one daemon. cast \-\-headless runs
+the daemon in the terminal for scripts and services. cast COMMAND sends a bounded request to its
 user\-only Unix socket and prints acknowledged success or an actionable error. Exit 0
 means success; errors exit nonzero. \-\-help, \-\-version and COMMAND \-\-help run locally.
 config check/defaults and doctor also run locally without a daemon. Runtime arguments
@@ -13,7 +14,7 @@ are never passed to a shell. Concurrent commands are ordered by accepted connect
 messages are atomic and a silent peer has a bounded timeout. A client timeout means
 completion is unknown: inspect status before repeating a non\-idempotent command.
 .PP
-Startup flags appear before the command: \-\-config PATH, \-\-socket PATH,
+Startup flags appear before the command: \-\-headless, \-\-config PATH, \-\-socket PATH,
 \-\-backend xorg|wayland, \-\-output\-device PATH, \-\-camera\-device PATH,
 \-\-width N, \-\-height N, \-\-fps N, \-\-no\-virtual, \-\-no\-camera,
 \-\-mic\-source NAME, \-\-desktop\-source NAME, \-\-record\-dir PATH,
@@ -154,8 +155,14 @@ Arch x86_64 release package and verifies its SHA\-256 checksum. With no version,
 it selects the latest release. Installation uses pacman and sudo when needed;
 download\-only saves the checked package without installing. Stop cast before an
 update and restart afterwards. These commands do not require a running daemon.
-panel opens the optional native control panel (build with PANEL=1). Closing it
-leaves the daemon running. settings SECTION.KEY VALUE [SECTION.KEY VALUE ...]
+panel opens the optional native control panel (build with PANEL=1) without
+automatically starting a daemon. Start launches one when stopped. Bare cast starts
+a daemon after its app window is ready. Close leaves outputs running. Stop daemon
+saves recording and keeps the panel open; Start retains acknowledged session settings
+and original startup flags, with virtual output paused and record/stream stopped.
+Quit confirms before clean shutdown. cast\-app and the installed Cast application
+entry open the same app; headless builds omit these launchers.
+settings SECTION.KEY VALUE [SECTION.KEY VALUE ...]
 applies an atomic session batch using the INI schema and reload restrictions.
 Invalid batches leave current settings intact.
 .PP
@@ -166,7 +173,7 @@ and finalizes an existing recording. No command persists session changes to conf
 For a status bar, poll cast status \-\-json and parse JSON, for example
 cast status \-\-json | jq \-r '.virtual.state + " / " + .record.state'.
 The last_error field retains the last reported failure; errors are also printed
-by the foreground daemon. A successful unrelated command does not erase evidence.
+by the terminal daemon or appended to SOCKET.log beside an app\-launched daemon socket. A successful unrelated command does not erase evidence.
 .PP
 When an edited configuration is invalid, explicit \-\-socket PATH runtime commands
 use that routing directly, so status and config reload remain reachable. Local

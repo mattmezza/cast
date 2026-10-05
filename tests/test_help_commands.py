@@ -30,6 +30,8 @@ with tempfile.TemporaryDirectory(prefix="cast-help-test-") as directory:
         return run([str(binary), *args], env=env, cwd=root, success=success)
 
     initial_files = set(root.iterdir())
+    help_text = cast("--help").stdout
+    assert "cast --headless" in help_text and "Closing the panel leaves it running" in help_text
     setup = cast("setup").stdout
     assert "v4l2loopback-dkms" in setup and "linux-headers" in setup
     assert "exclusive_caps=1" in setup and "cast config defaults" in setup
@@ -75,7 +77,9 @@ with tempfile.TemporaryDirectory(prefix="cast-help-test-") as directory:
                        cwd=root).stdout.splitlines()) - {""}
 
     run(["bash", "-n", str(PROJECT / "completions" / "cast.bash")])
-    assert {"setup", "update", "completions", "panel", "logo", "text", "--config"} <= bash_complete("cast", "")
+    assert {"setup", "update", "completions", "panel", "logo", "text", "--config", "--headless"} <= bash_complete("cast", "")
+    assert {"status", "config", "panel"} <= bash_complete("cast", "--headless", "")
+    assert bash_complete("cast", "--headless", "preview", "target", "") == {"virtual", "record", "stream"}
     assert bash_complete("cast", "--backend", "") == {"xorg", "wayland", "synthetic"}
     assert {"pause", "resume", "freeze", "unfreeze", "message", "title", "subtitle", "footer"} <= \
         bash_complete("cast", "--backend", "xorg", "virtual", "")
@@ -137,7 +141,8 @@ with tempfile.TemporaryDirectory(prefix="cast-help-test-") as directory:
             return set(run(["zsh", "-f", "-c", program], env=env,
                            cwd=root).stdout.splitlines()) - {""}
 
-        assert {"setup", "update", "completions"} <= zsh_complete("cast", "")
+        assert {"setup", "update", "completions", "--headless"} <= zsh_complete("cast", "")
+        assert {"status", "config", "panel"} <= zsh_complete("cast", "--headless", "")
         assert zsh_complete("cast", "--socket", "/tmp/local.sock", "capture", "fit", "") == \
             {"contain", "cover"}
         assert zsh_complete("cast", "camera", "aspect", "") == {"native", "16:9", "4:3", "1:1", "next", "prev"}
@@ -161,6 +166,8 @@ with tempfile.TemporaryDirectory(prefix="cast-help-test-") as directory:
                              cwd=root).stdout.splitlines()
             return {line.split("\t")[0] for line in candidates}
 
+        assert "--headless" in fish_complete("cast --head")
+        assert {"status", "config", "panel"} <= fish_complete("cast --headless ")
         assert {"on", "off", "toggle"} <= fish_complete("cast camera mirror ")
         assert {"stage", "prev"} <= fish_complete("cast layout ")
         assert {"prev", "size", "border"} <= fish_complete("cast screen ")

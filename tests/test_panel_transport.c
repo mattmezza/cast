@@ -16,6 +16,14 @@ int panel_run(const Config *config, char *error, size_t n)
     assert(!"transport tests must not open a panel");
     return -1;
 }
+int panel_run_application(const Config *config, int argc, const char *const *argv, bool auto_start,
+                          char *error, size_t n)
+{
+    (void)argc;
+    (void)argv;
+    (void)auto_start;
+    return panel_run(config, error, n);
+}
 #endif
 
 #define PREVIEW_BYTES ((size_t)PANEL_PREVIEW_WIDTH * PANEL_PREVIEW_HEIGHT * 4)
@@ -183,8 +191,145 @@ static void queue(PanelClient *client, int argc, const char **args)
     }
 }
 
-int main(void)
+static PanelLifecycleSnapshot wait_lifecycle(PanelLifecycle *lifecycle, bool owned)
 {
+    PanelLifecycleSnapshot snapshot = {0};
+    uint64_t deadline = cast_now_ns() + UINT64_C(5000000000);
+    do {
+        panel_lifecycle_poll(lifecycle, false, &snapshot);
+        if (snapshot.owned == owned) {
+            return snapshot;
+        }
+        delay();
+    } while (cast_now_ns() < deadline);
+    assert(!"daemon lifecycle did not reap its child");
+    return snapshot;
+}
+static void test_application_lifecycle(Config config, const char *directory)
+{
+    char error[CAST_ERR], configuration[PATH_MAX];
+    snprintf(configuration, sizeof configuration, "%s/app.conf", directory);
+    FILE *file = fopen(configuration, "w");
+    assert(file);
+    fputs("[output]\nbackend=synthetic\nwidth=640\nheight=480\nfps=10\n"
+          "[camera]\nenabled=false\n[composition]\nlayout=screen\n",
+          file);
+    assert(!fclose(file));
+    const char *arguments[] = {"--config",   configuration, "--socket",        config.socket_path,
+                               "--width",    "800",         "--height",        "600",
+                               "--fps",      "20",          "--output-device", "none",
+                               "--no-camera"};
+    strcpy(config.layout, "stage");
+    strcpy(config.text_content, "Retained café session");
+    PanelLifecycle *lifecycle = panel_lifecycle_create(
+        &config, sizeof arguments / sizeof arguments[0], arguments, error, sizeof error);
+    assert(lifecycle && !panel_lifecycle_start(lifecycle, &config, error, sizeof error));
+    PanelLifecycleSnapshot process;
+    panel_lifecycle_poll(lifecycle, false, &process);
+    assert(process.owned && process.child_pid > 0 && process.state == PANEL_DAEMON_STARTING);
+    pid_t child = process.child_pid;
+    PanelClient *client = panel_client_open(&config, 0, error, sizeof error);
+    assert(client);
+    PanelSnapshot snapshot = wait_client(client, true, 0);
+    panel_lifecycle_poll(lifecycle, true, &process);
+    assert(process.state == PANEL_DAEMON_RUNNING && process.owned);
+    assert(snapshot.state.virtual_paused && !snapshot.state.recording &&
+           !snapshot.state.stream_active && !strcmp(snapshot.config.layout, "stage") &&
+           !strcmp(snapshot.config.text_content, "Retained café session"));
+
+    /* An app attaches to the existing producer without replacing or owning it. */
+    PanelLifecycle *attached = panel_lifecycle_create(&config, 0, NULL, error, sizeof error);
+    assert(attached && !panel_lifecycle_start(attached, &config, error, sizeof error));
+    panel_lifecycle_poll(attached, true, &process);
+    assert(process.state == PANEL_DAEMON_RUNNING && !process.owned);
+    assert(!panel_lifecycle_stop_owned(attached, error, sizeof error));
+    panel_lifecycle_destroy(attached);
+    CMD(&config, true, "status");
+
+    CMD(&config, true, "settings", "text.content", "Restart with latest session");
+    uint64_t deadline = cast_now_ns() + UINT64_C(3000000000);
+    do {
+        panel_client_snapshot(client, &snapshot);
+        if (!strcmp(snapshot.config.text_content, "Restart with latest session")) {
+            break;
+        }
+        assert(cast_now_ns() < deadline);
+        delay();
+    } while (true);
+    Config latest = snapshot.config;
+    CMD(&config, true, "virtual", "resume");
+    CMD(&config, true, "quit");
+    process = wait_lifecycle(lifecycle, false);
+    assert(process.state == PANEL_DAEMON_STOPPED && !process.exit_status &&
+           access(config.socket_path, F_OK));
+    panel_client_close(client);
+    assert(!panel_lifecycle_start(lifecycle, &latest, error, sizeof error));
+    client = panel_client_open(&config, 0, error, sizeof error);
+    assert(client);
+    snapshot = wait_client(client, true, 0);
+    assert(snapshot.state.virtual_paused && !snapshot.state.recording &&
+           !snapshot.state.stream_active &&
+           !strcmp(snapshot.config.text_content, "Restart with latest session"));
+
+    /* Restart retains startup override metadata, while reload still reads the file. */
+    CMD(&config, true, "config", "reload");
+    deadline = cast_now_ns() + UINT64_C(3000000000);
+    do {
+        panel_client_snapshot(client, &snapshot);
+        if (!strcmp(snapshot.config.layout, "screen")) {
+            break;
+        }
+        assert(cast_now_ns() < deadline);
+        delay();
+    } while (true);
+    assert(snapshot.config.width == 800 && snapshot.config.height == 600 &&
+           snapshot.config.fps == 20 && !strcmp(snapshot.config.output_device, "none") &&
+           !snapshot.config.camera_enabled);
+    panel_lifecycle_poll(lifecycle, true, &process);
+    child = process.child_pid;
+    panel_lifecycle_destroy(lifecycle);
+    panel_client_close(client);
+    CMD(&config, true, "status"); /* Close leaves the owned producer running. */
+    CMD(&config, true, "quit");
+    int status;
+    assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && !WEXITSTATUS(status));
+
+    /* Explicit Stop also works while the producer has not yet attached to IPC. */
+    lifecycle = panel_lifecycle_create(&config, 0, NULL, error, sizeof error);
+    assert(lifecycle && !panel_lifecycle_start(lifecycle, &config, error, sizeof error));
+    assert(!panel_lifecycle_stop_owned(lifecycle, error, sizeof error));
+    process = wait_lifecycle(lifecycle, false);
+    assert(process.state == PANEL_DAEMON_STOPPED && !process.owned);
+    panel_lifecycle_destroy(lifecycle);
+
+    /* Startup resource failures stay observable and never respawn automatically. */
+    Config unavailable = config;
+    unavailable.logo_enabled = true;
+    snprintf(unavailable.logo_path, sizeof unavailable.logo_path, "%s/missing-logo.png", directory);
+    lifecycle = panel_lifecycle_create(&unavailable, 0, NULL, error, sizeof error);
+    assert(lifecycle && !panel_lifecycle_start(lifecycle, &unavailable, error, sizeof error));
+    process = wait_lifecycle(lifecycle, false);
+    assert(process.state == PANEL_DAEMON_FAILED && process.exit_status &&
+           strstr(process.error, "logo"));
+    panel_lifecycle_destroy(lifecycle);
+
+    int invalid = memfd_create("cast-app-unsealed", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+    assert(invalid >= 0);
+    assert(panel_lifecycle_config_fd(invalid, &config, error, sizeof error));
+    assert(strstr(error, "sealed daemon configuration") && fcntl(invalid, F_GETFD) < 0 &&
+           errno == EBADF);
+    assert(!panel_lifecycle_stop_owned(NULL, error, sizeof error));
+    char log[PATH_MAX + sizeof ".log"];
+    snprintf(log, sizeof log, "%s.log", config.socket_path);
+    unlink(log);
+    unlink(configuration);
+}
+
+int main(int argc, char **argv)
+{
+    if (argc > 1) {
+        return cast_panel_test_cli_entry(argc, argv);
+    }
     av_log_set_level(AV_LOG_ERROR);
     char directory[] = "/tmp/cast-panel-test-XXXXXX";
     assert(mkdtemp(directory));
@@ -429,10 +574,12 @@ int main(void)
     panel_transport_destroy(transport, NULL);
     char lock[PATH_MAX + sizeof ".lock"];
     snprintf(lock, sizeof lock, "%s.lock", config.socket_path);
+    test_application_lifecycle(config, directory);
     unlink(lock);
     unlink(recording);
     rmdir(directory);
     puts("panel transport: ownership, sealed bounded frames, privacy barriers, freeze/group state, "
-         "session settings, stale generations, reconnect and cancellable shutdown passed");
+         "session settings, stale generations, reconnect, sealed app launch/restart, retained "
+         "outputs on Close and cancellable shutdown passed");
     return 0;
 }

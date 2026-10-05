@@ -6,7 +6,7 @@ _cast() {
     local -a top_commands=(layout split camera screen logo text capture zoom cursor clicks keys
         annotations pause resume virtual stream record audio preset preview status doctor config
         settings panel reset quit completions setup update help)
-    local -a flags=(--config --socket --backend --output-device --camera-device --width
+    local -a flags=(--headless --config --socket --backend --output-device --camera-device --width
         --height --fps --no-virtual --no-camera --mic-source --desktop-source --record-dir
         --container --video-codec --audio-codec --countdown --help --version)
     while ((command_index < CURRENT)); do
@@ -22,7 +22,7 @@ _cast() {
                     return
                 fi
                 ((command_index += 2)) ;;
-            --no-virtual|--no-camera) ((command_index++)) ;;
+            --headless|--no-virtual|--no-camera) ((command_index++)) ;;
             *) command_name=$token; break ;;
         esac
     done

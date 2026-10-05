@@ -14,7 +14,7 @@ function __cast_arguments
                 case --config --socket --backend --output-device --camera-device --width --height --fps --mic-source --desktop-source --record-dir --container --video-codec --audio-codec --countdown
                     set skip_value 1
                     continue
-                case --no-virtual --no-camera
+                case --headless --no-virtual --no-camera
                     continue
             end
         end
@@ -59,6 +59,7 @@ end
 complete -c cast -f
 complete -c cast -n __cast_at -a 'layout split camera screen logo text capture zoom cursor clicks keys annotations pause resume virtual stream record audio preset preview status doctor config settings panel reset quit completions setup update help'
 complete -c cast -l help -d 'Show command reference'
+complete -c cast -n __cast_at -l headless -d 'Run the daemon without opening the app'
 complete -c cast -n __cast_at -l version -d 'Print cast version'
 complete -c cast -n __cast_at -l config -r -F -d 'Config file'
 complete -c cast -n __cast_at -l socket -r -F -d 'Daemon socket path'

@@ -2,7 +2,7 @@
 
 ![cast — Your screen. Your camera. Your call.](assets/readme-cover.png)
 
-Your screen, your camera, your call. `cast` is a foreground Linux utility written in C
+Your screen, your camera, your call. `cast` is a Linux utility written in C
 that composes screen capture and a webcam into an existing virtual camera, with optional
 presentation annotations, PipeWire audio, independent local recording and RTMP/RTMPS
 streaming. Runtime configuration and one CLI replace a scene editor or heavyweight GUI.
@@ -73,7 +73,11 @@ output and recording through an existing loopback device; select the intended de
 An optional native control panel uses Clay, SDL3 and SDL3_ttf. On Arch, install
 them with `sudo pacman -S --needed sdl3 sdl3_ttf`, build with
 `make X11=1 WAYLAND=1 PANEL=1`, and launch
-`./cast panel` alongside the daemon. Closing the panel leaves capture running.
+`./cast` to open the app and start or attach to its daemon. `./cast panel` opens
+an attach-only panel, with Start available when stopped. Closing the panel leaves
+capture running; Quit confirms before stopping every output and saving a recording.
+After `make install PANEL=1`, launch **Cast** from the application menu, or run
+`cast-app` from dmenu. Use `./cast --headless` for a terminal or service daemon.
 See [panel controls and capture visibility](docs/control-panel.md).
 
 ![Cast control panel with output task cards and Operate and Compose tabs](assets/control-panel.png)
@@ -106,8 +110,8 @@ cp -n examples/cast.conf ~/.config/cast/cast.conf
 The panel and preview are Xorg utility windows (`CastPanel` and `CastPreview`);
 window managers that float utilities, including mwm, center them automatically.
 The panel follows the supplied **Operate / Compose** design. Its slim header
-contains global privacy, Preview and Close. Operate has four always-expanded task
-cards with direct output actions and an Audio card. Compose has six dedicated pages,
+contains Start/Stop daemon, Preview, Quit and Close. Global privacy is in Operate.
+Operate has four always-expanded task cards with direct output actions and an Audio card. Compose has six dedicated pages,
 with Essentials first and **All settings** revealing the rest. Sticky Back and a
 pinned Apply/Revert bar stay accessible while scrolling. Alt+1…6 jump directly
 to sections, 1/2 switch tabs, and Escape goes back. Selections apply immediately;
@@ -136,9 +140,12 @@ terminal, explicitly enable virtual video and then select `cast` in the conferen
 ./cast quit
 ```
 
-The daemon runs in the terminal and opens no window by default. Use `./cast preview on`
-for a local view of the actual output. The physical camera LED can turn on during
-startup privacy pause: cast opens the input device, while transmitted video stays
+Bare `./cast` opens the control panel. `./cast --headless` runs the daemon in the
+terminal without opening the panel. Use `./cast preview on` for a separate view of
+the actual output. Close leaves outputs running; Stop daemon saves an active file
+and keeps the panel available for restart. Restart keeps acknowledged session
+settings, starts virtual output paused, and leaves recording and streaming stopped.
+The physical camera LED can turn on during startup privacy pause: cast opens the input device, while transmitted video stays
 neutral until explicit virtual camera resume.
 
 The `stage` layout places an inset screen opposite the camera anchor. Resize either

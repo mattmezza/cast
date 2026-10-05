@@ -92,8 +92,8 @@ configuration checks remain strict.
 
 ## No local camera view after starting cast
 
-`cast` runs as a foreground terminal daemon. Preview defaults off and virtual camera output
-starts privacy-paused. In another terminal, run `cast preview on` for the local
+`cast` opens the app; `cast --headless` runs as a foreground terminal daemon.
+Preview defaults off and virtual camera output starts privacy-paused. In another terminal, run `cast preview on` for the local
 window, then `cast virtual resume` to enable the composition. Select the loopback
 camera in the conferencing app after producer startup. The physical webcam LED
 can be on while virtual is paused because cast has opened its input; privacy pause

@@ -27,7 +27,7 @@ def main():
         common = [binary, '--config', str(config), '--socket', str(socket)]
         with (root / 'daemon.log').open('w') as log:
             daemon = subprocess.Popen(
-                common + ['--backend', 'synthetic', '--camera-device', 'synthetic',
+                common + ['--headless', '--backend', 'synthetic', '--camera-device', 'synthetic',
                           '--output-device', options.device, '--width', '1920',
                           '--height', '1080', '--fps', '30'],
                 stdout=subprocess.DEVNULL, stderr=log)

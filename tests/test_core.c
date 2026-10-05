@@ -31,8 +31,7 @@ static void test_capture_mask_config(void)
     Config c;
     config_defaults(&c);
     assert(c.capture_mask_color == 0x20252b);
-    load_test("[capture]\nmask_color=#123abc\n[output]\npause_background=#987654\n",
-              true, &c);
+    load_test("[capture]\nmask_color=#123abc\n[output]\npause_background=#987654\n", true, &c);
     assert(c.capture_mask_color == 0x123abc && c.pause_color == 0x987654);
     load_test("[capture]\nexclusion=transparent\n", false, &c);
     load_test("[capture]\nexclusion=mask\n", false, &c);
@@ -40,8 +39,7 @@ static void test_capture_mask_config(void)
     char error[CAST_ERR];
     Config before = c;
     assert(config_set_value(&c, "capture.exclusion", "transparent", error, sizeof error));
-    assert(strstr(error, "removed") && strstr(error, "delete") &&
-           !memcmp(&before, &c, sizeof c));
+    assert(strstr(error, "removed") && strstr(error, "delete") && !memcmp(&before, &c, sizeof c));
 }
 static void test_presentation_config(void)
 {
@@ -224,6 +222,20 @@ int main(void)
     config_defaults(&c);
     char e[CAST_ERR];
     assert(!config_validate(&c, e, sizeof e));
+    /* A same-build app handoff must reject unsafe in-memory configuration fields. */
+    Config invalid = c;
+    memset(invalid.text_content, 'x', sizeof invalid.text_content);
+    assert(config_validate(&invalid, e, sizeof e));
+    invalid = c;
+    invalid.preset_count = CAST_MAX_PRESETS + 1;
+    assert(config_validate(&invalid, e, sizeof e));
+    invalid = c;
+    memset(invalid.presets[0].name, 'x', sizeof invalid.presets[0].name);
+    assert(config_validate(&invalid, e, sizeof e));
+    invalid = c;
+    unsigned char bad_boolean = 2;
+    memcpy(&invalid.camera_enabled, &bad_boolean, sizeof bad_boolean);
+    assert(config_validate(&invalid, e, sizeof e));
     Config settings = c;
     assert(!config_set_value(&settings, "camera.radius", "32", e, sizeof e));
     assert(settings.radius == 32 && c.radius == 24);

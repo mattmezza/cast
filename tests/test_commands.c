@@ -6,6 +6,8 @@ int cast_cli_entry(int, char **);
 #include <assert.h>
 #include <libavutil/log.h>
 #ifdef WITH_PANEL
+static bool expect_application, application_auto_start;
+static Config application_config;
 int panel_run(const Config *config, char *error, size_t n)
 {
     (void)config;
@@ -13,6 +15,17 @@ int panel_run(const Config *config, char *error, size_t n)
     (void)n;
     assert(!"command tests must not open a panel");
     return -1;
+}
+int panel_run_application(const Config *config, int argc, const char *const *argv, bool auto_start,
+                          char *error, size_t n)
+{
+    if (expect_application) {
+        assert(argc > 0 && argv);
+        application_config = *config;
+        application_auto_start = auto_start;
+        return 0;
+    }
+    return panel_run(config, error, n);
 }
 #endif
 
@@ -474,6 +487,44 @@ static void output_modes(App *app)
     frame_free(&expected);
 }
 
+static void application_entry(const char *configuration, const char *socket_pathname)
+{
+#ifndef WITH_PANEL
+    (void)configuration;
+    (void)socket_pathname;
+#endif
+    char error[CAST_ERR];
+    Startup startup;
+    char *headless[] = {"cast", "--headless", "--width", "320", "status"};
+    assert(startup_parse(5, headless, &startup, error, sizeof error) == 4 && startup.headless &&
+           startup.override_count == 1);
+#ifdef WITH_PANEL
+    char *arguments[] = {"cast",
+                         "--config",
+                         (char *)configuration,
+                         "--socket",
+                         (char *)socket_pathname,
+                         "--backend",
+                         "synthetic",
+                         "--width",
+                         "320",
+                         "--height",
+                         "240",
+                         "--no-camera",
+                         "--no-virtual",
+                         "panel"};
+    expect_application = true;
+    assert(!cast_cli_entry(sizeof arguments / sizeof arguments[0], arguments));
+    assert(!application_auto_start && application_config.camera_width_percent == 25 &&
+           application_config.width == 320 && application_config.height == 240 &&
+           !application_config.camera_enabled && !application_config.virtual_enabled &&
+           !strcmp(application_config.socket_path, socket_pathname));
+    assert(!cast_cli_entry(sizeof arguments / sizeof arguments[0] - 1, arguments));
+    assert(application_auto_start && application_config.camera_width_percent == 25);
+    expect_application = false;
+#endif
+}
+
 int main(void)
 {
     av_log_set_level(AV_LOG_ERROR);
@@ -484,6 +535,7 @@ int main(void)
     snprintf(socket_pathname, sizeof socket_pathname, "%s/cast.sock", directory);
     snprintf(recording_path, sizeof recording_path, "%s/control.mkv", directory);
     write_config(configuration, "[camera]\nwidth_percent=25\n");
+    application_entry(configuration, socket_pathname);
     App *app = new_app(configuration, socket_pathname);
     Config exclusion_before = app->config;
     State exclusion_state = app->state;

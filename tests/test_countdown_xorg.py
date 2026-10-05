@@ -46,7 +46,7 @@ def main():
         environment = dict(os.environ, XDG_RUNTIME_DIR=directory)
         panel = None
         with (temporary / 'daemon.log').open('w+') as log:
-            daemon = subprocess.Popen(base + ['--backend', 'xorg', '--no-virtual', '--no-camera',
+            daemon = subprocess.Popen(base + ['--headless', '--backend', 'xorg', '--no-virtual', '--no-camera',
                                              '--width', '320', '--height', '180'],
                                       env=environment, stdout=log, stderr=log)
             try:

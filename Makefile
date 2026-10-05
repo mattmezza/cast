@@ -148,6 +148,7 @@ check: cast check-unit
 	python3 tests/test_presentation_layers.py
 	python3 tests/test_help_commands.py
 	python3 tests/test_install.py
+	python3 tests/test_app_install.py
 check-loopback: cast
 	@test -n '$(LOOPBACK_DEVICE)' || { echo 'set LOOPBACK_DEVICE to an existing v4l2loopback output device' >&2; exit 1; }
 	python3 tests/test_loopback.py --device '$(LOOPBACK_DEVICE)'
@@ -189,6 +190,9 @@ install: cast
 	install -Dm644 completions/_cast $(DESTDIR)$(PREFIX)/share/zsh/site-functions/_cast
 	install -Dm644 completions/cast.fish $(DESTDIR)$(PREFIX)/share/fish/vendor_completions.d/cast.fish
 ifeq ($(PANEL),1)
+	ln -sfn cast $(DESTDIR)$(PREFIX)/bin/cast-app
+	install -Dm644 packaging/cast.desktop $(DESTDIR)$(PREFIX)/share/applications/cast.desktop
+	install -Dm644 assets/cast.svg $(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/cast.svg
 	install -Dm644 vendor/clay/LICENSE.md $(DESTDIR)$(PREFIX)/share/licenses/cast/clay-LICENSE
 	install -Dm644 licenses/SDL3_ttf-ZLIB.txt $(DESTDIR)$(PREFIX)/share/licenses/cast/SDL3_ttf-ZLIB
 endif
@@ -197,7 +201,8 @@ ifneq ($(filter 1,$(X11) $(PANEL)),)
 endif
 	@for doc in docs/*.md; do install -Dm644 "$$doc" "$(DESTDIR)$(PREFIX)/share/doc/cast/$${doc##*/}"; done
 uninstall:
-	rm -f $(DESTDIR)$(PREFIX)/bin/cast $(DESTDIR)$(PREFIX)/share/man/man1/cast.1
+	rm -f $(DESTDIR)$(PREFIX)/bin/cast $(DESTDIR)$(PREFIX)/bin/cast-app $(DESTDIR)$(PREFIX)/share/man/man1/cast.1
+	rm -f $(DESTDIR)$(PREFIX)/share/applications/cast.desktop $(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/cast.svg
 	rm -f $(DESTDIR)$(PREFIX)/share/bash-completion/completions/cast $(DESTDIR)$(PREFIX)/share/zsh/site-functions/_cast $(DESTDIR)$(PREFIX)/share/fish/vendor_completions.d/cast.fish
 	rm -rf $(DESTDIR)$(PREFIX)/share/doc/cast $(DESTDIR)$(PREFIX)/share/licenses/cast
 package-check:

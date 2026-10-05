@@ -55,7 +55,7 @@ def main():
         env = dict(os.environ, XDG_RUNTIME_DIR=directory)
         base = [str(BINARY), '--socket', str(socket)]
         with (temporary / 'daemon.log').open('w+') as log:
-            daemon = subprocess.Popen([str(BINARY), '--config', str(config),
+            daemon = subprocess.Popen([str(BINARY), '--headless', '--config', str(config),
                                        '--socket', str(socket)], env=env, stdout=log, stderr=log)
             try:
                 def command(*arguments, success=True):

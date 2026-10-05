@@ -1,14 +1,15 @@
 # Command reference
 
-`cast` runs one foreground instance. `cast COMMAND` sends a bounded request to its
-user-only Unix socket and prints acknowledged success or an actionable error. Exit 0
+`cast` opens the app and starts or attaches to one daemon. `cast --headless` runs
+the daemon directly in the terminal, for scripts and services. `cast COMMAND` sends
+a bounded request to its user-only Unix socket and prints acknowledged success or an actionable error. Exit 0
 means success; errors exit nonzero. `--help`, `--version` and `COMMAND --help` run locally.
 `config check/defaults` and `doctor` also run locally without a daemon. Runtime arguments
 are never passed to a shell. Concurrent commands are ordered by accepted connection;
 messages are atomic and a silent peer has a bounded timeout. A client timeout means
 completion is unknown: inspect status before repeating a non-idempotent command.
 
-Startup flags appear before the command: `--config PATH`, `--socket PATH`,
+Startup flags appear before the command: `--headless`, `--config PATH`, `--socket PATH`,
 `--backend xorg|wayland`, `--output-device PATH`, `--camera-device PATH`,
 `--width N`, `--height N`, `--fps N`, `--no-virtual`, `--no-camera`,
 `--mic-source NAME`, `--desktop-source NAME`, `--record-dir PATH`,
@@ -176,8 +177,16 @@ selects the latest release. Installation uses pacman and asks for sudo when need
 download-only saves a checked package and its checksum without installation.
 Stop the daemon before updating and restart it afterwards. `cast update v0.7`
 selects the release tag v0.7 and package version 0.7.0.
-`panel` opens the optional Clay/SDL3 control panel (`PANEL=1` build). Closing it
-leaves the daemon running. See [panel behavior and exclusion](control-panel.md).
+`panel` opens the optional Clay/SDL3 control panel (`PANEL=1` build) without
+automatically starting a daemon. Its Start button can launch one when stopped.
+Bare `cast` starts the daemon after the app window is ready; backend failures remain
+visible in the panel. Close leaves the daemon running. Stop daemon saves an active
+recording and keeps the panel open; Start retains acknowledged session settings
+and original startup flags, with virtual output paused and record/stream stopped.
+Quit asks for confirmation and waits for clean shutdown before closing.
+`cast-app` and the installed **Cast** application entry launch the same app.
+Headless builds require `--headless` and omit the app launcher.
+See [panel behavior and exclusion](control-panel.md).
 `settings SECTION.KEY VALUE [SECTION.KEY VALUE ...]` applies an atomic batch of
 INI-schema values to this session. Validation and restart restrictions match reload;
 failed batches leave settings intact. Preset definitions are changed in the file.
@@ -189,8 +198,9 @@ and finalizes an existing recording. No command persists session changes to conf
 
 For a status bar, poll `cast status --json` and parse JSON, for example
 `cast status --json | jq -r '.virtual.state + " / " + .record.state'`.
-The last_error field retains the last reported failure; errors are also printed
-by the foreground daemon. A successful unrelated command does not erase evidence.
+The last_error field retains the last reported failure; headless errors are also
+printed in the terminal. App-launched daemon diagnostics append to `SOCKET.log`
+beside its private runtime socket. A successful unrelated command does not erase evidence.
 
 When an edited configuration is invalid, explicit `--socket PATH` runtime commands
 use that routing directly, so status and config reload remain reachable. Local

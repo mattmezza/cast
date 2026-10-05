@@ -1134,7 +1134,8 @@ int main(int argc, char **argv)
             explicit_socket = true;
         }
     }
-    bool remote_command = first < argc && strcmp(argv[first], "doctor");
+    bool remote_command =
+        first < argc && strcmp(argv[first], "doctor") && strcmp(argv[first], "panel");
     Config config;
     if (inherited) {
         if (!startup.headless || first < argc || config_path(&startup, e, sizeof e)) {

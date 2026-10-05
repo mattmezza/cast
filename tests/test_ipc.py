@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory(prefix='cast-test-') as directory:
                          'this sandbox blocks it: ' + str(error))
     os.chmod(sock, 0o600)
     abandoned.close()
-    process = subprocess.Popen([BINARY, *common, '--backend', 'synthetic',
+    process = subprocess.Popen([BINARY, *common, '--headless', '--backend', 'synthetic',
                                 '--camera-device', 'synthetic', '--output-device', 'none',
                                 '--width', '320', '--height', '240', '--fps', '20'],
                                env=env, stdout=subprocess.DEVNULL,
@@ -75,7 +75,7 @@ with tempfile.TemporaryDirectory(prefix='cast-test-') as directory:
         assert first['virtual']['state'] == 'paused'
         assert first['record']['state'] == 'stopped'
         assert os.stat(sock).st_mode & 0o777 == 0o600
-        run(*common, '--backend', 'synthetic', '--no-virtual', '--no-camera', env=env, ok=False)
+        run(*common, '--headless', '--backend', 'synthetic', '--no-virtual', '--no-camera', env=env, ok=False)
         assert state()['virtual']['state'] == 'paused'
         cmd('record', 'toggle', ok=False)
         cmd('virtual', 'resume')

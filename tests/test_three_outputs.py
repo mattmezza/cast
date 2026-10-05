@@ -66,7 +66,7 @@ def main():
             daemon = None
             try:
                 wait_until(lambda: bound(port), 'local ingest did not listen')
-                daemon = subprocess.Popen(base, env=environment, stdout=daemon_log, stderr=daemon_log)
+                daemon = subprocess.Popen(base + ['--headless'], env=environment, stdout=daemon_log, stderr=daemon_log)
                 wait_until(socket_path.exists, 'synthetic daemon did not start')
 
                 def command(*arguments, success=True):
