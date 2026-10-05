@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -4932,6 +4933,35 @@ static void poll_client(Panel *p)
     }
 }
 
+static bool daemon_finished(const Panel *p)
+{
+    if (p->snapshot.connected || p->lifecycle_state.child_pid) {
+        return false;
+    }
+    struct stat st;
+    if (lstat(p->snapshot.config.socket_path, &st) && errno == ENOENT) {
+        return true;
+    }
+    /* Crashes can leave the socket behind. The instance lock stays held through
+     * encoder cleanup, and is released by the kernel when its producer exits. */
+    char lock_path[PATH_MAX];
+    if (snprintf(lock_path, sizeof lock_path, "%s.lock", p->snapshot.config.socket_path) >=
+        (int)sizeof lock_path) {
+        return false;
+    }
+    int fd = open(lock_path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    if (fd < 0) {
+        return false;
+    }
+    bool stopped = !fstat(fd, &st) && S_ISREG(st.st_mode) && st.st_uid == getuid() &&
+                   st.st_nlink == 1 && !(st.st_mode & 0077) && !flock(fd, LOCK_EX | LOCK_NB);
+    if (stopped) {
+        flock(fd, LOCK_UN);
+    }
+    close(fd);
+    return stopped;
+}
+
 static void poll_lifecycle(Panel *p)
 {
     panel_lifecycle_poll(p->lifecycle, p->snapshot.connected, &p->lifecycle_state);
@@ -4958,19 +4988,17 @@ static void poll_lifecycle(Panel *p)
     }
     /* A disconnect can precede encoder finalization. The daemon removes its
      * socket only after durable recording shutdown; an owned child is reaped too. */
-    struct stat socket_info;
-    bool socket_removed = lstat(p->snapshot.config.socket_path, &socket_info) && errno == ENOENT;
-    if (!p->snapshot.connected && socket_removed && !p->lifecycle_state.child_pid) {
+    if (daemon_finished(p)) {
         p->daemon_stopping = false;
         p->daemon_stopped = true;
         p->shutdown_request = 0;
         p->pending_button = 0;
         p->pending_button_request = 0;
-        snprintf(p->reply, sizeof p->reply, "Daemon stopped; recordings saved.");
+        snprintf(p->reply, sizeof p->reply, "Daemon stopped.");
         if (p->quit_after_stop) {
             p->quit = true;
         }
-    } else if (p->snapshot.connected && SDL_GetTicks() - p->shutdown_started > 15000) {
+    } else if (SDL_GetTicks() - p->shutdown_started > 15000) {
         p->daemon_stopping = p->quit_after_stop = false;
         snprintf(p->error, sizeof p->error, "Daemon did not stop. Retry Stop daemon or Quit.");
     }

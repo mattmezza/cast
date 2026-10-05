@@ -245,7 +245,7 @@ def exercise(focused_setup_parent=False, focused_exclusion=False, focused_lifecy
             for left, right in zip(header, header[1:]):
                 assert left[1] == right[1] and left[0]+left[2] <= right[0], "header actions overlap"
             if widget(34):
-                assert widget(34)["box"][1] >= ui()["scroll"][1], "privacy button remained in header"
+                assert widget(34)["box"][3] == 30, "privacy action has wrong body height"
             status = ui()["status_bar"]
             assert status[3] == 46, "status rows changed height"
             assert status[0] >= 0 and status[0]+status[2] <= width+1
@@ -337,6 +337,19 @@ def exercise(focused_setup_parent=False, focused_exclusion=False, focused_lifecy
                 assert panel.wait(timeout=20) == 0
                 assert not (root / "daemon.sock").exists(), "Quit left daemon socket"
                 subprocess.run(["ffprobe", "-v", "error", final_file], check=True, capture_output=True)
+                # An exited producer may leave its socket; Quit must still complete.
+                panel = start_application()
+                peer = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+                peer.connect(str(root / "daemon.sock"))
+                producer, _, _ = struct.unpack("3i", peer.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+                peer.close()
+                os.kill(producer, signal.SIGKILL)
+                wait_until(lambda: not ui()["connected"], "crashed producer did not disconnect")
+                assert (root / "daemon.sock").exists(), "crash fixture did not retain socket"
+                click_widget(9)
+                wait_until(lambda: ui().get("quit_confirmation"), "crashed daemon Quit warning missing")
+                click_widget(9101)
+                assert panel.wait(timeout=8) == 0, "Quit hung on a stale daemon socket"
                 assert config.read_bytes() == original_config
                 return
             daemon = start_daemon()
