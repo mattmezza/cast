@@ -15,9 +15,12 @@ static int route_setting(PanelClient *, const char *, const char *, char *, size
 #undef panel_client_command
 #undef panel_client_setting
 
+static unsigned route_calls;
+
 static int route_command(PanelClient *client, int argc, const char *const *args, char *error,
                          size_t size)
 {
+    route_calls++;
     char *argv[CAST_MAX_ARGS];
     for (int i = 0; i < argc; i++) {
         argv[i] = (char *)args[i];
@@ -51,6 +54,19 @@ static void edit_field(Panel *panel, App *app, const char *key, const char *valu
     }
     assert(!"unknown panel field");
 }
+/* The mock controller executes synchronously; explicitly model its matching ack. */
+static void route_acknowledge(Panel *panel, const App *app)
+{
+    for (size_t i = 0; i < FIELD_COUNT; i++) {
+        if (panel->edit[i].pending) {
+            acknowledge_edit(&panel->edit[i], false);
+        }
+    }
+    panel->snapshot.command_completed = panel->snapshot.command_queued;
+    panel->snapshot.config = app->config;
+    panel->snapshot.state = app->state;
+}
+
 static void camera_geometry(App *app, int *x, int *y, int *w, int *h)
 {
     char error[CAST_ERR];
@@ -304,30 +320,180 @@ int main(void)
     assert(app->config.radius == 40);
     assert(!memcmp(&initial_state, &app->state, sizeof initial_state));
 
-    /* Drafts stage locally, validate as a batch, then clear only for their own ack. */
-    panel->snapshot.config = app->config;
-    panel->snapshot.state = app->state;
-    int shape_index = find_field("camera.shape");
-    int mirror_index = find_field("camera.mirror");
-    assert(shape_index >= 0 && mirror_index >= 0);
-    stage_field(panel, shape_index, "rounded");
-    stage_field(panel, mirror_index, "true");
-    assert(!strcmp(app->config.shape, "circle") && !app->config.mirror);
+    route_acknowledge(panel, app);
+    /* Immediate controls go through the actual activate/settings route exactly once. */
+    const char *ordinary[] = {"camera.anchor",
+                              "camera.shape",
+                              "camera.mirror",
+                              "composition.layout",
+                              "annotations.virtual_clicks",
+                              "camera.radius",
+                              "record.countdown",
+                              "output.pause_text",
+                              "screen.background_color"};
+    const char *batched[] = {"stream.server_url",
+                             "capture.x",
+                             "capture.width",
+                             "zoom.min",
+                             "zoom.max",
+                             "composition.layout_order",
+                             "composition.preset_order",
+                             "camera.corner_order",
+                             "record.container",
+                             "record.video_codec",
+                             "record.audio_codec",
+                             "record.preset"};
+    for (size_t i = 0; i < sizeof ordinary / sizeof *ordinary; i++) {
+        assert(field_applies_immediately(&fields[find_field(ordinary[i])]));
+    }
+    for (size_t i = 0; i < sizeof batched / sizeof *batched; i++) {
+        assert(!field_applies_immediately(&fields[find_field(batched[i])]));
+    }
+    unsigned calls = route_calls;
+    int anchor_index = find_field("camera.anchor");
+    Widget anchor = {.id = 8400,
+                     .type = W_ANCHOR,
+                     .action = A_SETTING,
+                     .enabled = true,
+                     .draft = true,
+                     .index = anchor_index};
+    snprintf(anchor.value, sizeof anchor.value, "top-left");
+    activate(panel, &anchor);
+    assert(route_calls == calls + 1 && !strcmp(app->config.anchor, "top-left"));
+    assert(panel->edit[anchor_index].pending);
+    choose_field(panel, anchor_index, "top-right");
+    assert(route_calls == calls + 1 && !strcmp(app->config.anchor, "top-left"));
+    assert(panel->edit[anchor_index].auto_apply);
+    route_acknowledge(panel, app);
+    assert(panel->edit[anchor_index].dirty); /* Older ack cannot discard the next choice. */
+    commit_field(panel, anchor_index);
+    assert(route_calls == calls + 2 && !strcmp(app->config.anchor, "top-right"));
+    route_acknowledge(panel, app);
+    assert(!panel->edit[anchor_index].dirty);
+
+    for (size_t i = 0; i < FIELD_COUNT; i++) {
+        if (strstr(fields[i].label, "(px)")) {
+            assert(field_is_pixels(&fields[i]));
+        }
+        if (field_is_pixels(&fields[i])) {
+            double minimum, maximum;
+            flow_slider_range(panel, i, &minimum, &maximum);
+            assert(isfinite(minimum) && isfinite(maximum) && minimum < maximum);
+            assert(minimum >= fields[i].minimum && maximum <= fields[i].maximum);
+        }
+    }
+    assert(field_is_pixels(&fields[find_field("capture.width")]));
+    assert(field_is_pixels(&fields[find_field("camera.crop_x")]));
+    assert(field_is_pixels(&fields[find_field("output.width")]));
+    assert(!field_is_pixels(&fields[find_field("camera.width_percent")]));
+    int radius_index = find_field("camera.radius");
+    Widget slider = {.id = 1000 + (uint32_t)radius_index * 3,
+                     .type = W_SLIDER,
+                     .action = A_FIELD,
+                     .index = radius_index,
+                     .enabled = true,
+                     .draft = true,
+                     .box = {0, 0, 200, 30}};
+    field_value(&fields[radius_index], &app->config, panel->edit[radius_index].value,
+                sizeof panel->edit[radius_index].value);
+    calls = route_calls;
+    int radius_before = app->config.radius;
+    flow_slider_update(panel, &slider, 150);
+    assert(route_calls == calls && app->config.radius == radius_before);
+    int selected_radius = atoi(panel->edit[radius_index].value);
+    flow_slider_commit(panel, &slider);
+    assert(route_calls == calls + 1 && app->config.radius == selected_radius);
+    route_acknowledge(panel, app);
+    /* Losing focus ends a held drag just like release, without dropping its value. */
+    Widget previous_widget = panel->widgets[0];
+    int previous_widget_count = panel->widget_count;
+    panel->widget_count = 1;
+    panel->widgets[0] = slider;
+    panel->active_text = 0;
+    panel->slider_drag = slider.id;
+    panel->mouse_down = true;
+    calls = route_calls;
+    flow_slider_update(panel, &panel->widgets[0], 110);
+    selected_radius = atoi(panel->edit[radius_index].value);
+    assert(route_calls == calls && panel->edit[radius_index].dirty);
+    SDL_Event lost_focus = {.type = SDL_EVENT_WINDOW_FOCUS_LOST};
+    event(panel, &lost_focus);
+    assert(route_calls == calls + 1 && app->config.radius == selected_radius);
+    assert(!panel->slider_drag && !panel->mouse_down);
+    route_acknowledge(panel, app);
+    int region_index = find_field("capture.width");
+    bool region_available = panel->snapshot.capabilities.region_selection;
+    panel->snapshot.capabilities.region_selection = true;
+    panel->widgets[0].index = region_index;
+    panel->widgets[0].id = 1000 + (uint32_t)region_index * 3;
+    panel->slider_drag = panel->widgets[0].id;
+    panel->mouse_down = true;
+    calls = route_calls;
+    int region_before = app->config.region_w;
+    flow_slider_update(panel, &panel->widgets[0], 110);
+    event(panel, &lost_focus);
+    assert(route_calls == calls && app->config.region_w == region_before);
+    assert(panel->edit[region_index].dirty && !panel->slider_drag && !panel->mouse_down);
+    field_value(&fields[region_index], &app->config, panel->edit[region_index].value,
+                sizeof panel->edit[region_index].value);
+    panel->edit[region_index].dirty = false;
+    panel->snapshot.capabilities.region_selection = region_available;
+    panel->widgets[0] = previous_widget;
+    panel->widget_count = previous_widget_count;
+    calls = route_calls;
+    stage_field(panel, radius_index, "not-a-number");
+    commit_field(panel, radius_index);
+    assert(route_calls == calls && app->config.radius == selected_radius);
+    assert(panel->error[0] && panel->edit[radius_index].dirty);
+    stage_field(panel, radius_index, "37");
+    commit_field(panel, radius_index);
+    assert(route_calls == calls + 1 && app->config.radius == 37);
+    route_acknowledge(panel, app);
+
+    int color_index = find_field("screen.background_color");
+    Widget swatch = {.id = 6006,
+                     .type = W_BUTTON,
+                     .action = A_SWATCH,
+                     .enabled = true,
+                     .draft = true,
+                     .index = color_index};
+    snprintf(swatch.value, sizeof swatch.value, "#bbc1ca");
+    calls = route_calls;
+    activate(panel, &swatch);
+    assert(route_calls == calls + 1 && app->config.screen_background_color == 0xbbc1ca);
+    route_acknowledge(panel, app);
+    calls = route_calls;
+    stage_field(panel, color_index, "#zzzzzz");
+    commit_field(panel, color_index);
+    assert(route_calls == calls && app->config.screen_background_color == 0xbbc1ca);
+    assert(panel->error[0] && panel->edit[color_index].dirty);
+    stage_field(panel, color_index, "#315c87");
+    commit_field(panel, color_index);
+    assert(route_calls == calls + 1 && app->config.screen_background_color == 0x315c87);
+    route_acknowledge(panel, app);
+
+    /* Coupled ranges stage locally, apply atomically, and retain their page/scroll. */
+    int minimum_index = find_field("zoom.min"), maximum_index = find_field("zoom.max");
+    double old_minimum = app->config.zoom_min, old_maximum = app->config.zoom_max;
+    calls = route_calls;
+    choose_field(panel, minimum_index, "2");
+    choose_field(panel, maximum_index, "5");
+    assert(route_calls == calls && app->config.zoom_min == old_minimum &&
+           app->config.zoom_max == old_maximum);
     panel->view = VIEW_SECTION;
-    panel->open_section = 1;
-    panel->view_scroll[3] = -180;
-    apply_section(panel, 1);
-    assert(panel->view == VIEW_SECTION && panel->open_section == 1 &&
-           panel->view_scroll[3] == -180);
-    assert(!panel->error[0] && !strcmp(app->config.shape, "rounded") && app->config.mirror);
-    acknowledge_edit(&panel->edit[shape_index], false);
-    acknowledge_edit(&panel->edit[mirror_index], false);
-    assert(!section_dirty(panel, 1));
-    panel->snapshot.config = app->config;
-    stage_field(panel, shape_index, "circle");
-    Widget revert = {.enabled = true, .action = A_REVERT, .index = 1};
+    panel->open_section = 0;
+    panel->view_scroll[2] = -180;
+    apply_section(panel, 0);
+    assert(route_calls == calls + 1 && !panel->error[0]);
+    assert(panel->view == VIEW_SECTION && panel->open_section == 0 &&
+           panel->view_scroll[2] == -180);
+    assert(app->config.zoom_min == 2 && app->config.zoom_max == 5);
+    route_acknowledge(panel, app);
+    assert(!section_dirty(panel, 0));
+    stage_field(panel, minimum_index, "2.5");
+    Widget revert = {.enabled = true, .action = A_REVERT, .index = 0};
     activate(panel, &revert);
-    assert(!section_dirty(panel, 1) && !strcmp(app->config.shape, "rounded"));
+    assert(!section_dirty(panel, 0) && app->config.zoom_min == 2);
     panel->snapshot.state.stream_active = true;
     assert(!writable(panel, &fields[find_field("stream.server_url")]));
     assert(writable(panel, &fields[find_field("output.blur_title")]));

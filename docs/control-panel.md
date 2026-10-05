@@ -58,27 +58,32 @@ remaining fields inline with labeled groups. This one-level disclosure retains d
 and page scroll. Layout diagrams represent the five actual layouts. Camera position
 uses eight points around a disabled center; no drag-in-preview or Free option is
 advertised. Free coordinates remain advanced controls for CLI-selected free positioning.
-Camera shape and backdrop source use chips; size, zoom, gains and countdown use sliders.
+Camera shape and backdrop source use chips. Size, zoom, gains, countdown and pixel-valued
+settings use sliders. Pixel sliders also provide an exact numeric field; disabled
+startup-only dimensions remain read-only.
 Background fields change with the selected mode rather than exposing unrelated colors.
 Per-output click/keystroke visibility appears once as a three-column matrix.
 
 Enums and discovered devices use keyboard-operable, scrollable choice pickers.
-Color pickers offer swatches and editable #RRGGBB text, with invalid-value feedback.
+Color pickers offer swatches, editable #RRGGBB text and **Pick from screen**.
+Swatches apply immediately. Invalid hex stays visible and never reaches the daemon.
+On X11, Pick from screen changes the pointer to a crosshair: left-click samples the
+visible pixel, while Escape or right-click cancels without changing the setting.
+On Wayland it asks the desktop portal for a color selection; availability depends on
+the installed portal. Cancellation or an unavailable picker leaves the color unchanged
+and reports an error when appropriate. No screenshot or sampled image is saved.
 Boolean controls have explicit On/Off segments. Unavailable capabilities and active
 output locks keep their controls visible with explanatory notes. Missing-resource
 warnings do not substitute fake assets or silently change daemon behavior.
 
-**Source & layout**,
-**Camera**, **Background & stage**, **Overlays**, **Annotations & pointer**, **Audio**,
-and **Settings**. Selecting a section opens its dedicated page with a sticky
-**Compose** back control and all fields inline in labeled groups. Advanced screen
-styling, geometry, gradient stops, overlay anchors, annotation policies, recording
-formats and presentation typography remain on the appropriate page. Every existing
+Selecting a section opens its dedicated page with a sticky **Compose** back control.
+Advanced screen styling, geometry, gradient stops, overlay anchors, annotation
+policies and presentation typography remain on the appropriate page. Every existing
 setting remains reachable.
 
 **Source & layout → Capture & exclusion** sets the color that masks panel/preview
 overlaps independently of the pause screen. The same control is available as
-`cast capture mask-color '#RRGGBB'`. Apply changes the session only; persist the
+`cast capture mask-color '#RRGGBB'`. Edits change the session only; persist the
 color as `[capture] mask_color` in the config file. The control is disabled on
 capture backends without panel exclusion. Selected application capture naturally
 excludes both separate windows. For unobstructed monitor/region capture, keep the
@@ -88,19 +93,25 @@ The experimental transparent mode has been removed: it only revealed Cast's
 background, rather than the desktop hidden behind the control windows. Remove
 `[capture] exclusion` from configurations that used that unreleased setting.
 
-Composition edits are local drafts, except camera and stage screen-size sliders:
-dragging stays local, then release sends one acknowledged setting update to the
-daemon. Keyboard geometry adjustments commit each step. These geometry updates
-affect active outputs as well as the floating preview; there is no preview-only IPC.
-Other draft controls use **Apply**, which sends
-one validated settings batch for the current section; **Revert** discards its unsent
-drafts. A pinned draft bar above the status bar shows the current page's edit count,
-Apply/Revert and **session only**. Enter applies the current section's draft.
-Drafts survive page navigation. A failed acknowledgement keeps the draft,
-and an acknowledgement cannot discard typing performed after submission. Explicit
-capture selection, cycling, preset, reload and output actions are commands, with
-pending/acknowledged/failed feedback. Unavailable backend controls are disabled and
-explain the missing capability.
+Most controls apply immediately: camera anchors, layout diagrams, boolean segments,
+enum choices, annotation cells and color swatches send one acknowledged update per
+selection. Sliders keep the drag local and commit once on release; keyboard steps
+commit individually. Text, exact numeric values and hex colors commit on Enter or
+when focus leaves the field, never on each keystroke. Invalid values remain editable
+with an error and leave the daemon unchanged. Geometry changes affect active outputs
+as well as the floating preview; there is no separate preview-only IPC.
+
+Settings that must change together retain **Apply/Revert**: streaming setup, capture
+region coordinates and dimensions, zoom minimum/maximum, layout/preset/corner cycle
+orders, and recording container/codec/preset choices. Apply sends one validated batch
+for the current section. The pinned bar also lets you correct, retry or revert an
+invalid or failed edit. Unsent batch drafts survive page navigation; navigation and
+runtime edits never write the config file.
+
+A failed acknowledgement keeps its edit, and a successful acknowledgement cannot
+discard typing performed after submission. Capture selection, cycling, preset,
+reload and output actions keep pending/acknowledged/failed feedback. Unavailable
+backend controls are disabled with an explanation.
 
 Pause/blur fonts are displayed with config-file and reload guidance; the user’s
 output font choices remain separate from the panel’s single bundled Inter family.

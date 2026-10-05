@@ -114,7 +114,7 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
                 pinned = (item["id"] in (5, 6, 7, 10, 11, 12, 22, 34, 99)
                           or 160 <= item["id"] <= 166
                           or 400 <= item["id"] < 500 or 700 <= item["id"] <= 717
-                          or 6000 <= item["id"] <= 6500
+                          or 6000 <= item["id"] <= 6501
                           or ui().get("open_menu", 0) and bool(item["key"]))
                 if pinned or y >= area[1] and y+height <= area[1]+area[3]:
                     wait_until(lambda: widget(identifier) and widget(identifier)["enabled"],
@@ -147,7 +147,7 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             if not ui()["all_settings"][section]:
                 click_widget(180+section)
 
-        def drag_geometry_slider(key, unchanged_draft):
+        def drag_slider(key, unchanged_draft=None):
             acknowledge()
             for _ in range(60):
                 item = widget(key)
@@ -171,7 +171,8 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
                 time.sleep(.2)  # Several authoritative snapshot polls while the pointer is held.
                 assert widget(key)["value"] == before, "slider changed daemon before release"
                 assert ui()["command_queued"] == queued, "slider sent IPC while pointer held"
-                assert widget(unchanged_draft)["dirty"], "drag discarded another field draft"
+                if unchanged_draft:
+                    assert widget(unchanged_draft)["dirty"], "drag discarded another field draft"
             finally:
                 xdo("mouseup", 1)
             wait_until(lambda: ui()["command_queued"] == queued+1,
@@ -179,12 +180,16 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             acknowledge()
             wait_until(lambda: widget(key)["value"] != before and not widget(key)["dirty"],
                        "slider release did not acknowledge geometry")
-            assert widget(unchanged_draft)["dirty"], "geometry ack discarded another draft"
+            if unchanged_draft:
+                assert widget(unchanged_draft)["dirty"], "slider ack discarded another draft"
             cli("settings", key, before)
             wait_until(lambda: widget(key)["value"] == before, "CLI geometry reset did not synchronize")
 
         def edit(key, value, apply=False):
-            click_widget(key)
+            # Pixel sliders expose a paired exact field with the same setting key.
+            precise = next((item for item in ui()["widgets"]
+                            if item["key"] == key and item["type"] == 1), None)
+            click_widget(precise["id"] if precise else key)
             if widget(6500):
                 click_widget(6500)
             xdo("key", "--clearmodifiers", "ctrl+a")
@@ -273,33 +278,84 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             assert widget(30) and widget(32) and widget(150), "start actions are hidden"
             capture("operate-task-cards")
             if focused_exclusion:
+                # Revert must discard unfinished ordinary text before focus can auto-commit it.
+                navigate(5)
+                title_before = state()["virtual"]["message"]
+                queued_before = ui()["command_queued"]
+                edit("output.pause_text", "Discard this unfinished title")
+                click_widget(711)
+                wait_until(lambda: not widget("output.pause_text")["dirty"],
+                           "Revert kept unfinished title")
+                assert ui()["command_queued"] == queued_before, "Revert committed unfinished title"
+                assert state()["virtual"]["message"] == title_before
                 navigate(0)
                 click_widget(180)
                 initial_mask = state()["source"]["mask_color"]
-                # Hex validation remains local and cannot silently clamp or mutate capture.
-                edit("capture.mask_color", "#zzzzzz")
-                xdo("key", "--clearmodifiers", "Escape")
-                pinned_draft(0)
+                # Invalid hex never emits IPC; a valid Enter commits exactly one field.
                 queued_before = ui()["command_queued"]
-                click_widget(700)
+                edit("capture.mask_color", "#zzzzzz", apply=True)
                 wait_until(lambda: "#RRGGBB" in ui()["error"], "invalid color feedback missing")
                 assert ui()["command_queued"] == queued_before
                 assert state()["source"]["mask_color"] == initial_mask
-                edit("capture.mask_color", "#314159")
+                edit("capture.mask_color", "#314159", apply=True)
+                wait_until(lambda: state()["source"]["mask_color"] == "#314159", "hex Enter did not commit")
+                assert ui()["command_queued"] == queued_before+1
                 xdo("key", "--clearmodifiers", "Escape")
-                click_widget(700)
-                wait_until(lambda: state()["source"]["mask_color"] == "#314159", "mask color did not apply")
-                # Matrix writes one draft and uses the single Annotations Apply.
+                wait_until(lambda: not ui()["color_popup"], "Escape did not close hex popup")
+                # Sample a real pixel from this private X server, outside all Cast windows.
+                subprocess.run(["xsetroot", "-solid", "#315c87"], env=environment, check=True)
+                def start_color_pick(hold_open=False):
+                    # Bare Xvfb has no WM to restore client focus after a root click.
+                    frame_before = ui()["frame"]
+                    xdo("windowfocus", "--sync", window)
+                    wait_until(lambda: ui()["frame"] >= frame_before+2,
+                               "panel did not process focus restoration after picking")
+                    if not widget(6501):
+                        click_widget("capture.mask_color")
+                    if hold_open:
+                        wait_until(lambda: widget(6501), "eyedropper button unavailable")
+                        x, y, width, height = widget(6501)["box"]
+                        xdo("mousemove", "--window", window, round((x+width/2)*scale),
+                            round((y+height/2)*scale), "mousedown", 1)
+                        try:
+                            time.sleep(.15)  # Deliberate user hold, while SDL owns its implicit grab.
+                            assert not ui()["error"], "held opening press caused a grab error"
+                            assert not ui().get("color_picking"), "picker began before opening release"
+                        finally:
+                            xdo("mouseup", 1)
+                    else:
+                        click_widget(6501)
+                    wait_until(lambda: ui().get("color_picking"), "eyedropper did not become active")
+
+                queued_before = ui()["command_queued"]
+                start_color_pick(hold_open=True)
+                xdo("key", "--clearmodifiers", "Escape")
+                wait_until(lambda: not ui().get("color_picking"), "Escape did not cancel eyedropper")
+                assert ui()["command_queued"] == queued_before
+                assert state()["source"]["mask_color"] == "#314159"
+                start_color_pick()
+                xdo("mousemove", 1900, 1900, "click", 3)
+                wait_until(lambda: not ui().get("color_picking"), "right-click did not cancel eyedropper")
+                assert ui()["command_queued"] == queued_before
+                assert state()["source"]["mask_color"] == "#314159"
+                start_color_pick()
+                xdo("mousemove", 1900, 1900, "click", 1)
+                wait_until(lambda: not ui().get("color_picking")
+                           and state()["source"]["mask_color"] == "#315c87",
+                           "eyedropper did not commit the actual root pixel")
+                assert ui()["command_queued"] == queued_before+1
+                if ui()["color_popup"]:
+                    xdo("key", "--clearmodifiers", "Escape")
+                # Matrix selections commit once without a second Apply action.
                 navigate(4)
                 assert state()["capabilities"]["input"], "Xorg fixture lacks input annotations"
                 previous = widget("annotations.virtual_clicks")["value"]
+                queued_before = ui()["command_queued"]
                 click_widget(8700)
-                pinned_draft(4)
-                assert widget("annotations.virtual_clicks")["value"] == previous
-                click_widget(708)
-                acknowledge()
-                wait_until(lambda: widget("annotations.virtual_clicks")["value"] != previous,
-                           "matrix cell did not apply")
+                wait_until(lambda: widget("annotations.virtual_clicks")["value"] != previous
+                           and not widget("annotations.virtual_clicks")["dirty"],
+                           "matrix cell did not commit immediately")
+                assert ui()["command_queued"] == queued_before+1
                 cli("annotations", "virtual", "clicks", "on" if previous == "true" else "off")
                 wait_until(lambda: widget("annotations.virtual_clicks")["value"] == previous,
                            "matrix did not synchronize authoritative CLI edit")
@@ -398,13 +454,14 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             click_widget(140)
             wait_until(lambda: state()["record"]["state"] == "stopped" and not state()["record"]["finalizing"], "recording finalization failed")
             click_widget(8601)
-            edit("record.directory", str(root)+"/.")
-            pinned_draft(8)
-            capture("record-overflow-dirty")
-            click_widget(716)
-            acknowledge()
-            wait_until(lambda: not widget(716), "recording overflow Apply did not clear draft")
-            assert ui()["open_menu"] == 2, "recording Apply closed the overflow"
+            queued_before = ui()["command_queued"]
+            edit("record.directory", str(root)+"/.", apply=True)
+            wait_until(lambda: widget("record.directory")["value"] == str(root)+"/.",
+                       "recording destination Enter did not commit")
+            assert ui()["command_queued"] == queued_before+1
+            assert not widget(716), "valid immediate directory edit left Apply behind"
+            capture("record-overflow")
+            assert ui()["open_menu"] == 2, "recording edit closed the overflow"
             xdo("key", "--clearmodifiers", "Escape")
             cli("settings", "record.countdown", "3")
             click_widget(32)
@@ -417,19 +474,15 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             # Layout diagrams and dropdowns edit the existing settings path.
             navigate(0)
             click_widget(8501)  # Stage, in canonical Overlay/Stage/Split/Screen/Camera order.
-            pinned_draft(0)
-            click_widget(700)
-            acknowledge()
+            wait_until(lambda: widget("composition.layout")["value"] == "stage",
+                       "layout thumbnail did not commit immediately")
             all_settings(0)
             fit_before = widget("composition.fit")["value"]
             click_widget("composition.fit")
             capture("combo-popup")
             xdo("key", "--clearmodifiers", "Down", "Return")
-            wait_until(lambda: widget("composition.fit")["dirty"], "keyboard dropdown did not stage selection")
-            assert widget("composition.fit")["value"] == fit_before, "dropdown bypassed draft Apply"
-            click_widget(700)
-            acknowledge()
-            assert widget("composition.fit")["value"] != fit_before, "dropdown Apply failed"
+            wait_until(lambda: widget("composition.fit")["value"] != fit_before
+                       and not widget("composition.fit")["dirty"], "dropdown did not commit immediately")
             # Background reveals only the current mode's fields.
             navigate(2)
             mode_base = widget("screen.background")["id"]
@@ -442,15 +495,20 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             click_widget("screen.background_color")
             wait_until(lambda: widget(6500), "color picker hex editor missing")
             capture("color-popup")
+            queued_before = ui()["command_queued"]
+            click_widget(6006)
+            wait_until(lambda: widget("screen.background_color")["value"].lower() == "#bbc1ca",
+                       "swatch selection did not commit immediately")
+            assert ui()["command_queued"] == queued_before+1
+            assert ui()["color_popup"], "swatch commit closed the color palette"
             xdo("key", "--clearmodifiers", "Escape")
             click_widget(mode_base)  # Blurred.
             wait_until(lambda: widget("background.source"), "Blurred source missing")
             assert not widget("background.gradient_from") and not widget("screen.background_color")
-            click_widget(705)
             all_settings(2)
-            edit("screen.margin", "19")
-            drag_geometry_slider("screen.width_percent", "screen.margin")
-            click_widget(705)
+            edit("screen.margin", "19", apply=True)
+            wait_until(lambda: widget("screen.margin")["value"] == "19", "pixel margin Enter did not commit")
+            drag_slider("screen.width_percent")
 
             operate(3)
             click_widget(8603)
@@ -458,44 +516,58 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             capture("audio-overflow")
             xdo("key", "--clearmodifiers", "Escape")
 
-            # Spatial controls are local drafts; Apply/Revert preserve the page.
+            # Anchors and arrow-selected positions commit once without Apply.
             navigate(1)
-            original_anchor=ui()["camera_anchor"]
-            click_widget("camera.anchor")
-            drag_geometry_slider("camera.width_percent", "camera.anchor")
-            pinned_draft(1)
-            assert ui()["camera_anchor"]==original_anchor, "anchor draft applied without Apply"
-            click_widget(703)
-            wait_until(lambda: not widget(702), "Revert kept draft bar")
-            capture("compose-camera")
-            # The eight-point grid is reachable by arrows and changes only a draft.
+            queued_before = ui()["command_queued"]
             click_widget(8400)
+            wait_until(lambda: ui()["camera_anchor"] == "top-left", "anchor click did not commit")
+            assert ui()["command_queued"] == queued_before+1
+            assert not widget(702), "anchor needs an extra Apply"
+            queued_before = ui()["command_queued"]
             xdo("key", "--clearmodifiers", "Right", "Return")
-            pinned_draft(1)
-            assert ui()["camera_anchor"] == original_anchor
-            click_widget(702)
-            acknowledge()
             wait_until(lambda: ui()["camera_anchor"] == "top", "grid keyboard selection failed")
+            assert ui()["command_queued"] == queued_before+1
+            capture("compose-camera")
             all_settings(1)
-            original_radius=widget("camera.radius")["value"]
-            edit("camera.radius", "37")
+            # Keep an intentionally batched cycle edit across an immediate slider acknowledgement.
+            cycle_before = widget("camera.corner_order")["value"]
+            cycle_draft = "bottom-left,bottom-right,top-right,top-left"
+            if cycle_draft == cycle_before:
+                cycle_draft = "top-left,top-right,bottom-right,bottom-left"
+            edit("camera.corner_order", cycle_draft)
+            drag_slider("camera.width_percent", "camera.corner_order")
+            click_widget(703)
+            wait_until(lambda: not widget(702), "Revert kept cycle draft")
+            # Every pixel field provides both a slider and exact numeric input.
+            pixel_controls = [item for item in ui()["widgets"] if item["key"] == "camera.radius"]
+            assert {item["type"] for item in pixel_controls} == {1, 5}, pixel_controls
+            original_radius = widget("camera.radius")["value"]
+            queued_before = ui()["command_queued"]
+            edit("camera.radius", "not-a-number", apply=True)
+            assert ui()["command_queued"] == queued_before, "invalid exact value sent IPC"
+            assert widget("camera.radius")["value"] == original_radius
+            assert widget("camera.radius")["dirty"] and ui()["error"], "invalid exact value lost its feedback"
+            edit("camera.radius", "37", apply=True)
+            wait_until(lambda: widget("camera.radius")["value"] == "37"
+                       and not widget("camera.radius")["dirty"], "exact pixel Enter did not commit")
+            assert ui()["command_queued"] == queued_before+1
+            # Blur commits a valid exact entry too, without per-keystroke messages.
+            queued_before = ui()["command_queued"]
+            edit("camera.radius", "38")
+            assert ui()["command_queued"] == queued_before
             click_widget(181)
-            assert not widget("camera.radius") and widget(702), "Essentials discarded advanced draft"
+            wait_until(lambda: ui()["command_queued"] == queued_before+1, "exact pixel blur did not commit once")
+            acknowledge()
             click_widget(181)
-            assert widget("camera.radius")["draft"] == "37", "All settings forgot draft"
-            pinned_box=pinned_draft(1)
-            wheel(5, 8)
-            assert tuple(widget(702)["box"])==pinned_box, "draft bar scrolled"
-            click_widget(702)
-            wait_until(lambda: not widget(702), "Apply did not clear draft")
-            assert ui()["open_section"]==1, "Apply changed page"
+            wait_until(lambda: widget("camera.radius")["value"] == "38", "blur value did not synchronize")
+            drag_slider("camera.radius")
+            assert ui()["open_section"] == 1, "immediate settings changed page"
             capture("compose-camera-all")
             navigate(5)
             edit("output.pause_text", "Private session")
-            pinned_draft(5)
-            assert state()["virtual"]["message"]!="Private session"
-            click_widget(710)
-            wait_until(lambda: state()["virtual"]["message"]=="Private session", "Pause title did not apply")
+            assert state()["virtual"]["message"] != "Private session", "typing committed before Enter/blur"
+            xdo("key", "--clearmodifiers", "Return")
+            wait_until(lambda: state()["virtual"]["message"] == "Private session", "Pause title Enter did not commit")
             click_widget(185)
             unicode_footer="Back soon · café ☕ — {time:%H:%M}"
             edit("output.pause_footer", "")
@@ -620,8 +692,10 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             # navigation/scroll only, discarding drafts and leaving config untouched.
             xdo("windowsize", window, round(440*scale), round(760*scale))
             navigate(1)
-            original_radius = widget("camera.radius")["value"]
-            edit("camera.radius", "37" if original_radius != "37" else "38")
+            original_cycle = widget("camera.corner_order")["value"]
+            edit("camera.corner_order", "top-left,top-right,bottom-right,bottom-left"
+                 if original_cycle != "top-left,top-right,bottom-right,bottom-left"
+                 else "bottom-left,bottom-right,top-right,top-left")
             pinned_box = pinned_draft(1)
             wheel(5, 12)
             assert ui()["scroll_offset"] < -20, "long Camera page did not scroll"
@@ -629,7 +703,9 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             capture("compose-camera-long-dirty")
             click_widget(703)
             wait_until(lambda: not widget(702), "Revert did not remove pinned draft bar")
-            edit("camera.radius", "37" if original_radius != "37" else "38")
+            edit("camera.corner_order", "top-left,top-right,bottom-right,bottom-left"
+                 if original_cycle != "top-left,top-right,bottom-right,bottom-left"
+                 else "bottom-left,bottom-right,top-right,top-left")
             wheel(4, 40)
             wait_until(lambda: abs(ui()["scroll_offset"]) < 1, "Camera page did not return to top")
             wheel(5, 2)
@@ -643,7 +719,7 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
                        "panel process restart forgot the page")
             wait_until(lambda: abs(ui()["scroll_offset"]-remembered_scroll) < 2,
                        "panel process restart forgot scroll position")
-            assert widget("camera.radius") and not widget("camera.radius")["dirty"]
+            assert widget("camera.corner_order") and not widget("camera.corner_order")["dirty"]
             assert state()["virtual"] == before_close["virtual"] and state()["record"] == before_close["record"]
             assert config.read_bytes() == original_config, "panel wrote the config file"
             # Disconnection preserves last-known state; reconnect restores controls.
@@ -691,7 +767,7 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
 
 
 if __name__ == "__main__":
-    for dependency in ("xvfb-run", "xdotool", "xprop", "xclip", "ffmpeg"):
+    for dependency in ("xvfb-run", "xdotool", "xprop", "xclip", "xsetroot", "ffmpeg"):
         if not shutil.which(dependency):
             raise SystemExit(f"native panel check requires {dependency}")
     if "--inside" not in sys.argv:
@@ -704,6 +780,6 @@ if __name__ == "__main__":
     if focused:
         print("native panel: streaming setup parent/view/reopen passed")
     elif exclusion:
-        print("native Xorg panel: mask color popup validation/Apply, annotation matrix drafts/Apply and authoritative CLI synchronization passed")
+        print("native Xorg panel: mask color validation/commit, eyedropper sample/cancellation, immediate annotation matrix and authoritative CLI synchronization passed")
     else:
         print("native panel: nine workflows, Compose pages/back/keys, pinned drafts, session navigation memory, compact status/header, privacy restore, private streaming, disconnect/reconnect and 360–800px density passed")
