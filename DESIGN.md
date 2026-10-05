@@ -95,11 +95,14 @@ one output matrix rather than repeated per-lane fields.
 
 Reusable controls share existing drafts and IPC: full-width 36px choice triggers,
 scrollable 32px popup rows, 30px On/Off segments and chips, sliders with unit-bearing
-values, swatch/hex color pickers, focusable anchor grid and layout diagrams. Invalid
+values, swatch/hex/screen color pickers, focusable anchor grid and layout diagrams. Invalid
 colors show a warning border/message. Unsupported controls and output locks explain
 why they are unavailable. Output fonts remain separate from the panel typeface.
-The pinned draft bar shows edit count, Apply/Revert and session only; atomic batch
-acknowledgement preserves later typing, page and scroll. Navigation never writes config.
+Independent controls apply on selection, slider release, or text-field completion.
+Pixel controls pair practical slider ranges with precise numeric inputs. The pinned
+draft bar retains Apply/Revert for coupled settings and invalid or failed edits.
+Acknowledgement preserves later typing, page and scroll; all changes are session only.
+Navigation never writes config.
 
 The 46px status bar has two centered 16px rows of 11px Inter: composition and lane
 links above connection state and marked command feedback. At narrow widths it drops

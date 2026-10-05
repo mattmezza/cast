@@ -37,7 +37,8 @@ Operate exposes independent Virtual camera, Recording and Streaming controls plu
 Audio. Compose opens six dedicated pages with Essentials/All settings, inline groups,
 a pinned draft bar, keyboard jumps and session navigation memory.
 Only the body scrolls; global privacy, preview toggle and exclusion
-remain pinned. Drafts apply explicitly and commands use acknowledged IPC.
+remain pinned. Independent edits apply when the interaction finishes; coupled
+settings retain explicit Apply/Revert. Commands use acknowledged IPC.
 Streaming is one configured RTMP/RTMPS destination, without OAuth or service APIs.
 Opening/closing the panel never changes any output state.
 Camera mirroring defaults on and affects only the webcam. A custom paused message
