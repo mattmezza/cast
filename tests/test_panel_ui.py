@@ -37,7 +37,7 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
                            CAST_PANEL_UI_STATE=str(root / "ui.json"))
         scale = float(environment.get("SDL_VIDEO_X11_SCALING_FACTOR", "1"))
         config = root / "cast.conf"
-        config.write_text(f"[record]\ndirectory={directory}\ncountdown=0\n")
+        config.write_text(f"[output]\nenabled=false\n[record]\ndirectory={directory}\ncountdown=0\n")
         original_config = config.read_bytes()
         common = ["--config", str(config), "--socket", str(root / "daemon.sock")]
         processes = []
@@ -100,11 +100,22 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             wait_until(lambda: widget(identifier), f"control {identifier} unavailable")
             for _ in range(80):
                 item = widget(identifier)
+                if not item:
+                    time.sleep(.04)
+                    continue
+                before = ui()["frame"]
+                wait_until(lambda: ui()["frame"] >= before+3, "renderer stopped while reaching control")
+                fresh = widget(identifier)
+                if not fresh or fresh["box"] != item["box"]:
+                    continue
+                item = fresh
                 x, y, width, height = item["box"]
                 area = ui()["scroll"]
                 pinned = (item["id"] in (5, 6, 7, 10, 11, 12, 22, 34, 99)
-                          or 160 <= item["id"] <= 163
-                          or 400 <= item["id"] < 500 or 700 <= item["id"] <= 715)
+                          or 160 <= item["id"] <= 166
+                          or 400 <= item["id"] < 500 or 700 <= item["id"] <= 717
+                          or 6000 <= item["id"] <= 6500
+                          or ui().get("open_menu", 0) and bool(item["key"]))
                 if pinned or y >= area[1] and y+height <= area[1]+area[3]:
                     wait_until(lambda: widget(identifier) and widget(identifier)["enabled"],
                                f"visible control {identifier} unavailable")
@@ -123,18 +134,59 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
                        "Compose page did not open")
             assert widget(99), "Compose page has no Back control"
             assert not any(200 <= item["id"] < 300 for item in ui()["widgets"]), "nested group buttons remain"
-            assert not any(100 <= item["id"] <= 106 for item in ui()["widgets"]), "Compose list remained beside page"
+            assert not any(100 <= item["id"] <= 105 for item in ui()["widgets"]), "Compose list remained beside page"
 
         def operate(lane):
             if ui()["tab"] != 0:
                 click_widget(5)
-            if ui()["open_lane"] != lane:
-                click_widget(10+lane if lane < 3 else 123)
-            wait_until(lambda: ui()["tab"] == 0 and ui()["open_lane"] == lane,
-                       "Operate lane did not open")
+            wait_until(lambda: ui()["tab"] == 0, "Operate did not open")
+            assert not any(widget(i) for i in (10, 11, 12)), "redundant header chips remain"
+
+        def all_settings(section):
+            navigate(section)
+            if not ui()["all_settings"][section]:
+                click_widget(180+section)
+
+        def drag_geometry_slider(key, unchanged_draft):
+            acknowledge()
+            for _ in range(60):
+                item = widget(key)
+                x, y, width, height = item["box"]
+                area = ui()["scroll"]
+                if y >= area[1] and y+height <= area[1]+area[3]:
+                    break
+                wheel(4 if y < area[1] else 5, 1)
+            else:
+                raise AssertionError(f"slider {key} could not be reached")
+            assert item["type"] == 5, "geometry field is not a pointer slider"
+            before = item["value"]
+            queued = ui()["command_queued"]
+            xdo("mousemove", "--window", window, round((x+width*.2)*scale),
+                round((y+height/2)*scale), "mousedown", 1)
+            try:
+                xdo("mousemove", "--window", window, round((x+width*.7)*scale),
+                    round((y+height/2)*scale))
+                wait_until(lambda: widget(key)["dirty"] and widget(key)["draft"] != before,
+                           "slider drag did not update local geometry draft")
+                time.sleep(.2)  # Several authoritative snapshot polls while the pointer is held.
+                assert widget(key)["value"] == before, "slider changed daemon before release"
+                assert ui()["command_queued"] == queued, "slider sent IPC while pointer held"
+                assert widget(unchanged_draft)["dirty"], "drag discarded another field draft"
+            finally:
+                xdo("mouseup", 1)
+            wait_until(lambda: ui()["command_queued"] == queued+1,
+                       "slider release did not send exactly one setting")
+            acknowledge()
+            wait_until(lambda: widget(key)["value"] != before and not widget(key)["dirty"],
+                       "slider release did not acknowledge geometry")
+            assert widget(unchanged_draft)["dirty"], "geometry ack discarded another draft"
+            cli("settings", key, before)
+            wait_until(lambda: widget(key)["value"] == before, "CLI geometry reset did not synchronize")
 
         def edit(key, value, apply=False):
             click_widget(key)
+            if widget(6500):
+                click_widget(6500)
             xdo("key", "--clearmodifiers", "ctrl+a")
             if value:
                 xdo("type", "--clearmodifiers", value)
@@ -160,21 +212,19 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             bounds = dict(line.split("=", 1) for line in
                           xdo("getwindowgeometry", "--shell", window).splitlines() if "=" in line)
             width, height = int(bounds["WIDTH"])/scale, int(bounds["HEIGHT"])/scale
-            for identifier in (5, 6, 7, 10, 11, 12, 22, 34):
+            for identifier in (5, 6, 7, 22, 34):
                 item = widget(identifier)
                 assert item, identifier
                 x, y, w, h = item["box"]
                 assert x >= 0 and y >= 0 and x+w <= width+1 and y+h <= height+1, (identifier, item, bounds)
-                if identifier in (10, 11, 12):
-                    assert h == 44, ("chip height", item)
                 if identifier in (7, 22, 34):
-                    assert h == 30, ("privacy/preview height", item)
+                    assert h == 36, ("privacy/preview height", item)
                 if identifier == 7:
                     assert item["enabled"], ("Close button unavailable", item)
             assert abs(widget(22)["box"][2]-widget(34)["box"][2]) < 1, "meta-actions have unequal widths"
             close, preview = widget(7)["box"], widget(22)["box"]
             assert close[1] == preview[1] and close[0] >= preview[0]+preview[2], "Close is not beside Preview"
-            assert close[2] == 76 and preview[2] >= 120, "Close displaced preview state text"
+            assert close[2] == 76 and preview[2] >= 110, "Close displaced preview state text"
             status = ui()["status_bar"]
             assert status[3] == 46, "status rows changed height"
             assert status[0] >= 0 and status[0]+status[2] <= width+1
@@ -205,64 +255,8 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
 
         def compose_list():
             wait_until(lambda: ui()["tab"] == 1 and ui()["open_section"] == -1, "Compose list did not open")
-            assert all(widget(100+section) for section in range(7)), "Compose list is incomplete"
+            assert all(widget(100+section) for section in range(6)), "Compose list is incomplete"
             assert not widget(99) and not any(item["key"] for item in ui()["widgets"]), "list contains page controls"
-
-        def short_compose_list():
-            xdo("windowsize", window, round(360*scale), round(640*scale))
-            time.sleep(.15)
-            pinned_accessible()
-            wheel(5, 1)
-            area = ui()["scroll"]
-            partial = [item for item in ui()["widgets"] if 100 <= item["id"] <= 106
-                       and item["box"][1] < area[1]+area[3]
-                       and item["box"][1]+item["box"][3] > area[1]
-                       and (item["box"][1] < area[1]
-                            or item["box"][1]+item["box"][3] > area[1]+area[3])]
-            assert partial, "short Compose list did not expose partial rows"
-            for item in partial:
-                assert not item["enabled"], ("partially clipped section row is clickable", item)
-                x, y, width, height = item["box"]
-                visible_y = max(area[1]+2, min(y+height/2, area[1]+area[3]-2))
-                xdo("mousemove", "--window", window, round((x+width/2)*scale),
-                    round(visible_y*scale), "click", 1)
-                time.sleep(.08)
-                assert ui()["open_section"] == -1, "invisible partial row opened its page"
-            capture("compose-list-partial-360x640")
-            xdo("windowsize", window, round(440*scale), round(760*scale))
-            time.sleep(.15)
-
-        def compose_setup_parent():
-            nonlocal panel
-            navigate(6)
-            # Focus Setup before scrolling so Enter exercises its parent-page
-            # memory at a nonzero position without moving the pointer to the top.
-            for _ in range(20):
-                if ui()["focus"] == 150:
-                    break
-                previous = ui()["focus"]
-                xdo("key", "--clearmodifiers", "Tab")
-                wait_until(lambda: ui()["focus"] != previous, "Tab did not move focus")
-            assert ui()["focus"] == 150, "Setup could not receive keyboard focus"
-            wheel(5, 2)
-            parent_scroll = ui()["scroll_offset"]
-            assert parent_scroll < -20, "Settings did not scroll before opening Setup"
-            xdo("key", "--clearmodifiers", "Return")
-            wait_until(lambda: ui()["stream_setup"] and ui()["tab"] == 1,
-                       "Settings setup did not retain Compose tab")
-            xdo("key", "--clearmodifiers", "ctrl+q")
-            assert panel.wait(timeout=8) == 0
-            panel = start_panel()
-            wait_until(lambda: ui()["stream_setup"] and ui()["tab"] == 1,
-                       "reopened Setup forgot its Compose parent tab")
-            xdo("key", "--clearmodifiers", "Escape")
-            wait_until(lambda: not ui()["stream_setup"] and ui()["tab"] == 1
-                       and ui()["open_section"] == 6, "Escape did not restore Settings parent")
-            wait_until(lambda: abs(ui()["scroll_offset"]-parent_scroll) < 2,
-                       "Escape did not restore Settings scroll")
-            assert config.read_bytes() == original_config, "Setup navigation wrote config"
-            xdo("key", "--clearmodifiers", "1")
-            wait_until(lambda: ui()["tab"] == 0, "Setup parent check did not return to Operate")
 
         try:
             daemon = start_daemon()
@@ -276,96 +270,85 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
                                         env=environment, text=True, capture_output=True, check=True).stdout
             assert '"cast-panel", "CastPanel"' in properties and "_NET_WM_WINDOW_TYPE_UTILITY" in properties
             pinned_accessible()
-            capture("operate-collapsed")
+            assert widget(30) and widget(32) and widget(150), "start actions are hidden"
+            capture("operate-task-cards")
             if focused_exclusion:
                 navigate(0)
-                assert not widget("capture.exclusion"), "removed transparency selector remains"
-                assert widget("capture.mask_color")["enabled"]
-                edit("capture.mask_color", "#314159")
+                click_widget(180)
+                initial_mask = state()["source"]["mask_color"]
+                # Hex validation remains local and cannot silently clamp or mutate capture.
+                edit("capture.mask_color", "#zzzzzz")
+                xdo("key", "--clearmodifiers", "Escape")
                 pinned_draft(0)
+                queued_before = ui()["command_queued"]
                 click_widget(700)
-                wait_until(lambda: state()["source"]["mask_color"] == "#314159",
-                           "panel mask color draft did not apply")
-                wait_until(lambda: not widget(700), "acknowledged exclusion draft did not clear")
-                assert ui()["open_section"] == 0
+                wait_until(lambda: "#RRGGBB" in ui()["error"], "invalid color feedback missing")
+                assert ui()["command_queued"] == queued_before
+                assert state()["source"]["mask_color"] == initial_mask
+                edit("capture.mask_color", "#314159")
+                xdo("key", "--clearmodifiers", "Escape")
+                click_widget(700)
+                wait_until(lambda: state()["source"]["mask_color"] == "#314159", "mask color did not apply")
+                # Matrix writes one draft and uses the single Annotations Apply.
+                navigate(4)
+                assert state()["capabilities"]["input"], "Xorg fixture lacks input annotations"
+                previous = widget("annotations.virtual_clicks")["value"]
+                click_widget(8700)
+                pinned_draft(4)
+                assert widget("annotations.virtual_clicks")["value"] == previous
+                click_widget(708)
+                acknowledge()
+                wait_until(lambda: widget("annotations.virtual_clicks")["value"] != previous,
+                           "matrix cell did not apply")
+                cli("annotations", "virtual", "clicks", "on" if previous == "true" else "off")
+                wait_until(lambda: widget("annotations.virtual_clicks")["value"] == previous,
+                           "matrix did not synchronize authoritative CLI edit")
+                capture("annotations-matrix-xorg")
                 assert config.read_bytes() == original_config
-                capture("capture-mask-color")
-                cli("capture", "mask-color", "#8090a0")
-                wait_until(lambda: widget("capture.mask_color")["value"] == "#8090a0"
-                           and "neutral-masked" in ui()["exclusion"],
-                           "CLI exclusion changes did not reach panel")
-                cli("capture", "exclusion", "transparent", success=False)
-                edit("capture.mask_color", "#abcdef")
-                click_widget(701)
-                wait_until(lambda: not widget(700), "Revert kept dirty exclusion draft")
-                assert state()["source"]["mask_color"] == "#8090a0"
-                xdo("windowsize", window, round(360*scale), round(640*scale))
-                time.sleep(.15)
-                pinned_accessible()
-                click_widget("capture.mask_color")
-                capture("capture-mask-narrow")
-                wheel(4, 40)
-                wait_until(lambda: abs(ui()["scroll_offset"]) < 1, "page did not return to top")
-                wheel(5, 1)
-                assert abs(ui()["scroll_offset"]+60) < 2, "wheel notch did not advance 60 logical pixels"
-                before_close = state()
-                click_widget(7)
-                assert panel.wait(timeout=8) == 0
-                after_close = state()
-                for lane in ("virtual", "record", "stream"):
-                    assert before_close[lane] == after_close[lane], "Close changed an output"
-                assert daemon.poll() is None and config.read_bytes() == original_config
-                panel = start_panel()
-                wait_until(lambda: ui()["open_section"] == 0 and ui()["scroll_offset"] < -20,
-                           "Close button lost page or scroll position")
                 click_widget(7)
                 assert panel.wait(timeout=8) == 0
                 cli("quit")
                 daemon.wait(timeout=8)
                 return
-            if focused_setup_parent:
-                xdo("key", "--clearmodifiers", "2")
-                compose_list()
-                short_compose_list()
-                compose_setup_parent()
-                xdo("key", "--clearmodifiers", "ctrl+q")
-                assert panel.wait(timeout=8) == 0
-                assert state()["virtual"] == initial["virtual"] and state()["record"] == initial["record"]
-                cli("quit")
-                daemon.wait(timeout=8)
-                return
-            compose_setup_parent()
-
-            # Flat Compose list, drill-in pages, Back, shortcuts and status links.
             xdo("key", "--clearmodifiers", "2")
             compose_list()
             capture("compose-list")
-            short_compose_list()
-            click_widget(101)
-            wait_until(lambda: ui()["open_section"] == 1, "Compose list row did not drill in")
-            click_widget(99)
-            compose_list()
-            for section in range(7):
+            for section in range(6):
                 navigate(section)
+                capture(f"compose-section-{section}-essentials")
             xdo("key", "--clearmodifiers", "Escape")
             compose_list()
-            for identifier, section in ((160, 0), (161, 0), (162, 2)):
+            for identifier, section in ((160, 0), (161, 0)):
                 click_widget(identifier)
                 wait_until(lambda: ui()["open_section"] == section, "status link opened wrong page")
-            cli("zoom", "set", "3.25")
-            click_widget(163)
-            wait_until(lambda: state()["zoom"] == 1, "status zoom link did not reset zoom")
-            xdo("key", "--clearmodifiers", "1")
-            wait_until(lambda: ui()["tab"] == 0, "Operate shortcut did not switch tabs")
-            # Longest inactive stream status stays within the compact header at 360px.
-            assert ui()["stream_status"] == "Not configured"
-            xdo("windowsize", window, round(360*scale), round(760*scale))
-            time.sleep(.15)
-            pinned_accessible()
+            for width in (360, 440, 520, 800):
+                xdo("windowsize", window, round(width*scale), round(760*scale))
+                time.sleep(.15)
+                pinned_accessible()
             xdo("windowsize", window, round(440*scale), round(760*scale))
+            wait_until(lambda: ui()["status_bar"][2] == 440, "resize did not settle")
+            if focused_setup_parent:
+                operate(2)
+                click_widget(150)
+                wait_until(lambda: ui()["stream_setup"], "setup did not open")
+                parent_tab=ui()["tab"]
+                click_widget(7)
+                assert panel.wait(timeout=8)==0
+                panel=start_panel()
+                wait_until(lambda: ui()["stream_setup"] and ui()["tab"]==parent_tab, "setup restore failed")
+                xdo("key", "--clearmodifiers", "Escape")
+                wait_until(lambda: not ui()["stream_setup"] and ui()["tab"]==0, "setup parent lost")
+                click_widget(7)
+                assert panel.wait(timeout=8)==0
+                cli("quit")
+                daemon.wait(timeout=8)
+                return
 
             # Call join: explicit reveal, independent freeze/blur/pause precedence.
             operate(0)
+            click_widget(30)
+            wait_until(lambda: state()["virtual"]["enabled"], "one-click virtual start failed")
+            assert state()["virtual"]["paused"], "virtual camera start revealed composition"
             click_widget(30)
             wait_until(lambda: not state()["virtual"]["paused"], "Resume virtual camera failed")
             # A genuinely stopped daemon makes Pending observable without slowing rendering.
@@ -394,14 +377,35 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             click_widget(32)
             wait_until(lambda: state()["record"]["state"] == "recording", "Start recording failed")
             path = state()["record"]["path"]
+            click_widget(8601)
+            wait_until(lambda: widget("record.countdown"), "Recording settings menu did not open")
+            assert not widget("record.countdown")["enabled"], "countdown editable during recording"
+            assert not widget("record.directory")["enabled"], "destination editable during recording"
+            capture("record-overflow-locked")
+            xdo("key", "--clearmodifiers", "Escape")
+            wait_until(lambda: not widget("record.countdown"), "Escape did not close recording menu")
             click_widget(39)
             wait_until(lambda: state()["record"]["cut"], "Cut time failed")
             capture("operate-record-cut")
+            held_duration = state()["record"]["duration"]
+            time.sleep(.25)
+            assert abs(state()["record"]["duration"]-held_duration) < .02, "cut advanced media time"
             click_widget(33)
             wait_until(lambda: not state()["record"]["cut"], "same-file resume failed")
             assert state()["record"]["path"] == path
+            wait_until(lambda: state()["record"]["duration"] > held_duration+.1,
+                       "resumed recording clock did not advance")
             click_widget(140)
             wait_until(lambda: state()["record"]["state"] == "stopped" and not state()["record"]["finalizing"], "recording finalization failed")
+            click_widget(8601)
+            edit("record.directory", str(root)+"/.")
+            pinned_draft(8)
+            capture("record-overflow-dirty")
+            click_widget(716)
+            acknowledge()
+            wait_until(lambda: not widget(716), "recording overflow Apply did not clear draft")
+            assert ui()["open_menu"] == 2, "recording Apply closed the overflow"
+            xdo("key", "--clearmodifiers", "Escape")
             cli("settings", "record.countdown", "3")
             click_widget(32)
             wait_until(lambda: ui()["countdown"], "countdown not visible")
@@ -410,70 +414,100 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             wait_until(lambda: not ui()["countdown"], "Cancel did not cancel countdown")
             cli("settings", "record.countdown", "0")
 
-            # Compose enum/boolean drafts stay local; Apply/Revert and validation.
-            navigate(1)
-            original_anchor = ui()["camera_anchor"]
-            click_widget("camera.anchor")
-            click_widget(401)
-            assert ui()["camera_anchor"] == original_anchor, "enum draft applied without Apply"
-            assert widget("camera.anchor")["dirty"]
-            pinned_draft(1)
-            capture("compose-camera-dirty")
-            click_widget(703)
-            wait_until(lambda: not widget("camera.anchor")["dirty"], "Revert kept camera draft")
-            wait_until(lambda: not widget(702), "clean page kept its draft bar")
-            click_widget("camera.anchor")
-            click_widget(401)
-            click_widget(702)
-            wait_until(lambda: ui()["camera_anchor"] == "top", "Apply did not commit camera anchor")
-            wait_until(lambda: not widget(702), "applied page kept its draft bar")
-            capture("compose-camera")
+            # Layout diagrams and dropdowns edit the existing settings path.
             navigate(0)
-            original_zoom = state()["zoom"]
-            xdo("windowsize", window, round(360*scale), round(520*scale))
-            time.sleep(.15)
-            edit("zoom.factor", "99", apply=True)
-            wait_until(lambda: ui()["error"], "invalid draft error did not arrive")
-            assert state()["zoom"] == original_zoom
-            pinned_accessible()
-            capture("narrow-error")
-            edit("zoom.factor", "3.25", apply=True)
-            wait_until(lambda: state()["zoom"] == 3.25, "Enter did not apply valid draft")
-            xdo("windowsize", window, round(440*scale), round(760*scale))
+            click_widget(8501)  # Stage, in canonical Overlay/Stage/Split/Screen/Camera order.
+            pinned_draft(0)
+            click_widget(700)
+            acknowledge()
+            all_settings(0)
+            fit_before = widget("composition.fit")["value"]
+            click_widget("composition.fit")
+            capture("combo-popup")
+            xdo("key", "--clearmodifiers", "Down", "Return")
+            wait_until(lambda: widget("composition.fit")["dirty"], "keyboard dropdown did not stage selection")
+            assert widget("composition.fit")["value"] == fit_before, "dropdown bypassed draft Apply"
+            click_widget(700)
+            acknowledge()
+            assert widget("composition.fit")["value"] != fit_before, "dropdown Apply failed"
+            # Background reveals only the current mode's fields.
             navigate(2)
-            edit("background.gradient_from", "#153b52")
-            edit("background.gradient_to", "#345678", apply=True)
-            wait_until(lambda: widget("background.gradient_from")["value"] == "#153b52"
-                       and widget("background.gradient_to")["value"] == "#345678",
-                       "Enter did not apply the whole dirty page")
-            capture("compose-background")
-            navigate(6)
+            mode_base = widget("screen.background")["id"]
+            click_widget(mode_base+1)  # Gradient.
+            wait_until(lambda: widget("background.gradient_from"), "Gradient fields missing")
+            assert not widget("background.source") and not widget("screen.background_color")
+            click_widget(mode_base+2)  # Solid.
+            wait_until(lambda: widget("screen.background_color"), "Solid field missing")
+            assert not widget("background.gradient_from") and not widget("background.source")
+            click_widget("screen.background_color")
+            wait_until(lambda: widget(6500), "color picker hex editor missing")
+            capture("color-popup")
+            xdo("key", "--clearmodifiers", "Escape")
+            click_widget(mode_base)  # Blurred.
+            wait_until(lambda: widget("background.source"), "Blurred source missing")
+            assert not widget("background.gradient_from") and not widget("screen.background_color")
+            click_widget(705)
+            all_settings(2)
+            edit("screen.margin", "19")
+            drag_geometry_slider("screen.width_percent", "screen.margin")
+            click_widget(705)
+
+            operate(3)
+            click_widget(8603)
+            wait_until(lambda: widget("audio.mic_source"), "Audio settings overflow did not open")
+            capture("audio-overflow")
+            xdo("key", "--clearmodifiers", "Escape")
+
+            # Spatial controls are local drafts; Apply/Revert preserve the page.
+            navigate(1)
+            original_anchor=ui()["camera_anchor"]
+            click_widget("camera.anchor")
+            drag_geometry_slider("camera.width_percent", "camera.anchor")
+            pinned_draft(1)
+            assert ui()["camera_anchor"]==original_anchor, "anchor draft applied without Apply"
+            click_widget(703)
+            wait_until(lambda: not widget(702), "Revert kept draft bar")
+            capture("compose-camera")
+            # The eight-point grid is reachable by arrows and changes only a draft.
+            click_widget(8400)
+            xdo("key", "--clearmodifiers", "Right", "Return")
+            pinned_draft(1)
+            assert ui()["camera_anchor"] == original_anchor
+            click_widget(702)
+            acknowledge()
+            wait_until(lambda: ui()["camera_anchor"] == "top", "grid keyboard selection failed")
+            all_settings(1)
+            original_radius=widget("camera.radius")["value"]
+            edit("camera.radius", "37")
+            click_widget(181)
+            assert not widget("camera.radius") and widget(702), "Essentials discarded advanced draft"
+            click_widget(181)
+            assert widget("camera.radius")["draft"] == "37", "All settings forgot draft"
+            pinned_box=pinned_draft(1)
+            wheel(5, 8)
+            assert tuple(widget(702)["box"])==pinned_box, "draft bar scrolled"
+            click_widget(702)
+            wait_until(lambda: not widget(702), "Apply did not clear draft")
+            assert ui()["open_section"]==1, "Apply changed page"
+            capture("compose-camera-all")
+            navigate(5)
             edit("output.pause_text", "Private session")
-            assert state()["virtual"]["message"] != "Private session"
-            pinned_draft(6)
-            capture("compose-settings-dirty")
-            click_widget(712)
-            wait_until(lambda: state()["virtual"]["message"] == "Private session", "presentation draft Apply failed")
-            edit("output.pause_text", "", apply=True)
-            wait_until(lambda: state()["virtual"]["message"] == "", "optional title could not be blank")
-            edit("output.pause_footer", "Returns {date:%A, %d %B} at {time:%H:%M}", apply=True)
-            # Exercise SDL's actual clipboard path, including UTF-8 and optional footer.
-            unicode_footer = "Back soon · café ☕ — {time:%H:%M}"
+            pinned_draft(5)
+            assert state()["virtual"]["message"]!="Private session"
+            click_widget(710)
+            wait_until(lambda: state()["virtual"]["message"]=="Private session", "Pause title did not apply")
+            click_widget(185)
+            unicode_footer="Back soon · café ☕ — {time:%H:%M}"
             edit("output.pause_footer", "")
             subprocess.run(["xclip", "-selection", "clipboard"], input=unicode_footer,
                            env=environment, text=True, stdout=log, stderr=log, check=True)
-            wait_until(lambda: ui()["clipboard_text_available"], "clipboard owner did not become ready")
+            wait_until(lambda: ui()["clipboard_text_available"], "clipboard unavailable")
             xdo("key", "--clearmodifiers", "ctrl+v")
-            wait_until(lambda: ui()["edit_text"] == unicode_footer, "UTF-8 clipboard did not reach the draft")
+            wait_until(lambda: ui()["edit_text"]==unicode_footer, "UTF-8 paste failed")
             xdo("key", "--clearmodifiers", "Return")
-            wait_until(lambda: widget("output.pause_footer")["value"] == unicode_footer,
-                       "UTF-8 clipboard footer did not apply")
-            capture("compose-presentation")
-            # Keyboard navigation uses the same retained field draft.
-            edit("output.pause_text", "Keyboard draft")
-            xdo("key", "--clearmodifiers", "Tab", "shift+Tab")
-            assert panel.poll() is None
-            xdo("key", "--clearmodifiers", "Escape")
+            acknowledge()
+            wait_until(lambda: widget("output.pause_footer")["value"]==unicode_footer, "footer Apply failed")
+            capture("compose-pause-blur")
 
             # Private ingest: setup sheet drafts, paused-start, reveal and stop.
             listener = socket.socket()
@@ -506,7 +540,7 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             panel = start_panel()
             wait_until(lambda: ui()["stream_setup"], "process restart forgot the setup sheet")
             xdo("key", "--clearmodifiers", "Escape")
-            wait_until(lambda: not ui()["stream_setup"] and ui()["tab"] == 0 and ui()["open_lane"] == 2,
+            wait_until(lambda: not ui()["stream_setup"] and ui()["tab"] == 0  ,
                        "restored setup sheet forgot its parent")
             operate(2)
             click_widget(130)
@@ -526,6 +560,17 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             wait_until(lambda: not state()["group_paused"], "global restore failed")
             assert state()["virtual"]["paused"] and not state()["stream"]["paused"]
             assert state()["stream"]["blurred"] and not state()["record"]["paused"]
+            # Close owns only the panel process, including while both media lanes run.
+            before_close = state()
+            preview_before_close = ui()["preview_enabled"]
+            click_widget(7)
+            assert panel.wait(timeout=8) == 0
+            after_close = state()
+            assert after_close["stream"]["state"] == "streaming" and after_close["stream"]["blurred"]
+            assert after_close["record"]["state"] == "recording" and after_close["record"]["path"] == before_close["record"]["path"]
+            assert after_close["virtual"] == before_close["virtual"] and daemon.poll() is None
+            panel = start_panel()
+            assert ui()["preview_enabled"] == preview_before_close, "Close changed preview state"
             click_widget(141)
             wait_until(lambda: state()["stream"]["state"] == "stopped", "Stop streaming failed")
             cli("record", "stop")
@@ -598,7 +643,7 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
                        "panel process restart forgot the page")
             wait_until(lambda: abs(ui()["scroll_offset"]-remembered_scroll) < 2,
                        "panel process restart forgot scroll position")
-            assert widget("camera.radius")["value"] == original_radius and not widget("camera.radius")["dirty"]
+            assert widget("camera.radius") and not widget("camera.radius")["dirty"]
             assert state()["virtual"] == before_close["virtual"] and state()["record"] == before_close["record"]
             assert config.read_bytes() == original_config, "panel wrote the config file"
             # Disconnection preserves last-known state; reconnect restores controls.
@@ -642,7 +687,7 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             mask = (1 << (struct.calcsize("L")*8))-1
             for byte in os.fsencode(root / "daemon.sock"):
                 memory_hash = (memory_hash*33+byte) & mask
-            Path(f"/dev/shm/cast-panel-view-{os.getuid()}-{memory_hash:x}").unlink(missing_ok=True)
+            Path(f"/dev/shm/cast-panel-flow-view-{os.getuid()}-{memory_hash:x}").unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
@@ -657,8 +702,8 @@ if __name__ == "__main__":
     exclusion = "--exclusion-only" in sys.argv
     exercise(focused_setup_parent=focused, focused_exclusion=exclusion)
     if focused:
-        print("native panel: supported360×640 list clipping/footer bounds and Compose setup parent tab/page/scroll/reopen passed")
+        print("native panel: streaming setup parent/view/reopen passed")
     elif exclusion:
-        print("native Xorg panel: exclusion drafts/CLI sync/Revert, 60px scrolling, pinned Close and session restore passed")
+        print("native Xorg panel: mask color popup validation/Apply, annotation matrix drafts/Apply and authoritative CLI synchronization passed")
     else:
         print("native panel: nine workflows, Compose pages/back/keys, pinned drafts, session navigation memory, compact status/header, privacy restore, private streaming, disconnect/reconnect and 360–800px density passed")

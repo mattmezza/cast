@@ -83,6 +83,20 @@ static void check_text_contrast(void)
 int main(void)
 {
     check_text_contrast();
+    /* A control has one home: connection fields never leak into Compose, and
+     * the camera size draft cannot be stranded behind a duplicate field slot. */
+    assert(sizeof section_names / sizeof *section_names == 6);
+    for (size_t i = 0; i < FIELD_COUNT; i++) {
+        assert(field_section(&fields[i]) >= 0 && field_section(&fields[i]) <= 8);
+        for (size_t j = i + 1; j < FIELD_COUNT; j++) {
+            assert(strcmp(fields[i].key, fields[j].key));
+        }
+    }
+    assert(field_section(&fields[find_field("camera.width_percent")]) == 1);
+    assert(field_section(&fields[find_field("audio.mic_source")]) == 6);
+    assert(field_section(&fields[find_field("stream.key_file")]) == 7);
+    assert(field_section(&fields[find_field("record.countdown")]) == 8);
+    assert(field_section(&fields[find_field("output.pause_text")]) == 5);
     SDL_MouseWheelEvent wheel = {.y = .25f, .direction = SDL_MOUSEWHEEL_NORMAL};
     assert(wheel_delta(&wheel) == 1.5f);
     wheel.direction = SDL_MOUSEWHEEL_FLIPPED;
