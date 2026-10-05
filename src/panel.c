@@ -340,6 +340,7 @@ typedef enum {
     ICON_STREAM,
     ICON_INFO,
     ICON_CHEVRON,
+    ICON_CHEVRON_UP,
     ICON_DOT
 } Icon;
 #define ICON_DATA_BASE 4096
@@ -625,6 +626,9 @@ static void state_marker(Clay_Color ink)
 }
 static Icon button_icon(const Panel *p, uint32_t id, Action action)
 {
+    if (action == A_ALL) {
+        return p->all_settings[p->open_section] ? ICON_CHEVRON_UP : ICON_CHEVRON;
+    }
     if (id == 7) {
         return ICON_CLOSE;
     }
@@ -714,8 +718,9 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
     bool compact = id == 7 || id == 22 || id == 34;
     bool card_action = (id >= 30 && id <= 39 && id != 34) || id == 130 ||
                        (id >= 137 && id <= 141) || id == 150 || id == 154 || id == 151;
+    bool primary_action = id == 30 || id == 32 || id == 130 || id == 150;
     bool draft_action = id >= 700 && id <= 717;
-    bool small_action = card_action || draft_action || action == A_ALL;
+    bool small_action = (card_action && !primary_action) || draft_action || action == A_ALL;
     bool combo = action == A_DROPDOWN;
     float compact_width = id == 7 ? 76 : (fminf(p->width, 520) - 32 - 12 - 76) / 2;
     if (action != A_TAB && action != A_GROUP && action != A_PREVIEW && action != A_DROPDOWN &&
@@ -737,15 +742,22 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
     Clay_Color ink = enabled ? selected ? accent : foreground : muted;
     CLAY({.id = element_id(id),
           .layout = {.sizing = {.width = compact ? CLAY_SIZING_FIXED(compact_width)
-                                        : id == 30 || id == 32 || id == 130 ? CLAY_SIZING_GROW()
-                                        : card_action || combo ? CLAY_SIZING_GROW()
-                                                                         : CLAY_SIZING_FIT(),
-                                .height = CLAY_SIZING_FIXED(compact ? 36 : draft_action || action == A_ALL ? 30 : card_action || combo ? 36 : 40)},
+                                         : id == 30 || id == 32 || id == 130 ? CLAY_SIZING_GROW()
+                                         : card_action || combo              ? CLAY_SIZING_GROW()
+                                                                             : CLAY_SIZING_FIT(),
+                                .height = CLAY_SIZING_FIXED(compact                           ? 36
+                                                            : draft_action || action == A_ALL ? 30
+                                                            : card_action || combo ? 36
+                                                                                   : 40)},
                      .padding = {compact || small_action ? 7 : 10,
-                                 compact || small_action ? 7 : combo ? 26 : 10,
+                                 compact || small_action ? 7
+                                 : combo                 ? 26
+                                                         : 10,
                                  compact || small_action ? 6 : 8, compact || small_action ? 6 : 8},
                      .childGap = 6,
-                     .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}},
+                     .childAlignment = {.x = primary_action ? CLAY_ALIGN_X_CENTER
+                                                            : CLAY_ALIGN_X_LEFT,
+                                        .y = CLAY_ALIGN_Y_CENTER}},
           .backgroundColor = bg,
           .border = {.color = p->focus == id ? accent
                               : selected     ? (Clay_Color){60, 104, 134, 255}
@@ -755,7 +767,9 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
         if (p->pending_button == id && p->pending_button_request) {
             CLAY({.layout = {.sizing = {.width = CLAY_SIZING_FIXED(14),
                                         .height = CLAY_SIZING_FIXED(14)}},
-                  .custom = {.customData = (void *)(uintptr_t)(1048576 + 5)}}) {}
+                  .custom = {.customData = (void *)(uintptr_t)(1048576 + 5)}})
+            {
+            }
         }
         Icon icon = button_icon(p, id, action);
         if (icon != ICON_NONE && !card_action) {
@@ -764,8 +778,10 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
         if (compact) {
             quiet_label(fit_text(p, text, compact_width - 36, FONT_META), ink, true);
         } else {
-            const char *display = id == 40 ? (p->snapshot.current_preset[0]
-                                                  ? p->snapshot.current_preset : "Choose preset") : text;
+            const char *display =
+                id == 40
+                    ? (p->snapshot.current_preset[0] ? p->snapshot.current_preset : "Choose preset")
+                    : text;
             label(display, small_action ? 0 : 1, ink);
         }
     }
@@ -901,9 +917,9 @@ static void text_wrapped(const char *text, Clay_Color color)
 }
 /* The header and tabs never scroll. Both bodies use one retained scroll container. */
 static const char *const lane_names[] = {"Virtual camera", "Recording", "Streaming", "Audio"};
-static const char *const section_names[] = {
-    "Source & layout", "Camera", "Background & stage", "Overlays",
-    "Annotations & pointer", "Pause & blur screens"};
+static const char *const section_names[] = {"Source & layout",       "Camera",
+                                            "Background & stage",    "Overlays",
+                                            "Annotations & pointer", "Pause & blur screens"};
 static const char *virtual_status(const PanelSnapshot *s)
 {
     return !s->config.virtual_enabled ? "Off"
@@ -1029,14 +1045,14 @@ static void pinned_header(Panel *p)
         }
         if (!s->connected) {
             CLAY({.id = CLAY_ID("DisconnectedNotice"),
-                  .layout = {.sizing = {.width = CLAY_SIZING_GROW()},
-                             .padding = {10, 10, 7, 7}},
+                  .layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .padding = {10, 10, 7, 7}},
                   .backgroundColor = surface,
                   .border = {.color = danger, .width = outline_width}})
             {
                 text_wrapped("Daemon disconnected — showing last known state. Commands are "
                              "unavailable; outputs keep running per their last state and this "
-                             "window reconnects automatically.", danger);
+                             "window reconnects automatically.",
+                             danger);
             }
         }
     }
@@ -1064,6 +1080,8 @@ static int find_field(const char *key)
 #define FLOW_ANCHOR_DATA 3
 #define FLOW_COLOR_DATA 4
 #define FLOW_PENDING_DATA 5
+#define FLOW_VALUE_DATA 6
+#define FLOW_OVERFLOW_DATA 7
 static void stage_field(Panel *, int, const char *);
 static void apply_setting(Panel *, int, const char *, bool);
 static void lane_menu_body(Panel *, int);
@@ -1093,9 +1111,8 @@ static void flow_note(Panel *p, size_t index)
         text_wrapped("Disconnect streaming to change this setting.", secondary);
     }
 }
-static void flow_choice(Panel *p, uint32_t id, const char *text, size_t index,
-                        const char *value, bool selected, float width, float height,
-                        WidgetType type)
+static void flow_choice(Panel *p, uint32_t id, const char *text, size_t index, const char *value,
+                        bool selected, float width, float height, WidgetType type)
 {
     bool enabled = flow_enabled(p, index);
     Widget *w = widget(p, id, type, A_SETTING, enabled);
@@ -1106,19 +1123,24 @@ static void flow_choice(Panel *p, uint32_t id, const char *text, size_t index,
     }
     bool missing = false;
     if (!strcmp(fields[index].key, "logo.enabled") || !strcmp(fields[index].key, "text.enabled")) {
-        int path = find_field(!strcmp(fields[index].key, "logo.enabled") ? "logo.path" : "text.font");
+        int path =
+            find_field(!strcmp(fields[index].key, "logo.enabled") ? "logo.path" : "text.font");
         const char *resource = p->edit[path].dirty ? p->edit[path].value
-                              : !strcmp(fields[index].key, "logo.enabled") ? p->snapshot.config.logo_path
-                                                                          : p->snapshot.config.text_font;
+                               : !strcmp(fields[index].key, "logo.enabled")
+                                   ? p->snapshot.config.logo_path
+                                   : p->snapshot.config.text_font;
         missing = resource[0] == '/' && access(resource, R_OK);
     }
     CLAY({.id = element_id(id),
           .layout = {.sizing = {.width = CLAY_SIZING_FIXED(width),
                                 .height = CLAY_SIZING_FIXED(height)},
                      .childAlignment = {.x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER}},
-          .backgroundColor = selected ? (Clay_Color){35, 63, 83, 255}
-                             : hot(id) && enabled ? hovered : surface,
-          .border = {.color = missing ? danger : p->focus == id || (selected && enabled) ? accent : line,
+          .backgroundColor = selected             ? (Clay_Color){35, 63, 83, 255}
+                             : hot(id) && enabled ? hovered
+                                                  : surface,
+          .border = {.color = missing                                   ? danger
+                              : p->focus == id || (selected && enabled) ? accent
+                                                                        : line,
                      .width = outline_width}})
     {
         label(text, 0, enabled ? selected ? accent : foreground : muted);
@@ -1152,14 +1174,16 @@ static void flow_slider(Panel *p, const char *key)
     }
     const FieldSpec *f = &fields[index];
     uint32_t id = 1000 + (uint32_t)index * 3;
-    double value = strtod(flow_value(p, (size_t)index), NULL);
+    flow_value(p, (size_t)index);
     bool enabled = flow_enabled(p, (size_t)index);
     CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
-                     .layoutDirection = CLAY_TOP_TO_BOTTOM, .childGap = 6,
+                     .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                     .childGap = 6,
                      .padding = {0, 0, 6, 8}}})
     {
         label(f->label, 1, secondary);
-        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 10,
+        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
+                         .childGap = 10,
                          .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
         {
             Widget *w = widget(p, id, W_SLIDER, A_FIELD, enabled);
@@ -1172,13 +1196,15 @@ static void flow_slider(Panel *p, const char *key)
                                         .height = CLAY_SIZING_FIXED(30)}},
                   .border = {.color = p->focus == id ? accent : background,
                              .width = p->focus == id ? outline_width : (Clay_BorderWidth){0}},
-                  .custom = {.customData = (void *)(uintptr_t)(FLOW_DATA_BASE +
-                               FLOW_SLIDER_DATA + (index << 4))}}) {}
-            CLAY({.layout = {.sizing = {.width = CLAY_SIZING_FIXED(72)},
-                             .childAlignment = {.x = CLAY_ALIGN_X_RIGHT}}})
+                  .custom = {.customData = (void *)(uintptr_t)(FLOW_DATA_BASE + FLOW_SLIDER_DATA +
+                                                               (index << 4))}})
             {
-                label(flow_slider_label(p, (size_t)index, value), 0,
-                      enabled ? foreground : muted);
+            }
+            CLAY({.layout = {.sizing = {.width = CLAY_SIZING_FIXED(72),
+                                        .height = CLAY_SIZING_FIXED(30)}},
+                  .custom = {.customData = (void *)(uintptr_t)(FLOW_DATA_BASE + FLOW_VALUE_DATA +
+                                                               (index << 4))}})
+            {
             }
         }
         flow_note(p, (size_t)index);
@@ -1196,20 +1222,18 @@ static void flow_combo(Panel *p, size_t index)
     }
     float available = p->open_menu ? fminf(360, p->width - 32) - 72 : fminf(p->width, 520) - 90;
     CLAY({.id = element_id(id),
-          .layout = {.sizing = {.width = CLAY_SIZING_GROW(),
-                                .height = CLAY_SIZING_FIXED(36)},
+          .layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_FIXED(36)},
                      .padding = {10, 26, 0, 0},
                      .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}},
           .backgroundColor = hot(id) && enabled ? hovered : surface,
           .border = {.color = p->focus == id ? accent : line, .width = outline_width}})
     {
         const char *value = flow_value(p, index);
-        const char *empty = !strcmp(f->key, "capture.monitor") ? "Selected monitor"
-                            : !strcmp(f->key, "audio.mic_source") ? "Default microphone"
+        const char *empty = !strcmp(f->key, "capture.monitor")        ? "Selected monitor"
+                            : !strcmp(f->key, "audio.mic_source")     ? "Default microphone"
                             : !strcmp(f->key, "audio.desktop_source") ? "Choose desktop source"
-                            : "Choose camera";
-        label(fit_text(p, value[0] ? value : empty, available, 1), 1,
-              enabled ? foreground : muted);
+                                                                      : "Choose camera";
+        label(fit_text(p, value[0] ? value : empty, available, 1), 1, enabled ? foreground : muted);
     }
     (void)f;
 }
@@ -1226,7 +1250,8 @@ static void flow_color(Panel *p, const char *key)
     char validation[CAST_ERR];
     bool invalid = validate_field(f, value, validation, sizeof validation) != 0;
     CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
-                     .layoutDirection = CLAY_TOP_TO_BOTTOM, .childGap = 6,
+                     .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                     .childGap = 6,
                      .padding = {0, 0, 6, 6}}})
     {
         label(f->label, 1, secondary);
@@ -1236,22 +1261,27 @@ static void flow_color(Panel *p, const char *key)
             w->draft = p->draft_context;
         }
         CLAY({.id = element_id(id),
-              .layout = {.sizing = {.width = CLAY_SIZING_GROW(),
-                                    .height = CLAY_SIZING_FIXED(36)},
-                         .padding = {10, 10, 0, 0}, .childGap = 10,
+              .layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_FIXED(36)},
+                         .padding = {10, 10, 0, 0},
+                         .childGap = 10,
                          .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}},
               .backgroundColor = hot(id) && enabled ? hovered : surface,
-              .border = {.color = invalid ? danger : p->focus == id ? accent : line,
+              .border = {.color = invalid          ? danger
+                                  : p->focus == id ? accent
+                                                   : line,
                          .width = outline_width}})
         {
             CLAY({.layout = {.sizing = {.width = CLAY_SIZING_FIXED(20),
                                         .height = CLAY_SIZING_FIXED(20)}},
-                  .custom = {.customData = (void *)(uintptr_t)(FLOW_DATA_BASE +
-                               FLOW_COLOR_DATA + (index << 4))}}) {}
-            label(fit_text(p, value, fminf(p->width, 520) - 102, 1), 1, enabled ? foreground : muted);
+                  .custom = {.customData = (void *)(uintptr_t)(FLOW_DATA_BASE + FLOW_COLOR_DATA +
+                                                               (index << 4))}})
+            {
+            }
+            label(fit_text(p, value, fminf(p->width, 520) - 102, 1), 1,
+                  enabled ? foreground : muted);
         }
         if (invalid) {
-            text_wrapped(validation, danger);
+            text_wrapped(format(p, "%s", validation), danger);
         }
         flow_note(p, (size_t)index);
     }
@@ -1271,15 +1301,15 @@ static void flow_field_control(Panel *p, size_t index)
     bool enabled = flow_enabled(p, index);
     const char *value = flow_value(p, index);
     CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
-                     .layoutDirection = CLAY_TOP_TO_BOTTOM, .childGap = 6,
+                     .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                     .childGap = 6,
                      .padding = {0, 0, 6, 8}}})
     {
         label(f->label, 1, secondary);
         if (f->type == FIELD_BOOL) {
             CLAY({.layout = {.childGap = 0}})
             {
-                flow_choice(p, id, "On", index, "true", !strcmp(value, "true"), 60, 30,
-                            W_BUTTON);
+                flow_choice(p, id, "On", index, "true", !strcmp(value, "true"), 60, 30, W_BUTTON);
                 flow_choice(p, id + 2, "Off", index, "false", !strcmp(value, "false"), 60, 30,
                             W_BUTTON);
             }
@@ -1292,15 +1322,19 @@ static void flow_field_control(Panel *p, size_t index)
                 w->draft = p->draft_context;
             }
             char validation[CAST_ERR];
-            bool invalid = p->edit[index].dirty &&
-                           validate_field(f, value, validation, sizeof validation);
+            bool invalid =
+                p->edit[index].dirty && validate_field(f, value, validation, sizeof validation);
             CLAY({.id = element_id(id),
                   .layout = {.sizing = {.width = CLAY_SIZING_GROW(),
                                         .height = CLAY_SIZING_FIXED(36)}},
                   .backgroundColor = surface,
-                  .border = {.color = invalid ? danger : p->focus == id ? accent : line,
+                  .border = {.color = invalid          ? danger
+                                      : p->focus == id ? accent
+                                                       : line,
                              .width = outline_width},
-                  .custom = {.customData = (void *)(uintptr_t)(index + 1)}}) {}
+                  .custom = {.customData = (void *)(uintptr_t)(index + 1)}})
+            {
+            }
             if (!p->draft_context && p->edit[index].dirty && !(f->flags & READ_ONLY)) {
                 button(p, id + 1, "Apply", enabled, false, A_APPLY, (int)index);
             }
@@ -1318,7 +1352,8 @@ static void flow_chips(Panel *p, const char *key)
     int count = choice_count(fields[index].choices);
     float width = fminf(108, (fminf(p->width, 520) - 44 - (count - 1) * 6) / count);
     CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
-                     .layoutDirection = CLAY_TOP_TO_BOTTOM, .childGap = 6,
+                     .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                     .childGap = 6,
                      .padding = {0, 0, 6, 8}}})
     {
         label(fields[index].label, 1, secondary);
@@ -1327,9 +1362,14 @@ static void flow_chips(Panel *p, const char *key)
             for (int i = 0; i < count; i++) {
                 char value[128];
                 choice_value(fields[index].choices, i, value, sizeof value);
+                char display[sizeof value];
+                snprintf(display, sizeof display, "%s", value);
+                if (display[0] >= 'a' && display[0] <= 'z') {
+                    display[0] -= 'a' - 'A';
+                }
                 flow_choice(p, 8000 + (uint32_t)index * 16 + (uint32_t)i,
-                            fit_text(p, value, width - 12, 0), (size_t)index, value,
-                            !strcmp(current, value), width, 30, W_BUTTON);
+                            fit_text(p, format(p, "%s", display), width - 12, 0), (size_t)index,
+                            value, !strcmp(current, value), width, 30, W_BUTTON);
             }
         }
         flow_note(p, (size_t)index);
@@ -1342,7 +1382,8 @@ static void flow_device_picker(Panel *p, const char *key)
         return;
     }
     CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
-                     .layoutDirection = CLAY_TOP_TO_BOTTOM, .childGap = 6,
+                     .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                     .childGap = 6,
                      .padding = {0, 0, 6, 8}}})
     {
         label(fields[index].label, 1, secondary);
@@ -1406,15 +1447,19 @@ static void flow_layout_thumbnails(Panel *p)
                 }
                 CLAY({.id = element_id(id),
                       .layout = {.sizing = {.width = CLAY_SIZING_FIXED(72)},
-                                 .layoutDirection = CLAY_TOP_TO_BOTTOM, .childGap = 6},
+                                 .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                                 .childGap = 6},
                       .border = {.color = selected || p->focus == id ? accent : line,
                                  .width = outline_width}})
                 {
                     CLAY({.layout = {.sizing = {.width = CLAY_SIZING_FIXED(72),
                                                 .height = CLAY_SIZING_FIXED(44)}},
                           .backgroundColor = hot(id) ? hovered : surface,
-                          .custom = {.customData = (void *)(uintptr_t)(FLOW_DATA_BASE +
-                                       FLOW_LAYOUT_DATA + (i << 4))}}) {}
+                          .custom = {.customData =
+                                         (void *)(uintptr_t)(FLOW_DATA_BASE + FLOW_LAYOUT_DATA +
+                                                             (i << 4))}})
+                    {
+                    }
                     CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
                                      .padding = {0, 0, 0, 6},
                                      .childAlignment = {.x = CLAY_ALIGN_X_CENTER}}})
@@ -1430,19 +1475,23 @@ static void flow_matrix(Panel *p)
 {
     const char *columns[] = {"VC", "Rec", "Stream"};
     const char *keys[] = {"annotations.virtual_clicks", "annotations.record_clicks",
-                         "annotations.stream_clicks", "annotations.virtual_keys",
-                         "annotations.record_keys", "annotations.stream_keys"};
+                          "annotations.stream_clicks",  "annotations.virtual_keys",
+                          "annotations.record_keys",    "annotations.stream_keys"};
     CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
-                     .layoutDirection = CLAY_TOP_TO_BOTTOM, .childGap = 6}})
+                     .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                     .childGap = 6}})
     {
         for (int row = -1; row < 2; row++) {
-            CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 8,
+            CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
+                             .childGap = 8,
                              .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
             {
                 CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}}})
                 {
-                    label(row < 0 ? "Output" : row == 0 ? "Click indicators" : "Keystrokes", 0,
-                          secondary);
+                    label(row < 0    ? "Output"
+                          : row == 0 ? "Click indicators"
+                                     : "Keystrokes",
+                          0, secondary);
                 }
                 for (int col = 0; col < 3; col++) {
                     CLAY({.layout = {.sizing = {.width = CLAY_SIZING_FIXED(48)},
@@ -1453,9 +1502,9 @@ static void flow_matrix(Panel *p)
                         } else {
                             int index = find_field(keys[row * 3 + col]);
                             bool selected = !strcmp(flow_value(p, (size_t)index), "true");
-                            flow_choice(p, 8700 + (uint32_t)(row * 3 + col),
-                                        selected ? "✓" : "", (size_t)index,
-                                        selected ? "false" : "true", selected, 28, 28, W_BUTTON);
+                            flow_choice(p, 8700 + (uint32_t)(row * 3 + col), selected ? "✓" : "",
+                                        (size_t)index, selected ? "false" : "true", selected, 28,
+                                        28, W_BUTTON);
                         }
                     }
                 }
@@ -1496,13 +1545,16 @@ static void flow_overflow(Panel *p, int lane)
         w->index = lane;
     }
     CLAY({.id = element_id(id),
-          .layout = {.sizing = {.width = CLAY_SIZING_FIXED(28),
-                                .height = CLAY_SIZING_FIXED(28)},
+          .layout = {.sizing = {.width = CLAY_SIZING_FIXED(28), .height = CLAY_SIZING_FIXED(28)},
                      .childAlignment = {.x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER}},
           .backgroundColor = hot(id) ? hovered : surface,
           .border = {.color = p->focus == id ? accent : line, .width = outline_width}})
     {
-        label("⋯", 1, foreground);
+        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_FIXED(14),
+                                    .height = CLAY_SIZING_FIXED(14)}},
+              .custom = {.customData = (void *)(uintptr_t)(FLOW_DATA_BASE + FLOW_OVERFLOW_DATA)}})
+        {
+        }
     }
 }
 static void flow_overflow_layout(Panel *p)
@@ -1517,14 +1569,19 @@ static void flow_overflow_layout(Panel *p)
     }
     float width = fminf(360, p->width - 32);
     float height = fminf(p->open_menu == 1 ? 186 : p->open_menu == 3 ? 190 : 420, p->height - 150);
-    float x = fmaxf(16, fminf(anchor.boundingBox.x + anchor.boundingBox.width - width,
-                            p->width - width - 16));
+    float x = fmaxf(
+        16, fminf(anchor.boundingBox.x + anchor.boundingBox.width - width, p->width - width - 16));
     float y = anchor.boundingBox.y + anchor.boundingBox.height + 4;
     if (y + height > p->height - 58) {
         y = fmaxf(16, anchor.boundingBox.y - height - 4);
     }
     Clay_ElementData viewport = Clay_GetElementData(CLAY_ID("SettingsScroll"));
     if (viewport.found) {
+        Clay_ElementData draft = Clay_GetElementData(CLAY_ID("DraftBar"));
+        if (draft.found && draft.boundingBox.y > viewport.boundingBox.y) {
+            viewport.boundingBox.height =
+                fminf(viewport.boundingBox.height, draft.boundingBox.y - viewport.boundingBox.y);
+        }
         height = fminf(height, viewport.boundingBox.height);
         y = fmaxf(viewport.boundingBox.y,
                   fminf(y, viewport.boundingBox.y + viewport.boundingBox.height - height));
@@ -1532,7 +1589,8 @@ static void flow_overflow_layout(Panel *p)
     CLAY({.id = CLAY_ID("LaneMenu"),
           .layout = {.sizing = {.width = CLAY_SIZING_FIXED(width),
                                 .height = CLAY_SIZING_FIXED(height)},
-                     .layoutDirection = CLAY_TOP_TO_BOTTOM, .childGap = 8,
+                     .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                     .childGap = 8,
                      .padding = {12, 12, 12, 12}},
           .backgroundColor = surface,
           .border = {.color = line, .width = outline_width},
@@ -1809,16 +1867,20 @@ static void section_actions(Panel *p, int section)
     (void)p;
     if (section == 2) {
         text_wrapped("Screen margins, radius, borders and camera-slot backdrop use the same "
-                     "session-only Apply flow.", muted);
+                     "session-only Apply flow.",
+                     muted);
     } else if (section == 3) {
         text_wrapped("Overlays sit above sources; pause replaces them, freeze/blur include them. "
-                     "Static text is literal; placeholders are not expanded.", muted);
+                     "Static text is literal; placeholders are not expanded.",
+                     muted);
     } else if (section == 4) {
         text_wrapped("Clicks and keystrokes are composed once and shown per output. Input observed "
-                     "during privacy pause is discarded, never replayed.", muted);
+                     "during privacy pause is discarded, never replayed.",
+                     muted);
     } else if (section == 5) {
         text_wrapped("Shared styling: every output that is paused or blurred shows the same text, "
-                     "colours and font.", muted);
+                     "colours and font.",
+                     muted);
     }
 }
 static const char *section_summary(Panel *p, int section)
@@ -1826,11 +1888,10 @@ static const char *section_summary(Panel *p, int section)
     const Config *c = &p->snapshot.config;
     switch (section) {
     case 0:
-        return format(p, "%s · %s · %s",
-                      !strcmp(c->capture_kind, "monitor") && c->monitor[0] ? c->monitor
-                                                                          : c->capture_kind,
-                      c->layout, p->snapshot.current_preset[0] ? p->snapshot.current_preset
-                                                              : "preset —");
+        return format(
+            p, "%s · %s · %s",
+            !strcmp(c->capture_kind, "monitor") && c->monitor[0] ? c->monitor : c->capture_kind,
+            c->layout, p->snapshot.current_preset[0] ? p->snapshot.current_preset : "preset —");
     case 1:
         return format(p, "%s · %s · %.0f%%%s", c->shape, c->anchor, c->camera_width_percent,
                       c->mirror ? " · mirror" : "");
@@ -1843,10 +1904,10 @@ static const char *section_summary(Panel *p, int section)
     case 4: {
         unsigned clicks = c->annotations_virtual_clicks + c->annotations_record_clicks +
                           c->annotations_stream_clicks;
-        unsigned keys = c->annotations_virtual_keys + c->annotations_record_keys +
-                        c->annotations_stream_keys;
-        return format(p, "cursor %s · clicks %u/3 · keys %u/3", c->cursor ? "on" : "off",
-                      clicks, keys);
+        unsigned keys =
+            c->annotations_virtual_keys + c->annotations_record_keys + c->annotations_stream_keys;
+        return format(p, "cursor %s · clicks %u/3 · keys %u/3", c->cursor ? "on" : "off", clicks,
+                      keys);
     }
     default:
         return "pause & blur screen text — shared styling for every output";
@@ -1926,13 +1987,18 @@ static void missing_resource(Panel *p, const char *key, bool path_only)
         return;
     }
     if (*path == '/') {
-        text_wrapped(format(p, "%s — %s. Apply remains available; a rejected resource keeps "
-                               "the current configuration and outputs unchanged.", path,
+        text_wrapped(format(p,
+                            "%s — %s. Apply remains available; a rejected resource keeps "
+                            "the current configuration and outputs unchanged.",
+                            path,
                             errno == ENOENT || errno == ENOTDIR ? "not found" : "not readable"),
                      danger);
     } else {
-        text_wrapped(format(p, "%s — not accessible from the panel working directory; the daemon "
-                               "resolves the path from its own working directory.", path), muted);
+        text_wrapped(format(p,
+                            "%s — not accessible from the panel working directory; the daemon "
+                            "resolves the path from its own working directory.",
+                            path),
+                     muted);
     }
 }
 static bool active_backdrop_field(Panel *p, const FieldSpec *f)
@@ -1948,9 +2014,9 @@ static bool active_backdrop_field(Panel *p, const FieldSpec *f)
             return false;
         }
     }
-    if ((!strcmp(f->key, "background.source") ||
-         !strcmp(f->key, "screen.background_blur_radius") ||
-         !strcmp(f->key, "screen.background_brightness")) && strcmp(mode, "blurred")) {
+    if ((!strcmp(f->key, "background.source") || !strcmp(f->key, "screen.background_blur_radius") ||
+         !strcmp(f->key, "screen.background_brightness")) &&
+        strcmp(mode, "blurred")) {
         return false;
     }
     return strcmp(f->key, "screen.background_color") || !strcmp(mode, "solid");
@@ -1986,8 +2052,8 @@ static void source_essentials(Panel *p, bool shown[FIELD_COUNT])
     compose_group("Preset");
     CLAY({.layout = {.childGap = 6}})
     {
-        button(p, 40, "Preset", p->snapshot.connected && p->snapshot.config.preset_count > 0,
-               false, A_DROPDOWN, -1);
+        button(p, 40, "Preset", p->snapshot.connected && p->snapshot.config.preset_count > 0, false,
+               A_DROPDOWN, -1);
         p->widgets[p->widget_count - 1].type = W_SELECT;
         command_button(p, 92, "Previous", p->snapshot.connected, "preset", "prev", NULL);
         command_button(p, 41, "Next", p->snapshot.connected, "preset", "next", NULL);
@@ -2010,25 +2076,30 @@ static void compose_essentials(Panel *p, int section, bool shown[FIELD_COUNT])
                          muted);
         } else if (!strcmp(layout, "camera")) {
             text_wrapped("Camera layout fills the frame with the camera alone. Position and size "
-                         "below apply to Overlay, Stage and Split.", muted);
+                         "below apply to Overlay, Stage and Split.",
+                         muted);
         } else if (!strcmp(layout, "stage")) {
-            const char *opposite = !strcmp(anchor, "top-left") ? "bottom-right"
-                                   : !strcmp(anchor, "top") ? "bottom"
-                                   : !strcmp(anchor, "top-right") ? "bottom-left"
-                                   : !strcmp(anchor, "left") ? "right"
-                                   : !strcmp(anchor, "right") ? "left"
-                                   : !strcmp(anchor, "bottom-left") ? "top-right"
-                                   : !strcmp(anchor, "bottom") ? "top"
-                                   : !strcmp(anchor, "bottom-right") ? "top-left" : "automatic";
-            text_wrapped(format(p, "Camera sits %s · screen sits opposite (%s). When sizes "
-                                   "overlap, the camera renders in front.", anchor, opposite),
+            const char *opposite = !strcmp(anchor, "top-left")       ? "bottom-right"
+                                   : !strcmp(anchor, "top")          ? "bottom"
+                                   : !strcmp(anchor, "top-right")    ? "bottom-left"
+                                   : !strcmp(anchor, "left")         ? "right"
+                                   : !strcmp(anchor, "right")        ? "left"
+                                   : !strcmp(anchor, "bottom-left")  ? "top-right"
+                                   : !strcmp(anchor, "bottom")       ? "top"
+                                   : !strcmp(anchor, "bottom-right") ? "top-left"
+                                                                     : "automatic";
+            text_wrapped(format(p,
+                                "Camera sits %s · screen sits opposite (%s). When sizes "
+                                "overlap, the camera renders in front.",
+                                anchor, opposite),
                          muted);
         } else {
             text_wrapped(!strcmp(layout, "split")
                              ? "Split uses the camera-side and split-ratio controls in All "
                                "settings; the anchor is retained for Overlay and Stage."
                              : "The camera sits at its chosen anchor over the screen; size is its "
-                               "width as a percentage of the canvas.", muted);
+                               "width as a percentage of the canvas.",
+                         muted);
         }
         mark_compose_field(shown, "camera.anchor");
         compose_group("Size");
@@ -2114,24 +2185,31 @@ static void compose_all(Panel *p, int section, const bool shown[FIELD_COUNT])
             if (tab == TAB_SOURCE && group == 1) {
                 text_wrapped("Mask covers the panel and preview with your chosen color. For "
                              "unobstructed capture, select an application window or keep the "
-                             "controls outside the captured monitor or region.", secondary);
+                             "controls outside the captured monitor or region.",
+                             secondary);
             }
             if (tab == TAB_CAMERA && group == 1) {
                 text_wrapped("Free positioning is selected via cast camera anchor free. The "
                              "coordinates below adjust that existing position; drag-in-preview "
-                             "is not available.", muted);
+                             "is not available.",
+                             muted);
             }
             if (section == 2 && tab == TAB_SOURCE && group == 4) {
                 text_wrapped("When the screen and camera sizes overlap, the camera renders in "
-                             "front. Aspect ratios are preserved.", muted);
+                             "front. Aspect ratios are preserved.",
+                             muted);
             }
             if (tab == TAB_SETTINGS && group >= 4) {
                 text_wrapped("Title, subtitle and footer are optional. Templates: {date}, {time}, "
-                             "{datetime:%A, %d %B · %H:%M}.", muted);
-                text_wrapped(format(p, "Font is config-only: output.%s_font = %s; reload the "
-                                       "config file.", group == 4 ? "pause" : "blur",
+                             "{datetime:%A, %d %B · %H:%M}.",
+                             muted);
+                text_wrapped(format(p,
+                                    "Font is config-only: output.%s_font = %s; reload the "
+                                    "config file.",
+                                    group == 4 ? "pause" : "blur",
                                     group == 4 ? p->snapshot.config.pause_font
-                                               : p->snapshot.config.blur_font), muted);
+                                               : p->snapshot.config.blur_font),
+                             muted);
             }
             for (size_t i = 0; i < FIELD_COUNT; i++) {
                 if (!shown[i] && fields[i].tab == tab && fields[i].group == group &&
@@ -2153,7 +2231,8 @@ static void compose_all(Panel *p, int section, const bool shown[FIELD_COUNT])
         command_button(p, 85, "Reload config file", p->snapshot.connected, "config", "reload",
                        NULL);
         text_wrapped("Reload preserves each lane's pause/freeze/blur flags and never resumes "
-                     "outputs. Navigation and drafts are session only.", muted);
+                     "outputs. Navigation and drafts are session only.",
+                     muted);
     }
     if (section == 4) {
         command_button(p, 84, "Clear now", p->snapshot.connected, "keys", "clear", NULL);
@@ -2198,7 +2277,8 @@ static void stream_setup_body(Panel *p)
         }
         text_wrapped("Keep the stream key in a regular file only you can read (600). Advanced "
                      "network controls are set in [stream] of the configuration file. Stop "
-                     "streaming to change connection settings.", muted);
+                     "streaming to change connection settings.",
+                     muted);
         button(p, 153, "Cancel", true, false, A_SETUP, 0);
     }
 }
@@ -2259,11 +2339,11 @@ static void operate_body(Panel *p)
 }
 static void pinned_drafts(Panel *p)
 {
-    int section = p->view == VIEW_SETUP ? 7
+    int section = p->view == VIEW_SETUP     ? 7
                   : p->view == VIEW_SECTION ? p->open_section
-                  : p->open_menu == 2 ? 8
-                  : p->open_menu == 4 ? 6
-                                      : -1;
+                  : p->open_menu == 2       ? 8
+                  : p->open_menu == 4       ? 6
+                                            : -1;
     unsigned count = 0;
     for (size_t i = 0; i < FIELD_COUNT; i++) {
         count += section >= 0 && field_in_section(&fields[i], section) && p->edit[i].dirty;
@@ -2422,8 +2502,9 @@ static void footer(Panel *p)
 static int flow_option_count(const Panel *p)
 {
     return p->dropdown_field < 0 ? p->snapshot.config.preset_count
-           : fields[p->dropdown_field].type == FIELD_TEXT ? p->device_count
-                                                         : choice_count(fields[p->dropdown_field].choices);
+           : fields[p->dropdown_field].type == FIELD_TEXT
+               ? p->device_count
+               : choice_count(fields[p->dropdown_field].choices);
 }
 static void flow_option_value(Panel *p, int choice, char *value, size_t length)
 {
@@ -2456,6 +2537,11 @@ static void dropdown_layout(Panel *p)
     }
     Clay_ElementData viewport = Clay_GetElementData(CLAY_ID("SettingsScroll"));
     if (viewport.found) {
+        Clay_ElementData draft = Clay_GetElementData(CLAY_ID("DraftBar"));
+        if (draft.found && draft.boundingBox.y > viewport.boundingBox.y) {
+            viewport.boundingBox.height =
+                fminf(viewport.boundingBox.height, draft.boundingBox.y - viewport.boundingBox.y);
+        }
         height = fminf(height, viewport.boundingBox.height);
         y = fmaxf(viewport.boundingBox.y,
                   fminf(y, viewport.boundingBox.y + viewport.boundingBox.height - height));
@@ -2463,21 +2549,25 @@ static void dropdown_layout(Panel *p)
     CLAY({.id = CLAY_ID("Dropdown"),
           .layout = {.sizing = {.width = CLAY_SIZING_FIXED(width),
                                 .height = CLAY_SIZING_FIXED(height)},
-                     .padding = {4, 4, 4, 4}, .layoutDirection = CLAY_TOP_TO_BOTTOM},
+                     .padding = {4, 4, 4, 4},
+                     .layoutDirection = CLAY_TOP_TO_BOTTOM},
           .backgroundColor = surface,
           .border = {.color = line, .width = outline_width},
           .floating = {.offset = {x, y}, .attachTo = CLAY_ATTACH_TO_ROOT, .zIndex = 12},
           .clip = {.vertical = true, .childOffset = Clay_GetScrollOffset()}})
     {
         if (!count) {
-            text_wrapped(p->device_request ? "Discovering devices…" : "No devices found.", secondary);
+            text_wrapped(p->device_request ? "Discovering devices…" : "No devices found.",
+                         secondary);
         }
         for (int i = 0; i < count; i++) {
             char value[256];
             flow_option_value(p, i, value, sizeof value);
             bool selected = i == p->dropdown_choice;
-            const char *name = p->dropdown_field >= 0 && fields[p->dropdown_field].type == FIELD_TEXT
-                                   ? p->device_labels[i] : value;
+            const char *name =
+                p->dropdown_field >= 0 && fields[p->dropdown_field].type == FIELD_TEXT
+                    ? p->device_labels[i]
+                    : value;
             Widget *w = widget(p, 400 + (uint32_t)i, W_OPTION, A_OPTION, true);
             if (w) {
                 w->index = i;
@@ -2486,10 +2576,12 @@ static void dropdown_layout(Panel *p)
             CLAY({.id = element_id(400 + (uint32_t)i),
                   .layout = {.sizing = {.width = CLAY_SIZING_GROW(),
                                         .height = CLAY_SIZING_FIXED(32)},
-                             .padding = {8, 8, 0, 0}, .childGap = 8,
+                             .padding = {8, 8, 0, 0},
+                             .childGap = 8,
                              .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}},
-                  .backgroundColor = selected ? (Clay_Color){35, 63, 83, 255}
-                                     : hot(400 + (uint32_t)i) ? hovered : surface})
+                  .backgroundColor = selected                 ? (Clay_Color){35, 63, 83, 255}
+                                     : hot(400 + (uint32_t)i) ? hovered
+                                                              : surface})
             {
                 CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}}})
                 {
@@ -2531,6 +2623,11 @@ static void flow_color_layout(Panel *p)
     }
     Clay_ElementData viewport = Clay_GetElementData(CLAY_ID("SettingsScroll"));
     if (viewport.found) {
+        Clay_ElementData draft = Clay_GetElementData(CLAY_ID("DraftBar"));
+        if (draft.found && draft.boundingBox.y > viewport.boundingBox.y) {
+            viewport.boundingBox.height =
+                fminf(viewport.boundingBox.height, draft.boundingBox.y - viewport.boundingBox.y);
+        }
         height = fminf(height, viewport.boundingBox.height);
         y = fmaxf(viewport.boundingBox.y,
                   fminf(y, viewport.boundingBox.y + viewport.boundingBox.height - height));
@@ -2538,7 +2635,8 @@ static void flow_color_layout(Panel *p)
     CLAY({.id = CLAY_ID("ColorPopup"),
           .layout = {.sizing = {.width = CLAY_SIZING_FIXED(width),
                                 .height = CLAY_SIZING_FIXED(height)},
-                     .layoutDirection = CLAY_TOP_TO_BOTTOM, .childGap = 8,
+                     .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                     .childGap = 8,
                      .padding = {12, 12, 12, 12}},
           .backgroundColor = surface,
           .border = {.color = line, .width = outline_width},
@@ -2551,7 +2649,8 @@ static void flow_color_layout(Panel *p)
                 for (int col = 0; col < 8; col++) {
                     int swatch = row * 8 + col;
                     uint32_t id = 6000 + (uint32_t)swatch;
-                    Widget *w = widget(p, id, W_BUTTON, A_SWATCH, flow_enabled(p, (size_t)p->color_field));
+                    Widget *w =
+                        widget(p, id, W_BUTTON, A_SWATCH, flow_enabled(p, (size_t)p->color_field));
                     if (w) {
                         w->index = p->color_field;
                         w->draft = true;
@@ -2562,7 +2661,9 @@ static void flow_color_layout(Panel *p)
                                                 .height = CLAY_SIZING_FIXED(28)}},
                           .backgroundColor = flow_hex_color(flow_swatches[swatch]),
                           .border = {.color = p->focus == id || hot(id) ? accent : line,
-                                     .width = outline_width}}) {}
+                                     .width = outline_width}})
+                    {
+                    }
                 }
             }
         }
@@ -2574,15 +2675,18 @@ static void flow_color_layout(Panel *p)
             w->draft = true;
         }
         char validation[CAST_ERR];
-        bool invalid = validate_field(&fields[index], p->edit[index].value,
-                                      validation, sizeof validation) != 0;
+        bool invalid = validate_field(&fields[index], p->edit[index].value, validation,
+                                      sizeof validation) != 0;
         CLAY({.id = element_id(id),
-              .layout = {.sizing = {.width = CLAY_SIZING_GROW(),
-                                    .height = CLAY_SIZING_FIXED(36)}},
+              .layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_FIXED(36)}},
               .backgroundColor = background,
-              .border = {.color = invalid ? danger : p->focus == id ? accent : line,
+              .border = {.color = invalid          ? danger
+                                  : p->focus == id ? accent
+                                                   : line,
                          .width = outline_width},
-              .custom = {.customData = (void *)(uintptr_t)(index + 1)}}) {}
+              .custom = {.customData = (void *)(uintptr_t)(index + 1)}})
+        {
+        }
         if (invalid) {
             text_wrapped("Enter a valid #RRGGBB color.", danger);
         }
@@ -2641,11 +2745,13 @@ static Clay_RenderCommandArray layout(Panel *p)
         }
     }
     if (p->lane_jump && p->view == VIEW_OPERATE) {
-        Clay_ElementData card = Clay_GetElementData(CLAY_IDI("LaneCard", (uint32_t)p->lane_jump - 1));
+        Clay_ElementData card =
+            Clay_GetElementData(CLAY_IDI("LaneCard", (uint32_t)p->lane_jump - 1));
         Clay_ElementData area = Clay_GetElementData(CLAY_ID("SettingsScroll"));
         Clay_ScrollContainerData body = Clay_GetScrollContainerData(CLAY_ID("SettingsScroll"));
         if (card.found && area.found && body.found) {
-            body.scrollPosition->y = fminf(0, body.scrollPosition->y + area.boundingBox.y - card.boundingBox.y);
+            body.scrollPosition->y =
+                fminf(0, body.scrollPosition->y + area.boundingBox.y - card.boundingBox.y);
             p->lane_jump = 0;
         }
     }
@@ -2841,6 +2947,10 @@ static void draw_icon(Panel *p, SDL_FRect box, uintptr_t data)
     case ICON_CHEVRON:
         L(4, 6, 8, 10);
         L(8, 10, 12, 6);
+        break;
+    case ICON_CHEVRON_UP:
+        L(4, 10, 8, 6);
+        L(8, 6, 12, 10);
         break;
     case ICON_DOT:
         color(p, (Clay_Color){(float)((data >> 40) & 255), (float)((data >> 32) & 255),
@@ -3064,12 +3174,64 @@ static bool list_command_visible(const Panel *p, Clay_BoundingBox box)
     }
     return true;
 }
+/* Inter's bundled face has proportional default numerals. Keep native value
+ * labels stable by centering each cached digit in the widest digit advance;
+ * punctuation and units retain their normal advances from the same face. */
+static void flow_draw_value(Panel *p, SDL_FRect box, size_t index)
+{
+    TTF_Font *font = text_font(p, 0, false);
+    int digit_width = 0, height;
+    for (char digit = '0'; digit <= '9'; digit++) {
+        int advance;
+        TTF_GetStringSize(font, &digit, 1, &advance, &height);
+        if (advance > digit_width) {
+            digit_width = advance;
+        }
+    }
+    double value = strtod(p->edit[index].value, NULL);
+    const char *text = flow_slider_label(p, index, value);
+    size_t length = strlen(text);
+    float width = 0;
+    for (size_t offset = 0; offset < length;) {
+        size_t next = offset + 1;
+        while (next < length && ((unsigned char)text[next] & 0xc0) == 0x80) {
+            next++;
+        }
+        int advance;
+        TTF_GetStringSize(font, text + offset, next - offset, &advance, &height);
+        width += text[offset] >= '0' && text[offset] <= '9' ? digit_width : advance;
+        offset = next;
+    }
+    float x = box.x + box.w - width;
+    float y = box.y + (box.h - TTF_GetFontHeight(font)) / 2;
+    Clay_Color ink = flow_enabled(p, index) ? foreground : muted;
+    for (size_t offset = 0; offset < length;) {
+        size_t next = offset + 1;
+        while (next < length && ((unsigned char)text[next] & 0xc0) == 0x80) {
+            next++;
+        }
+        int advance;
+        TTF_GetStringSize(font, text + offset, next - offset, &advance, &height);
+        bool digit = text[offset] >= '0' && text[offset] <= '9';
+        float cell = digit ? digit_width : advance;
+        draw_text(p, text + offset, next - offset, 0, ink, x + (cell - advance) / 2, y);
+        x += cell;
+        offset = next;
+    }
+}
+
 static void flow_draw_control(Panel *p, SDL_FRect box, uintptr_t data)
 {
     unsigned value = (unsigned)(data - FLOW_DATA_BASE);
     unsigned kind = value & 15;
     unsigned index = value >> 4;
-    if (kind == FLOW_PENDING_DATA) {
+    if (kind == FLOW_VALUE_DATA && index < FIELD_COUNT) {
+        flow_draw_value(p, box, index);
+    } else if (kind == FLOW_OVERFLOW_DATA) {
+        for (int i = 0; i < 3; i++) {
+            rounded(p, (SDL_FRect){box.x + i * 5, box.y + 6, 3, 3}, 1.5f, foreground);
+        }
+    } else if (kind == FLOW_PENDING_DATA) {
         int bright = (int)((SDL_GetTicks() / 220) % 3);
         for (int i = 0; i < 3; i++) {
             rounded(p, (SDL_FRect){box.x + i * 5, box.y + 6, 3, 3}, 1.5f,
@@ -3082,8 +3244,7 @@ static void flow_draw_control(Panel *p, SDL_FRect box, uintptr_t data)
         float x = box.x + 7, y = box.y + box.h / 2;
         float track = box.w - 14;
         rounded(p, (SDL_FRect){x, y - 2, track, 4}, 2, control);
-        rounded(p, (SDL_FRect){x, y - 2, ratio * track, 4}, 2,
-                writable(p, f) ? accent : muted);
+        rounded(p, (SDL_FRect){x, y - 2, ratio * track, 4}, 2, writable(p, f) ? accent : muted);
         float thumb = x + ratio * track;
         rounded(p, (SDL_FRect){thumb - 7, y - 7, 14, 14}, 7, surface);
         color(p, writable(p, f) ? accent : muted);
@@ -3095,11 +3256,10 @@ static void flow_draw_control(Panel *p, SDL_FRect box, uintptr_t data)
         outline(p, box, 0, line);
     } else if (kind == FLOW_LAYOUT_DATA && index < 5) {
         SDL_FRect screen = {box.x + 4, box.y + 4, box.w - 8, box.h - 8};
-        SDL_FRect camera = {box.x + box.w * .72f, box.y + box.h * .62f,
-                            box.w * .20f, box.h * .30f};
+        SDL_FRect camera = {box.x + box.w * .72f, box.y + box.h * .62f, box.w * .20f, box.h * .30f};
         if (index == 1) {
-            screen = (SDL_FRect){box.x + box.w * .09f, box.y + box.h * .08f,
-                                box.w * .82f, box.h * .62f};
+            screen =
+                (SDL_FRect){box.x + box.w * .09f, box.y + box.h * .08f, box.w * .82f, box.h * .62f};
         } else if (index == 2) {
             screen = (SDL_FRect){box.x + 3, box.y + 6, box.w * .56f, box.h - 12};
             camera = (SDL_FRect){box.x + box.w * .66f, box.y + 6, box.w * .30f, box.h - 12};
@@ -3113,7 +3273,8 @@ static void flow_draw_control(Panel *p, SDL_FRect box, uintptr_t data)
         if (index != 3) {
             rounded(p, camera, index == 0 || index == 1 ? fminf(camera.w, camera.h) / 2 : 3,
                     (Clay_Color){35, 63, 83, 255});
-            outline(p, camera, index == 0 || index == 1 ? fminf(camera.w, camera.h) / 2 : 3, accent);
+            outline(p, camera, index == 0 || index == 1 ? fminf(camera.w, camera.h) / 2 : 3,
+                    accent);
         }
     }
 }
@@ -3310,8 +3471,10 @@ static void set_focus(Panel *p, Widget *w)
         SDL_SetTextInputArea(p->window, &area, (int)p->caret);
     }
     if (widget_in_scroll(p, w) || w->type == W_OPTION) {
-        Clay_ElementId container = p->color_popup ? CLAY_ID("ColorPopup") : p->dropdown ? CLAY_ID("Dropdown")
-                                   : p->open_menu ? CLAY_ID("LaneMenu") : CLAY_ID("SettingsScroll");
+        Clay_ElementId container = p->color_popup ? CLAY_ID("ColorPopup")
+                                   : p->dropdown  ? CLAY_ID("Dropdown")
+                                   : p->open_menu ? CLAY_ID("LaneMenu")
+                                                  : CLAY_ID("SettingsScroll");
         Clay_ElementData area = Clay_GetElementData(container);
         Clay_ScrollContainerData scroll = Clay_GetScrollContainerData(container);
         if (scroll.found) {
@@ -3511,8 +3674,9 @@ static void flow_slider_update(Panel *p, Widget *w, float x)
     float track = fmaxf(1, w->box.width - 14);
     double ratio = fmax(0, fmin(1, (x - w->box.x - 7) / track));
     double value = f->minimum + ratio * (f->maximum - f->minimum);
-    double step = f->type == FIELD_INT || strstr(f->key, "width_percent") ? 1 :
-                  strstr(f->key, "gain") ? .01 : .05;
+    double step = f->type == FIELD_INT || strstr(f->key, "width_percent") ? 1
+                  : strstr(f->key, "gain")                                ? .01
+                                                                          : .05;
     value = fmax(f->minimum, fmin(f->maximum, round(value / step) * step));
     char formatted[64];
     snprintf(formatted, sizeof formatted, "%.6g", value);
@@ -3531,8 +3695,8 @@ static void flow_slider_commit(Panel *p, Widget *w)
         !strcmp(fields[w->index].key, "screen.width_percent") || !w->draft) {
         FieldEdit *edit = &p->edit[w->index];
         if (!validate_field(&fields[w->index], edit->value, p->error, sizeof p->error) &&
-            !panel_client_setting(p->client, fields[w->index].key, edit->value,
-                                  p->error, sizeof p->error)) {
+            !panel_client_setting(p->client, fields[w->index].key, edit->value, p->error,
+                                  sizeof p->error)) {
             edit->pending = p->snapshot.command_queued + 1;
             edit->submitted_revision = edit->revision;
             p->reply[0] = 0;
@@ -3551,8 +3715,10 @@ static void flow_discover_devices(Panel *p, int index)
 {
     p->device_count = 0;
     const char *key = fields[index].key;
-    const char *args[] = {!strcmp(key, "camera.device") ? "camera"
-                           : !strcmp(key, "capture.monitor") ? "screen" : "audio", "list"};
+    const char *args[] = {!strcmp(key, "camera.device")     ? "camera"
+                          : !strcmp(key, "capture.monitor") ? "screen"
+                                                            : "audio",
+                          "list"};
     if (!panel_client_command(p->client, 2, args, p->error, sizeof p->error)) {
         p->device_request = p->snapshot.command_queued + 1;
     }
@@ -4008,8 +4174,8 @@ static void key_event(Panel *p, const SDL_KeyboardEvent *event)
         return;
     }
     int section = p->view == VIEW_SETUP ? 7 : p->view == VIEW_SECTION ? p->open_section : -1;
-    if (!p->dropdown && !p->color_popup && section >= 0 && (key == SDLK_RETURN || key == SDLK_KP_ENTER) &&
-        section_dirty(p, section)) {
+    if (!p->dropdown && !p->color_popup && section >= 0 &&
+        (key == SDLK_RETURN || key == SDLK_KP_ENTER) && section_dirty(p, section)) {
         apply_section(p, section);
         return;
     }
@@ -4031,8 +4197,8 @@ static void key_event(Panel *p, const SDL_KeyboardEvent *event)
 static void click_event(Panel *p, float x, float y)
 {
     Widget *close = find_widget(p, 7);
-    if (close && x >= close->box.x && y >= close->box.y &&
-        x < close->box.x + close->box.width && y < close->box.y + close->box.height) {
+    if (close && x >= close->box.x && y >= close->box.y && x < close->box.x + close->box.width &&
+        y < close->box.y + close->box.height) {
         activate(p, close);
         return;
     }
@@ -4171,6 +4337,8 @@ static void poll_client(Panel *p)
                          (uint64_t)socket_stat.st_ctim.tv_nsec;
             }
             if (cookie && cookie != p->navigation_generation) {
+                p->pending_button = 0;
+                p->pending_button_request = 0;
                 NavigationMemory saved = p->navigation ? *p->navigation : (NavigationMemory){0};
                 bool valid =
                     saved.magic == 0x43565033 && saved.session_cookie == cookie &&
@@ -4322,14 +4490,16 @@ static void write_ui_state(Panel *p, const char *path)
             scroll_data.found ? scroll_data.scrollPosition->y : 0);
     for (int i = 0; i < p->widget_count; i++) {
         const Widget *w = &p->widgets[i];
-        const char *key = (w->action == A_SETTING || w->action == A_FIELD || w->action == A_COLOR || w->action == A_SWATCH || (w->action == A_DROPDOWN && w->index >= 0)) && w->index >= 0 && (size_t)w->index < FIELD_COUNT
+        const char *key = (w->action == A_SETTING || w->action == A_FIELD || w->action == A_COLOR ||
+                           w->action == A_SWATCH || (w->action == A_DROPDOWN && w->index >= 0)) &&
+                                  w->index >= 0 && (size_t)w->index < FIELD_COUNT
                               ? fields[w->index].key
                               : "";
         fprintf(file,
                 "%s{\"id\":%u,\"type\":%d,\"action\":%d,\"key\":\"%s\",\"enabled\":%s,"
                 "\"box\":[%.1f,%.1f,%.1f,%.1f],\"value\":",
-                i ? "," : "", w->id, w->type, w->action, key, w->enabled ? "true" : "false", w->box.x, w->box.y,
-                w->box.width, w->box.height);
+                i ? "," : "", w->id, w->type, w->action, key, w->enabled ? "true" : "false",
+                w->box.x, w->box.y, w->box.width, w->box.height);
         char value[PATH_MAX] = "";
         if (key[0]) {
             field_value(&fields[w->index], &p->snapshot.config, value, sizeof value);
@@ -4347,10 +4517,13 @@ static void write_ui_state(Panel *p, const char *path)
     fprintf(file, "],\"status_rows\":[[%.1f,%.1f,%.1f,%.1f],[%.1f,%.1f,%.1f,%.1f]]", composition.x,
             composition.y, composition.width, composition.height, daemon.x, daemon.y, daemon.width,
             daemon.height);
-    fprintf(file, ",\"open_menu\":%d,\"dropdown\":%u,\"color_popup\":%u,\"all_settings\":[%s,%s,%s,%s,%s,%s]", p->open_menu, p->dropdown, p->color_popup,
-            p->all_settings[0] ? "true" : "false", p->all_settings[1] ? "true" : "false",
-            p->all_settings[2] ? "true" : "false", p->all_settings[3] ? "true" : "false",
-            p->all_settings[4] ? "true" : "false", p->all_settings[5] ? "true" : "false");
+    fprintf(
+        file,
+        ",\"open_menu\":%d,\"dropdown\":%u,\"color_popup\":%u,\"all_settings\":[%s,%s,%s,%s,%s,%s]",
+        p->open_menu, p->dropdown, p->color_popup, p->all_settings[0] ? "true" : "false",
+        p->all_settings[1] ? "true" : "false", p->all_settings[2] ? "true" : "false",
+        p->all_settings[3] ? "true" : "false", p->all_settings[4] ? "true" : "false",
+        p->all_settings[5] ? "true" : "false");
     fprintf(file, ",\"view\":%d,\"status_bar\":[%.1f,%.1f,%.1f,%.1f]", p->view, status.x, status.y,
             status.width, status.height);
     fprintf(file,
