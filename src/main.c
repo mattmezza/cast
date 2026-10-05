@@ -1,5 +1,6 @@
 #include "app_internal.h"
 #include "help_commands.h"
+#include "panel_lifecycle.h"
 #include "update.h"
 #ifdef WITH_PANEL
 #include "panel.h"
@@ -34,7 +35,9 @@ static void signal_stop(int signo)
 }
 static const char help[] =
     "cast " CAST_VERSION " — Linux presentation camera and recorder\n"
-    "Usage: cast [startup options] | cast [--config PATH] [--socket PATH] COMMAND\n"
+    "Usage: cast [startup options] | cast --headless [startup options] | cast COMMAND\n"
+    "With panel support, cast opens the app and starts or attaches to its daemon.\n"
+    "Use --headless for a terminal/service daemon. Closing the panel leaves it running.\n"
     "Startup: --backend xorg|wayland --output-device PATH --camera-device PATH\n"
     "  --width N --height N --fps N --no-virtual --no-camera --mic-source NAME\n"
     "  --desktop-source NAME --record-dir PATH --container NAME --video-codec NAME\n"
@@ -161,6 +164,11 @@ static int startup_parse(int argc, char **argv, Startup *s, char *e, size_t n)
             if (app_copy_string(s->config_path, sizeof s->config_path, argv[i++], e, n)) {
                 return -1;
             }
+            continue;
+        }
+        if (!strcmp(argv[i], "--headless")) {
+            s->headless = true;
+            i++;
             continue;
         }
         if (!strcmp(argv[i], "--no-live")) {
@@ -1012,6 +1020,23 @@ cleanup:
 }
 int main(int argc, char **argv)
 {
+    Config inherited_config;
+    bool inherited = false;
+    if (argc >= 3 && !strcmp(argv[1], "--internal-daemon-config")) {
+        char error[CAST_ERR], *end;
+        errno = 0;
+        long fd = strtol(argv[2], &end, 10);
+        if (errno || end == argv[2] || *end || fd < 3 || fd > INT_MAX) {
+            return fprintf(stderr, "cast: invalid daemon handoff descriptor\n"), 1;
+        }
+        if (panel_lifecycle_config_fd((int)fd, &inherited_config, error, sizeof error)) {
+            return fprintf(stderr, "cast: %s\n", error), 1;
+        }
+        argv[2] = argv[0];
+        argv += 2;
+        argc -= 2;
+        inherited = true;
+    }
     if (argc == 3 && !strcmp(argv[1], "--internal-stream-worker")) {
         char *end = NULL;
         long fd = strtol(argv[2], &end, 10);
@@ -1026,7 +1051,8 @@ int main(int argc, char **argv)
             fprintf(stderr, "cast: --no-live was renamed; use --no-virtual\n");
             return 1;
         }
-        if (!strcmp(argv[command_index], "--no-virtual") ||
+        if (!strcmp(argv[command_index], "--headless") ||
+            !strcmp(argv[command_index], "--no-virtual") ||
             !strcmp(argv[command_index], "--no-camera")) {
             command_index++;
         } else if (!strcmp(argv[command_index], "--help") ||
@@ -1110,7 +1136,12 @@ int main(int argc, char **argv)
     }
     bool remote_command = first < argc && strcmp(argv[first], "doctor");
     Config config;
-    if (remote_command && explicit_socket) {
+    if (inherited) {
+        if (!startup.headless || first < argc || config_path(&startup, e, sizeof e)) {
+            return fprintf(stderr, "cast: invalid managed daemon startup\n"), 1;
+        }
+        config = inherited_config;
+    } else if (remote_command && explicit_socket) {
         /* Socket routing must survive a broken daemon configuration for status/reload. */
         config_defaults(&config);
     } else {
@@ -1119,7 +1150,7 @@ int main(int argc, char **argv)
             return fprintf(stderr, "cast: %s\n", e), 1;
         }
     }
-    if (app_apply_overrides(&config, &startup, e, sizeof e)) {
+    if (!inherited && app_apply_overrides(&config, &startup, e, sizeof e)) {
         return fprintf(stderr, "cast: %s\n", e), 1;
     }
     if (first < argc && !strcmp(argv[first], "doctor")) {
@@ -1138,7 +1169,8 @@ int main(int argc, char **argv)
                 return fprintf(stderr, "cast: panel takes no arguments\n"), 1;
             }
 #ifdef WITH_PANEL
-            int rc = panel_run(&config, e, sizeof e);
+            int rc = panel_run_application(&config, first - 1, (const char *const *)(argv + 1),
+                                           false, e, sizeof e);
             if (rc) {
                 fprintf(stderr, "cast: %s\n", e);
             }
@@ -1149,5 +1181,19 @@ int main(int argc, char **argv)
         }
         return client(&config, argc - first, argv + first);
     }
-    return run_daemon(config, startup);
+    if (startup.headless) {
+        return run_daemon(config, startup);
+    }
+#ifdef WITH_PANEL
+    int rc = panel_run_application(&config, first - 1, (const char *const *)(argv + 1), true, e,
+                                   sizeof e);
+    if (rc) {
+        fprintf(stderr, "cast: %s\n", e);
+    }
+    return rc ? 1 : 0;
+#else
+    return fprintf(stderr,
+                   "cast: app support is disabled; rebuild with PANEL=1 or use --headless\n"),
+           1;
+#endif
 }

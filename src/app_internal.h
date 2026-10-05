@@ -17,7 +17,7 @@ typedef struct {
     int override_count;
     const Option *override[32];
     const char *values[32];
-    bool no_virtual, no_camera;
+    bool no_virtual, no_camera, headless;
 } Startup;
 typedef struct App {
     Config config, defaults;

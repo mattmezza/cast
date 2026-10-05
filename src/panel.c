@@ -1,5 +1,6 @@
 #include "panel.h"
 #include "panel_color_pick.h"
+#include "panel_lifecycle.h"
 #include "panel_transport.h"
 #define CLAY_IMPLEMENTATION
 #pragma GCC diagnostic push
@@ -317,7 +318,11 @@ typedef enum {
     A_COLOR,
     A_SWATCH,
     A_PICK_COLOR,
-    A_MENU
+    A_MENU,
+    A_DAEMON,
+    A_QUIT_APP,
+    A_QUIT_CANCEL,
+    A_QUIT_CONFIRM
 } Action;
 typedef enum {
     ICON_NONE,
@@ -386,6 +391,8 @@ typedef struct {
     TTF_Font *font[5], *raster_font[5];
     float density, input_scale;
     PanelClient *client;
+    PanelLifecycle *lifecycle;
+    PanelLifecycleSnapshot lifecycle_state;
     PanelSnapshot snapshot;
     FieldEdit edit[FIELD_COUNT];
     Widget widgets[WIDGET_MAX];
@@ -421,6 +428,8 @@ typedef struct {
     uint32_t pending_button;
     uint64_t pending_button_request;
     bool draft_context;
+    bool quit_confirmation, quit_after_stop, daemon_stopping, daemon_stopped;
+    uint64_t shutdown_request, shutdown_started;
     TextCache cache[TEXT_CACHE_MAX];
     char strings[49152];
     size_t string_used;
@@ -721,19 +730,21 @@ static Icon button_icon(const Panel *p, uint32_t id, Action action)
 static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool selected,
                    Action action, int index)
 {
-    /* Pinned secondary actions share one height/style. Close is compact so
-     * Preview retains its on/off label at the minimum window width. */
-    bool compact = id == 7 || id == 22 || id == 34;
+    /* Four lifecycle actions fit one pinned row at the minimum window width. */
+    bool compact = id == 7 || id == 22 || id == 8 || id == 9;
+    bool global_privacy = id == 34;
     bool card_action = (id >= 30 && id <= 39 && id != 34) || id == 130 ||
                        (id >= 137 && id <= 141) || id == 150 || id == 154 || id == 151;
     bool primary_action = id == 30 || id == 32 || id == 130 || id == 150;
     bool draft_action = id >= 700 && id <= 717;
     bool small_action = (card_action && !primary_action) || draft_action || action == A_ALL ||
-                        action == A_PICK_COLOR;
+                        action == A_PICK_COLOR || global_privacy;
     bool combo = action == A_DROPDOWN;
-    float compact_width = id == 7 ? 76 : (fminf(p->width, 520) - 32 - 12 - 76) / 2;
+    float header_width = fminf(p->width, 520) - 32 - 18;
+    float compact_width = header_width * (id == 8 ? .32f : id == 9 ? .12f : .28f);
     if (action != A_TAB && action != A_GROUP && action != A_PREVIEW && action != A_DROPDOWN &&
-        action != A_BACK && action != A_CLOSE && action != A_ALL && action != A_MENU &&
+        action != A_BACK && action != A_CLOSE && action != A_QUIT_APP && action != A_QUIT_CANCEL &&
+        action != A_ALL && action != A_MENU &&
         p->snapshot.command_queued > p->snapshot.command_completed) {
         enabled = false;
     }
@@ -751,14 +762,17 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
     Clay_Color ink = enabled ? selected ? accent : foreground : muted;
     CLAY({.id = element_id(id),
           .layout = {.sizing = {.width = compact ? CLAY_SIZING_FIXED(compact_width)
-                                         : id == 30 || id == 32 || id == 130 ? CLAY_SIZING_GROW()
-                                         : card_action || combo              ? CLAY_SIZING_GROW()
-                                                                             : CLAY_SIZING_FIT(),
-                                .height = CLAY_SIZING_FIXED(
-                                    compact                                                     ? 36
-                                    : draft_action || action == A_ALL || action == A_PICK_COLOR ? 30
-                                    : card_action || combo ? 36
-                                                           : 40)},
+                                         : global_privacy || id == 30 || id == 32 || id == 130
+                                             ? CLAY_SIZING_GROW()
+                                         : card_action || combo ? CLAY_SIZING_GROW()
+                                                                : CLAY_SIZING_FIT(),
+                                .height = CLAY_SIZING_FIXED(compact ? 36
+                                                            : draft_action || action == A_ALL ||
+                                                                    action == A_PICK_COLOR ||
+                                                                    global_privacy
+                                                                ? 30
+                                                            : card_action || combo ? 36
+                                                                                   : 40)},
                      .padding = {compact || small_action ? 7 : 10,
                                  compact || small_action ? 7
                                  : combo                 ? 26
@@ -782,11 +796,11 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
             }
         }
         Icon icon = button_icon(p, id, action);
-        if (icon != ICON_NONE && !card_action) {
+        if (icon != ICON_NONE && !card_action && !compact) {
             icon_slot(icon, enabled, selected);
         }
         if (compact) {
-            quiet_label(fit_text(p, text, compact_width - 36, FONT_META), ink, true);
+            quiet_label(fit_text(p, text, compact_width - 14, FONT_META), ink, true);
         } else {
             const char *display =
                 id == 40
@@ -1032,15 +1046,21 @@ static void pinned_header(Panel *p)
         CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_FIXED(36)},
                          .childGap = 6}})
         {
-            command_button(p, 34, s->state.group_paused ? "Resume" : "Pause all", s->connected,
-                           s->state.group_paused ? "resume" : "pause", NULL, NULL);
             command_button(p, 22,
                            s->countdown        ? "Countdown"
                            : s->config.preview ? "Preview on"
                                                : "Preview off",
                            s->connected && s->capabilities.preview && !s->countdown, "preview",
                            s->config.preview ? "off" : "on", NULL);
-            button(p, 7, "Close", true, false, A_CLOSE, 0);
+            button(p, 7, "Close panel", true, false, A_CLOSE, 0);
+            button(p, 8,
+                   p->daemon_stopping                                  ? "Stopping…"
+                   : p->lifecycle_state.state == PANEL_DAEMON_STARTING ? "Starting…"
+                   : s->connected || p->lifecycle_state.child_pid      ? "Stop daemon"
+                                                                       : "Start daemon",
+                   !p->daemon_stopping && p->lifecycle_state.state != PANEL_DAEMON_STARTING, false,
+                   A_DAEMON, 0);
+            button(p, 9, "Quit", true, false, A_QUIT_APP, 0);
         }
         CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
                          .padding = {10, 10, 7, 7},
@@ -1059,10 +1079,14 @@ static void pinned_header(Panel *p)
                   .backgroundColor = surface,
                   .border = {.color = danger, .width = outline_width}})
             {
-                text_wrapped("Daemon disconnected — showing last known state. Commands are "
-                             "unavailable; outputs keep running per their last state and this "
-                             "window reconnects automatically.",
-                             danger);
+                text_wrapped(
+                    p->daemon_stopped
+                        ? "Daemon stopped — Start daemon restores capture. Output controls "
+                          "are unavailable until it starts."
+                        : "Daemon disconnected — showing last known state. Commands are "
+                          "unavailable; outputs keep running per their last state and this "
+                          "window reconnects automatically.",
+                    p->daemon_stopped ? secondary : danger);
             }
         }
     }
@@ -1159,6 +1183,10 @@ static void flow_choice(Panel *p, uint32_t id, const char *text, size_t index, c
         label(text, 0, enabled ? selected ? accent : foreground : muted);
     }
 }
+static bool field_is_numeric(const FieldSpec *field)
+{
+    return field->type == FIELD_INT || field->type == FIELD_DOUBLE;
+}
 static bool field_is_pixels(const FieldSpec *field)
 {
     static const char *const keys[] = {
@@ -1215,6 +1243,15 @@ static void flow_slider_range(const Panel *p, size_t index, double *minimum, dou
     *minimum = f->minimum;
     *maximum = f->maximum;
     if (!field_is_pixels(f)) {
+        if (!strcmp(key, "stream.video_bitrate_kbps")) {
+            *maximum = 16000;
+        } else if (!strcmp(key, "zoom.step")) {
+            *maximum = 2;
+        } else if (!strcmp(key, "clicks.duration_ms")) {
+            *maximum = 3000;
+        } else if (!strcmp(key, "keys.timeout_ms") || !strcmp(key, "ipc.timeout_ms")) {
+            *maximum = 5000;
+        }
         return;
     }
     double width = p->snapshot.config.width > 0 ? p->snapshot.config.width : 1920;
@@ -1249,29 +1286,75 @@ static void flow_slider_range(const Panel *p, size_t index, double *minimum, dou
 static bool flow_slider_key(const char *key)
 {
     int index = find_field(key);
-    if (index >= 0 && field_is_pixels(&fields[index])) {
-        return true;
+    return index >= 0 && field_is_numeric(&fields[index]);
+}
+static double flow_slider_step(const FieldSpec *field)
+{
+    const char *key = field->key;
+    if (!strcmp(key, "stream.video_bitrate_kbps")) {
+        return 100;
     }
-    return !strcmp(key, "camera.width_percent") || !strcmp(key, "screen.width_percent") ||
-           !strcmp(key, "zoom.factor") || !strcmp(key, "audio.mic_gain") ||
-           !strcmp(key, "audio.desktop_gain") || !strcmp(key, "record.countdown");
+    if (strstr(key, "_ms")) {
+        return 10;
+    }
+    if (field->type == FIELD_INT || strstr(key, "width_percent") ||
+        !strcmp(key, "composition.split_ratio") || !strcmp(key, "background.gradient_waypoint") ||
+        !strcmp(key, "background.gradient_angle")) {
+        return 1;
+    }
+    if (!strcmp(key, "zoom.smoothing")) {
+        return .001;
+    }
+    if (!strcmp(key, "zoom.factor") || !strcmp(key, "zoom.min") || !strcmp(key, "zoom.max")) {
+        return .05;
+    }
+    return .01;
+}
+static const char *flow_slider_unit(const FieldSpec *field)
+{
+    const char *key = field->key;
+    if (field_is_pixels(field)) {
+        return "px";
+    }
+    if (strstr(key, "width_percent") || !strcmp(key, "composition.split_ratio") ||
+        !strcmp(key, "background.gradient_waypoint")) {
+        return "%";
+    }
+    if (!strcmp(key, "zoom.factor") || !strcmp(key, "zoom.min") || !strcmp(key, "zoom.max") ||
+        !strcmp(key, "zoom.step") || strstr(key, "gain")) {
+        return "×";
+    }
+    if (strstr(key, "_ms")) {
+        return "ms";
+    }
+    if (strstr(key, "_kbps")) {
+        return "kbps";
+    }
+    if (!strcmp(key, "background.gradient_angle")) {
+        return "°";
+    }
+    if (!strcmp(key, "record.countdown")) {
+        return "s";
+    }
+    if (!strcmp(key, "record.queue")) {
+        return "frames";
+    }
+    if (!strcmp(key, "record.crf")) {
+        return "CRF";
+    }
+    if (!strcmp(key, "output.fps")) {
+        return "fps";
+    }
+    return field->maximum == 1 ? "0–1" : "";
 }
 static const char *flow_slider_label(Panel *p, size_t index, double value)
 {
-    if (field_is_pixels(&fields[index])) {
-        return format(p, "%.0f px", value);
-    }
     const char *key = fields[index].key;
-    if (strstr(key, "width_percent")) {
-        return format(p, "%.0f%%", value);
+    if (strstr(key, "gain")) {
+        return value <= 0 ? "−∞ dB" : format(p, "%+.1f dB", 20 * log10(value));
     }
-    if (!strcmp(key, "zoom.factor")) {
-        return format(p, "%.1f×", value);
-    }
-    if (!strcmp(key, "record.countdown")) {
-        return format(p, "%.0fs", value);
-    }
-    return value <= 0 ? "−∞ dB" : format(p, "%+.1f dB", 20 * log10(value));
+    const char *unit = flow_slider_unit(&fields[index]);
+    return format(p, "%.6g%s%s", value, unit[0] ? " " : "", unit);
 }
 static void flow_slider(Panel *p, const char *key)
 {
@@ -1283,16 +1366,31 @@ static void flow_slider(Panel *p, const char *key)
     uint32_t id = 1000 + (uint32_t)index * 3;
     const char *value = flow_value(p, (size_t)index);
     bool enabled = flow_enabled(p, (size_t)index);
-    bool pixels = field_is_pixels(f);
     char validation[CAST_ERR];
-    bool invalid =
-        pixels && p->edit[index].dirty && validate_field(f, value, validation, sizeof validation);
+    bool invalid = p->edit[index].dirty && validate_field(f, value, validation, sizeof validation);
     CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
                      .layoutDirection = CLAY_TOP_TO_BOTTOM,
                      .childGap = 6,
                      .padding = {0, 0, 6, 8}}})
     {
-        label(f->label, 1, secondary);
+        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
+                         .childGap = 8,
+                         .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
+        {
+            CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}}})
+            {
+                label(f->label, 1, secondary);
+            }
+            if (strstr(f->key, "gain")) {
+                CLAY(
+                    {.layout = {.sizing = {.width = CLAY_SIZING_FIXED(72),
+                                           .height = CLAY_SIZING_FIXED(20)}},
+                     .custom = {.customData = (void *)(uintptr_t)(FLOW_DATA_BASE + FLOW_VALUE_DATA +
+                                                                  (index << 4))}})
+                {
+                }
+            }
+        }
         CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
                          .childGap = 10,
                          .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}})
@@ -1311,38 +1409,31 @@ static void flow_slider(Panel *p, const char *key)
                                                                (index << 4))}})
             {
             }
-            if (pixels) {
-                Widget *input = widget(p, id + 2, W_FIELD, A_FIELD, enabled);
-                if (input) {
-                    input->index = index;
-                    input->draft = p->draft_context;
-                }
-                CLAY({.id = element_id(id + 2),
-                      .layout = {.sizing = {.width = CLAY_SIZING_FIXED(84),
-                                            .height = CLAY_SIZING_FIXED(36)}},
-                      .backgroundColor = surface,
-                      .border = {.color = invalid              ? danger
-                                          : p->focus == id + 2 ? accent
-                                                               : line,
-                                 .width = outline_width},
-                      .custom = {.customData = (void *)(uintptr_t)(index + 1)}})
-                {
-                }
-                label("px", 0, enabled ? secondary : muted);
-            } else {
-                CLAY(
-                    {.layout = {.sizing = {.width = CLAY_SIZING_FIXED(72),
-                                           .height = CLAY_SIZING_FIXED(30)}},
-                     .custom = {.customData = (void *)(uintptr_t)(FLOW_DATA_BASE + FLOW_VALUE_DATA +
-                                                                  (index << 4))}})
-                {
-                }
+            Widget *input = widget(p, id + 2, W_FIELD, A_FIELD, enabled);
+            if (input) {
+                input->index = index;
+                input->draft = p->draft_context;
+            }
+            CLAY({.id = element_id(id + 2),
+                  .layout = {.sizing = {.width = CLAY_SIZING_FIXED(84),
+                                        .height = CLAY_SIZING_FIXED(36)}},
+                  .backgroundColor = surface,
+                  .border = {.color = invalid              ? danger
+                                      : p->focus == id + 2 ? accent
+                                                           : line,
+                             .width = outline_width},
+                  .custom = {.customData = (void *)(uintptr_t)(index + 1)}})
+            {
+            }
+            const char *unit = flow_slider_unit(f);
+            if (unit[0]) {
+                label(unit, 0, enabled ? secondary : muted);
             }
         }
         if (invalid) {
             text_wrapped(format(p, "%s", validation), danger);
         }
-        if (pixels && !p->draft_context && p->edit[index].dirty && !(f->flags & READ_ONLY)) {
+        if (!p->draft_context && p->edit[index].dirty && !(f->flags & READ_ONLY)) {
             button(p, id + 1, "Apply", enabled, false, A_APPLY, index);
         }
         flow_note(p, (size_t)index);
@@ -2476,6 +2567,9 @@ static void operate_body(Panel *p)
                      .childGap = 8,
                      .layoutDirection = CLAY_TOP_TO_BOTTOM}})
     {
+        command_button(p, 34, p->snapshot.state.group_paused ? "Resume outputs" : "Pause all",
+                       p->snapshot.connected, p->snapshot.state.group_paused ? "resume" : "pause",
+                       NULL, NULL);
         for (int lane = 0; lane < 4; lane++) {
             CLAY({.id = CLAY_IDI("LaneCard", lane),
                   .layout = {.sizing = {.width = CLAY_SIZING_GROW()},
@@ -2864,6 +2958,46 @@ static void flow_color_layout(Panel *p)
     }
 }
 
+static void quit_confirmation_layout(Panel *p)
+{
+    if (!p->quit_confirmation) {
+        return;
+    }
+    float width = fminf(408, p->width - 32);
+    CLAY({.id = CLAY_ID("QuitBackdrop"),
+          .layout = {.sizing = {.width = CLAY_SIZING_FIXED(p->width),
+                                .height = CLAY_SIZING_FIXED(p->height)},
+                     .childAlignment = {.x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER}},
+          .backgroundColor = {0, 0, 0, 180},
+          .floating = {.attachTo = CLAY_ATTACH_TO_ROOT, .zIndex = 20}})
+    {
+        CLAY({.id = CLAY_ID("QuitConfirmation"),
+              .layout = {.sizing = {.width = CLAY_SIZING_FIXED(width)},
+                         .padding = {20, 20, 20, 20},
+                         .childGap = 14,
+                         .layoutDirection = CLAY_TOP_TO_BOTTOM},
+              .backgroundColor = surface,
+              .border = {.color = line, .width = outline_width}})
+        {
+            label("Quit Cast?", 3, foreground);
+            text_wrapped("This stops the virtual camera and streaming, finishes and saves any "
+                         "recording, and closes the daemon, preview and panel.",
+                         foreground);
+            text_wrapped("Close panel keeps Cast running in the background.", secondary);
+            if (p->error[0]) {
+                text_wrapped(p->error, danger);
+            }
+            CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
+                             .childGap = 8,
+                             .childAlignment = {.x = CLAY_ALIGN_X_RIGHT}}})
+            {
+                button(p, 9100, "Cancel", true, false, A_QUIT_CANCEL, 0);
+                button(p, 9101, "Stop and quit", !p->daemon_stopping, false, A_QUIT_CONFIRM, 0);
+            }
+        }
+    }
+}
+
 static Clay_RenderCommandArray layout(Panel *p)
 {
     p->widget_count = 0;
@@ -2907,6 +3041,7 @@ static Clay_RenderCommandArray layout(Panel *p)
     p->color_start = p->widget_count;
     flow_color_layout(p);
     p->color_end = p->widget_count;
+    quit_confirmation_layout(p);
     Clay_RenderCommandArray commands = Clay_EndLayout();
     if (p->restore_scroll) {
         Clay_ScrollContainerData body = Clay_GetScrollContainerData(CLAY_ID("SettingsScroll"));
@@ -3306,7 +3441,7 @@ static void draw_field(Panel *p, size_t index, Clay_BoundingBox b, SDL_Rect oute
     int before = 0, height = 0, total = 0;
     TTF_GetStringSize(p->font[1], value, strlen(value), &total, &height);
     float x = b.x + 10, y = b.y + (b.height - (float)TTF_GetFontHeight(p->font[1])) / 2;
-    if (p->active_text == id || (field_is_pixels(&fields[index]) && p->active_text == id + 2) ||
+    if (p->active_text == id || (field_is_numeric(&fields[index]) && p->active_text == id + 2) ||
         (p->active_text == 6500 && p->color_field == (int)index)) {
         size_t caret = p->caret < strlen(value) ? p->caret : strlen(value);
         if (caret) {
@@ -3614,6 +3749,9 @@ static Widget *find_widget(Panel *p, uint32_t id)
 static bool flow_modal_widget(const Panel *p, const Widget *w)
 {
     int position = (int)(w - p->widgets);
+    if (p->quit_confirmation) {
+        return w->id == 9100 || w->id == 9101;
+    }
     if (p->color_popup) {
         return position >= p->color_start && position < p->color_end;
     }
@@ -3629,9 +3767,10 @@ static bool flow_modal_widget(const Panel *p, const Widget *w)
 static bool widget_in_scroll(const Panel *p, const Widget *w)
 {
     (void)p;
-    return w->id != 5 && w->id != 6 && w->id != 7 && w->id != 22 && w->id != 34 &&
-           !(w->id >= 10 && w->id <= 12) && w->id != 99 && !(w->id >= 160 && w->id <= 166) &&
-           !(w->id >= 700 && w->id <= 717) && w->type != W_OPTION;
+    return w->id != 5 && w->id != 6 && w->id != 7 && w->id != 8 && w->id != 9 && w->id != 22 &&
+           w->id != 9100 && w->id != 9101 && !(w->id >= 10 && w->id <= 12) && w->id != 99 &&
+           !(w->id >= 160 && w->id <= 166) && !(w->id >= 700 && w->id <= 717) &&
+           w->type != W_OPTION;
 }
 static void cancel_editing(Panel *p)
 {
@@ -3912,9 +4051,7 @@ static void flow_slider_update(Panel *p, Widget *w, float x)
     double minimum, maximum;
     flow_slider_range(p, (size_t)w->index, &minimum, &maximum);
     double value = minimum + ratio * (maximum - minimum);
-    double step = f->type == FIELD_INT || strstr(f->key, "width_percent") ? 1
-                  : strstr(f->key, "gain")                                ? .01
-                                                                          : .05;
+    double step = flow_slider_step(f);
     value = fmax(minimum, fmin(maximum, round(value / step) * step));
     char formatted[64];
     snprintf(formatted, sizeof formatted, "%.6g", value);
@@ -4058,6 +4195,47 @@ static void activate(Panel *p, Widget *w)
         break;
     case A_CLOSE:
         p->quit = true;
+        break;
+    case A_QUIT_APP:
+        cancel_editing(p);
+        p->dropdown = p->color_popup = 0;
+        p->open_menu = 0;
+        p->quit_confirmation = true;
+        p->focus = 9100;
+        break;
+    case A_QUIT_CANCEL:
+        p->quit_confirmation = false;
+        p->focus = 9;
+        break;
+    case A_DAEMON:
+    case A_QUIT_CONFIRM:
+        cancel_editing(p);
+        p->error[0] = 0;
+        if (w->action == A_DAEMON && !p->snapshot.connected && !p->lifecycle_state.child_pid) {
+            if (!panel_lifecycle_start(p->lifecycle, &p->snapshot.config, p->error,
+                                       sizeof p->error)) {
+                p->daemon_stopped = false;
+                snprintf(p->reply, sizeof p->reply, "Starting daemon…");
+            }
+            break;
+        }
+        if (p->snapshot.connected) {
+            const char *args[] = {"quit"};
+            if (panel_client_command(p->client, 1, args, p->error, sizeof p->error)) {
+                break;
+            }
+            p->shutdown_request = ++p->snapshot.command_queued;
+            p->pending_button = w->id;
+            p->pending_button_request = p->shutdown_request;
+        } else if (p->lifecycle_state.child_pid &&
+                   panel_lifecycle_stop_owned(p->lifecycle, p->error, sizeof p->error)) {
+            break;
+        }
+        p->daemon_stopping = true;
+        p->quit_after_stop = w->action == A_QUIT_CONFIRM;
+        p->shutdown_started = SDL_GetTicks();
+        p->quit_confirmation = false;
+        snprintf(p->reply, sizeof p->reply, "Stopping outputs and saving recording…");
         break;
     case A_COMMAND:
         p->error[0] = 0;
@@ -4269,7 +4447,18 @@ static void key_event(Panel *p, const SDL_KeyboardEvent *event)
     SDL_Keycode key = event->key;
     bool ctrl = (event->mod & SDL_KMOD_CTRL) != 0;
     if (ctrl && key == SDLK_Q) {
-        p->quit = true;
+        activate(p, find_widget(p, 9));
+        return;
+    }
+    if (p->quit_confirmation) {
+        if (key == SDLK_ESCAPE) {
+            p->quit_confirmation = false;
+            p->focus = 9;
+        } else if (key == SDLK_TAB) {
+            move_focus(p, event->mod & SDL_KMOD_SHIFT ? -1 : 1);
+        } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_SPACE) {
+            activate(p, find_widget(p, p->focus));
+        }
         return;
     }
     if (key == SDLK_TAB) {
@@ -4328,7 +4517,7 @@ static void key_event(Panel *p, const SDL_KeyboardEvent *event)
     if (focused && focused->enabled && focused->type == W_SLIDER &&
         (key == SDLK_LEFT || key == SDLK_RIGHT || key == SDLK_PAGEUP || key == SDLK_PAGEDOWN)) {
         const FieldSpec *f = &fields[focused->index];
-        double step = strstr(f->key, "gain") ? .01 : !strcmp(f->key, "zoom.factor") ? .05 : 1;
+        double step = flow_slider_step(f);
         if (key == SDLK_PAGEUP || key == SDLK_PAGEDOWN) {
             step *= 10;
         }
@@ -4442,11 +4631,24 @@ static void key_event(Panel *p, const SDL_KeyboardEvent *event)
 }
 static void click_event(Panel *p, float x, float y)
 {
-    Widget *close = find_widget(p, 7);
-    if (close && x >= close->box.x && y >= close->box.y && x < close->box.x + close->box.width &&
-        y < close->box.y + close->box.height) {
-        activate(p, close);
-        return;
+    if (!p->quit_confirmation) {
+        const uint32_t header_ids[] = {22, 7, 8, 9};
+        for (size_t i = 0; i < sizeof header_ids / sizeof *header_ids; i++) {
+            Widget *header = find_widget(p, header_ids[i]);
+            if (header && header->enabled && x >= header->box.x && y >= header->box.y &&
+                x < header->box.x + header->box.width && y < header->box.y + header->box.height) {
+                if (header->id == 22) {
+                    stop_editing(p);
+                } else {
+                    cancel_editing(p);
+                }
+                p->dropdown = p->color_popup = 0;
+                p->open_menu = 0;
+                p->focus = header->id;
+                activate(p, header);
+                return;
+            }
+        }
     }
     if (p->color_popup && !flow_popup_contains(p, x, y, "ColorPopup")) {
         p->color_popup = 0;
@@ -4487,7 +4689,8 @@ static void click_event(Panel *p, float x, float y)
                 continue;
             }
         }
-        if (w->action == A_REVERT || w->action == A_APPLY_SECTION || w->action == A_APPLY) {
+        if (w->action == A_REVERT || w->action == A_APPLY_SECTION || w->action == A_APPLY ||
+            w->action == A_QUIT_APP || w->action == A_DAEMON) {
             /* An explicit draft action owns the edit. Focus loss must not submit
              * it first, particularly when the user chose Revert. */
             cancel_editing(p);
@@ -4570,7 +4773,9 @@ static void event(Panel *p, const SDL_Event *e)
         }
         break;
     case SDL_EVENT_MOUSE_WHEEL:
-        p->scroll += wheel_delta(&e->wheel);
+        if (!p->quit_confirmation) {
+            p->scroll += wheel_delta(&e->wheel);
+        }
         break;
     case SDL_EVENT_KEY_DOWN:
         key_event(p, &e->key);
@@ -4716,7 +4921,7 @@ static void poll_client(Panel *p)
                 p->edit[i].auto_apply = false;
                 p->edit[i].pending = 0;
             }
-        } else if (fresh.command_completed >= fresh.command_queued) {
+        } else if (!p->daemon_stopping && fresh.command_completed >= fresh.command_queued) {
             for (size_t i = 0; i < FIELD_COUNT; i++) {
                 if (p->edit[i].auto_apply && !p->edit[i].pending) {
                     commit_field(p, (int)i);
@@ -4724,6 +4929,50 @@ static void poll_client(Panel *p)
                 }
             }
         }
+    }
+}
+
+static void poll_lifecycle(Panel *p)
+{
+    panel_lifecycle_poll(p->lifecycle, p->snapshot.connected, &p->lifecycle_state);
+    if (p->lifecycle_state.state == PANEL_DAEMON_FAILED && p->lifecycle_state.error[0]) {
+        snprintf(p->error, sizeof p->error, "%s", p->lifecycle_state.error);
+    }
+    if (!p->daemon_stopping) {
+        return;
+    }
+    if (p->quit_after_stop && !p->shutdown_request && p->snapshot.connected) {
+        /* Quit can be requested before asynchronous startup has attached. */
+        const char *args[] = {"quit"};
+        if (panel_client_command(p->client, 1, args, p->error, sizeof p->error)) {
+            p->daemon_stopping = p->quit_after_stop = false;
+            return;
+        }
+        p->shutdown_request = ++p->snapshot.command_queued;
+    }
+    if (p->snapshot.connected && p->shutdown_request &&
+        p->snapshot.command_completed >= p->shutdown_request && p->snapshot.command_failed) {
+        p->daemon_stopping = p->quit_after_stop = false;
+        p->shutdown_request = 0;
+        return;
+    }
+    /* A disconnect can precede encoder finalization. The daemon removes its
+     * socket only after durable recording shutdown; an owned child is reaped too. */
+    struct stat socket_info;
+    bool socket_removed = lstat(p->snapshot.config.socket_path, &socket_info) && errno == ENOENT;
+    if (!p->snapshot.connected && socket_removed && !p->lifecycle_state.child_pid) {
+        p->daemon_stopping = false;
+        p->daemon_stopped = true;
+        p->shutdown_request = 0;
+        p->pending_button = 0;
+        p->pending_button_request = 0;
+        snprintf(p->reply, sizeof p->reply, "Daemon stopped; recordings saved.");
+        if (p->quit_after_stop) {
+            p->quit = true;
+        }
+    } else if (p->snapshot.connected && SDL_GetTicks() - p->shutdown_started > 15000) {
+        p->daemon_stopping = p->quit_after_stop = false;
+        snprintf(p->error, sizeof p->error, "Daemon did not stop. Retry Stop daemon or Quit.");
     }
 }
 
@@ -4761,6 +5010,7 @@ static void cleanup(Panel *p, void *clay_memory)
     }
     panel_color_pick_free(p->color_pick);
     panel_client_close(p->client);
+    panel_lifecycle_destroy(p->lifecycle);
     for (int i = 0; i < TEXT_CACHE_MAX; i++) {
         SDL_DestroyTexture(p->cache[i].texture);
         free(p->cache[i].text);
@@ -4879,7 +5129,9 @@ static void write_ui_state(Panel *p, const char *path)
     json_string(file, panel_stream_status(&p->snapshot));
     fputs(",\"record_status\":", file);
     json_string(file, record_status(&p->snapshot));
-    fprintf(file, ",\"color_picking\":%s", p->picking_color ? "true" : "false");
+    fprintf(file, ",\"color_picking\":%s,\"quit_confirmation\":%s,\"daemon_stopping\":%s",
+            p->picking_color ? "true" : "false", p->quit_confirmation ? "true" : "false",
+            p->daemon_stopping ? "true" : "false");
     fputs(",\"error\":", file);
     json_string(file, p->error[0] ? p->error : p->snapshot.error);
     fputs(",\"exclusion\":", file);
@@ -4888,7 +5140,8 @@ static void write_ui_state(Panel *p, const char *path)
     fclose(file);
 }
 
-int panel_run(const Config *config, char *error, size_t n)
+int panel_run_application(const Config *config, int startup_argc, const char *const *startup_argv,
+                          bool auto_start, char *error, size_t n)
 {
     void *clay_memory = NULL;
     Panel *p = calloc(1, sizeof *p);
@@ -4903,6 +5156,11 @@ int panel_run(const Config *config, char *error, size_t n)
         return -1;
     }
     p->snapshot.config = *config;
+    p->lifecycle = panel_lifecycle_create(config, startup_argc, startup_argv, error, n);
+    if (!p->lifecycle) {
+        cleanup(p, NULL);
+        return -1;
+    }
     open_navigation(p, config);
     p->tab = -1;
     p->open_lane = -1;
@@ -4999,6 +5257,10 @@ int panel_run(const Config *config, char *error, size_t n)
         cleanup(p, clay_memory);
         return -1;
     }
+    if (auto_start && panel_lifecycle_start(p->lifecycle, config, p->error, sizeof p->error)) {
+        /* Keep the window available to explain startup failure and permit retry. */
+        p->daemon_stopped = true;
+    }
     const char *smoke = getenv("CAST_PANEL_SMOKE_MS"),
                *screenshot = getenv("CAST_PANEL_SCREENSHOT"),
                *ui_state = getenv("CAST_PANEL_UI_STATE");
@@ -5047,6 +5309,7 @@ int panel_run(const Config *config, char *error, size_t n)
         Clay_UpdateScrollContainers(false, (Clay_Vector2){0, p->scroll}, 1.f / 60);
         p->scroll = 0;
         poll_client(p);
+        poll_lifecycle(p);
         poll_color_pick(p);
         commands = layout(p);
         render(p, commands);
@@ -5075,4 +5338,9 @@ int panel_run(const Config *config, char *error, size_t n)
     }
     cleanup(p, clay_memory);
     return 0;
+}
+
+int panel_run(const Config *config, char *error, size_t n)
+{
+    return panel_run_application(config, 0, NULL, false, error, n);
 }

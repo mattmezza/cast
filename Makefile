@@ -6,7 +6,7 @@ DESTDIR =
 X11 = 1
 WAYLAND = 0
 PANEL = 0
-VERSION = 0.8.0
+VERSION = 0.9.0
 SOURCE_COMMIT = working-tree
 RELEASE_NOTES =
 RELEASE_TAG = v$(VERSION)
@@ -15,7 +15,7 @@ CFLAGS = -O2 -g
 WARN = -Wall -Wextra -Wformat=2 -Wstrict-prototypes -Wmissing-prototypes
 BASE_PACKAGES = fontconfig freetype2 libavcodec libavformat libavutil libswscale libswresample libpipewire-0.3
 PACKAGES = $(BASE_PACKAGES)
-SOURCES = src/main.c src/commands.c src/config.c src/state.c src/compositor.c src/composition_assets.c src/presentation_text.c src/platform.c src/media.c src/webcam.c src/audio.c src/record.c src/stream.c src/panel_transport.c src/help_commands.c src/update.c vendor/inih/ini.c
+SOURCES = src/main.c src/commands.c src/config.c src/state.c src/compositor.c src/composition_assets.c src/presentation_text.c src/platform.c src/media.c src/webcam.c src/audio.c src/record.c src/stream.c src/panel_transport.c src/panel_lifecycle.c src/help_commands.c src/update.c vendor/inih/ini.c
 INI_FLAGS = -DINI_HANDLER_LINENO=1 -DINI_CALL_HANDLER_ON_NEW_SECTION=1 -DINI_ALLOW_MULTILINE=0 -DINI_ALLOW_INLINE_COMMENTS=0 -DINI_STOP_ON_FIRST_ERROR=1 -DINI_MAX_LINE=8192
 CPPFLAGS += -Isrc -Ivendor/inih $(INI_FLAGS) -D_GNU_SOURCE
 LDLIBS += -lm -lpthread

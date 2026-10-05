@@ -506,10 +506,31 @@ static int stream_config_validate(const StreamConfig *stream, char *error, size_
 }
 int config_validate(const Config *c, char *err, size_t n)
 {
+    /* Validate the sealed application handoff before any string traversal. */
+    if (c->preset_count < 0 || c->preset_count > CAST_MAX_PRESETS) {
+        return fail(err, n, "invalid preset count");
+    }
+    for (int i = 0; i < c->preset_count; i++) {
+        const Preset *p = &c->presets[i];
+        if (!memchr(p->name, 0, sizeof p->name) || !memchr(p->layout, 0, sizeof p->layout) ||
+            !memchr(p->camera_shape, 0, sizeof p->camera_shape) ||
+            !memchr(p->camera_anchor, 0, sizeof p->camera_anchor) ||
+            !memchr(p->camera_aspect, 0, sizeof p->camera_aspect) ||
+            *(const unsigned char *)&p->camera_visible > 1) {
+            return fail(err, n, "invalid preset storage");
+        }
+    }
     /* Runtime commands and startup flags must pass the same schema as INI values. */
     for (size_t i = 0; i < NSET; i++) {
         const Setting *setting = &settings[i];
         const char *value = (const char *)c + setting->offset;
+        if ((setting->type == T_STRING || setting->type == T_ENUM) &&
+            !memchr(value, 0, setting->size)) {
+            return fail(err, n, "%s.%s is not terminated", setting->section, setting->key);
+        }
+        if (setting->type == T_BOOL && *(const unsigned char *)value > 1) {
+            return fail(err, n, "%s.%s is not a boolean", setting->section, setting->key);
+        }
         if (setting->type == T_ENUM && !choice(value, setting->choices)) {
             return fail(err, n, "%s.%s expects one of %s", setting->section, setting->key,
                         setting->choices);
@@ -734,7 +755,8 @@ static int handler(void *u, const char *section, const char *key, const char *va
     if (!strcmp(section, "capture") && !strcmp(key, "exclusion")) {
         fail(p->err, p->n,
              "%s:%d: capture.exclusion was removed; delete this setting and use "
-             "capture.mask_color for opaque masking", p->path, line);
+             "capture.mask_color for opaque masking",
+             p->path, line);
         return 0;
     }
     if (snprintf(full, sizeof full, "%s.%s", section, key) >= (int)sizeof full) {
