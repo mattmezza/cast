@@ -375,11 +375,13 @@ int main(void)
         if (strstr(fields[i].label, "(px)")) {
             assert(field_is_pixels(&fields[i]));
         }
-        if (field_is_pixels(&fields[i])) {
+        assert(flow_slider_key(fields[i].key) == field_is_numeric(&fields[i]));
+        if (field_is_numeric(&fields[i])) {
             double minimum, maximum;
             flow_slider_range(panel, i, &minimum, &maximum);
             assert(isfinite(minimum) && isfinite(maximum) && minimum < maximum);
             assert(minimum >= fields[i].minimum && maximum <= fields[i].maximum);
+            assert(flow_slider_step(&fields[i]) > 0);
         }
     }
     assert(field_is_pixels(&fields[find_field("capture.width")]));
@@ -449,6 +451,71 @@ int main(void)
     commit_field(panel, radius_index);
     assert(route_calls == calls + 1 && app->config.radius == 37);
     route_acknowledge(panel, app);
+
+    /* Ratios drag in useful increments; precise input preserves extra decimals
+     * and submits once on Enter. Invalid ratios never reach the controller. */
+    int opacity_index = find_field("logo.opacity");
+    slider.id = 1000 + (uint32_t)opacity_index * 3;
+    slider.index = opacity_index;
+    calls = route_calls;
+    flow_slider_update(panel, &slider, 77);
+    assert(route_calls == calls);
+    double opacity = strtod(panel->edit[opacity_index].value, NULL);
+    assert(opacity > 0 && opacity < 1);
+    assert(fabs(opacity * 100 - round(opacity * 100)) < 1e-9);
+    flow_slider_commit(panel, &slider);
+    assert(route_calls == calls + 1 && app->config.logo_opacity == opacity);
+    route_acknowledge(panel, app);
+    panel->widget_count = 1;
+    panel->widgets[0] = (Widget){.id = slider.id + 2,
+                                 .type = W_FIELD,
+                                 .action = A_FIELD,
+                                 .enabled = true,
+                                 .index = opacity_index};
+    panel->focus = panel->active_text = slider.id + 2;
+    panel->select_all = true;
+    insert_text(panel, "0.375");
+    SDL_KeyboardEvent numeric_enter = {.key = SDLK_RETURN};
+    key_event(panel, &numeric_enter);
+    assert(route_calls == calls + 2 && app->config.logo_opacity == .375);
+    assert(!panel->active_text && !panel->edit[opacity_index].auto_apply);
+    route_acknowledge(panel, app);
+    panel->focus = panel->active_text = slider.id + 2;
+    panel->select_all = true;
+    insert_text(panel, "1.1");
+    key_event(panel, &numeric_enter);
+    assert(route_calls == calls + 2 && app->config.logo_opacity == .375);
+    assert(panel->error[0] && panel->edit[opacity_index].dirty);
+    stage_field(panel, opacity_index, "0.375");
+    commit_field(panel, opacity_index);
+    route_acknowledge(panel, app);
+    panel->error[0] = 0;
+
+    /* A practical drag span must never reduce the precise input's valid range. */
+    int step_index = find_field("zoom.step");
+    double step_minimum, step_maximum;
+    flow_slider_range(panel, (size_t)step_index, &step_minimum, &step_maximum);
+    assert(step_maximum < 3);
+    calls = route_calls;
+    stage_field(panel, step_index, "3");
+    commit_field(panel, step_index);
+    assert(route_calls == calls + 1 && app->config.zoom_step == 3);
+    route_acknowledge(panel, app);
+    int fps_index = find_field("output.fps");
+    calls = route_calls;
+    assert(!flow_enabled(panel, (size_t)fps_index));
+    stage_field(panel, fps_index, "90");
+    commit_field(panel, fps_index);
+    assert(route_calls == calls && !panel->edit[fps_index].dirty);
+
+    assert(!strcmp(flow_slider_unit(&fields[find_field("record.countdown")]), "s"));
+    assert(!strcmp(flow_slider_unit(&fields[find_field("keys.timeout_ms")]), "ms"));
+    assert(!strcmp(flow_slider_unit(&fields[find_field("composition.split_ratio")]), "%"));
+    assert(!strcmp(flow_slider_unit(&fields[find_field("stream.video_bitrate_kbps")]), "kbps"));
+    assert(!strcmp(flow_slider_unit(&fields[find_field("output.fps")]), "fps"));
+    assert(flow_slider_step(&fields[find_field("logo.opacity")]) == .01);
+    assert(flow_slider_step(&fields[find_field("zoom.smoothing")]) == .001);
+    assert(flow_slider_step(&fields[find_field("keys.timeout_ms")]) == 10);
 
     int color_index = find_field("screen.background_color");
     Widget swatch = {.id = 6006,

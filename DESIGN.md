@@ -69,11 +69,14 @@ OpenDesign project. This is an Operate surface: direct task actions first, essen
 composition controls next, advanced controls one disclosure away. The existing dark
 palette, bundled Inter family, square buttons and acknowledged daemon state remain.
 
-The header is one 36px row containing global privacy, Preview and a fixed 76px Close
-slot. It contains no lane chips. The permanent capture-exclusion notice and two equal
+The header is one 36px row containing Preview on/off, Close panel, Stop/Start daemon
+and Quit, in that order. Text-only compact actions share the available width. It contains no lane chips. The permanent capture-exclusion notice and two equal
 Operate/Compose tabs remain pinned. Only the body scrolls. Close always closes the
-panel alone, including while disconnected or waiting for an acknowledgement.
+panel alone, including while disconnected or waiting for an acknowledgement. Quit
+opens a centered, focus-trapped confirmation with Cancel selected. Confirmed shutdown
+waits for the daemon to finalize recordings before closing the application.
 
+Global privacy remains a 30px action at the top of the Operate body.
 Operate consists of four always-expanded single-column cards: Virtual camera,
 Recording, Streaming and Audio. Each lane has a 25px title, state dot and text,
 quiet context, direct actions and one overflow menu. Starts remain privacy-safe:
@@ -99,7 +102,7 @@ values, swatch/hex/screen color pickers, focusable anchor grid and layout diagra
 colors show a warning border/message. Unsupported controls and output locks explain
 why they are unavailable. Output fonts remain separate from the panel typeface.
 Independent controls apply on selection, slider release, or text-field completion.
-Pixel controls pair practical slider ranges with precise numeric inputs. The pinned
+All numeric controls pair practical slider ranges with precise numeric inputs. The pinned
 draft bar retains Apply/Revert for coupled settings and invalid or failed edits.
 Acknowledgement preserves later typing, page and scroll; all changes are session only.
 Navigation never writes config.

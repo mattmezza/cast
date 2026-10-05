@@ -29,7 +29,7 @@ def wait_until(predicate, description, timeout=10):
     raise AssertionError(description)
 
 
-def exercise(focused_setup_parent=False, focused_exclusion=False):
+def exercise(focused_setup_parent=False, focused_exclusion=False, focused_lifecycle=False):
     with tempfile.TemporaryDirectory(prefix="cast-panel-redesign-") as directory:
         root = Path(directory)
         environment = os.environ.copy()
@@ -69,9 +69,22 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
 
         def start_daemon():
             backend = "xorg" if focused_exclusion else "synthetic"
-            return spawn(BINARY, *common, "--backend", backend, "--camera-device",
+            return spawn(BINARY, *common, "--headless", "--backend", backend, "--camera-device",
                          "synthetic", "--output-device", "none", "--width", "320",
                          "--height", "240", "--fps", "20")
+
+        def start_application():
+            nonlocal window, last_ui
+            (root / "ui.json").unlink(missing_ok=True)
+            last_ui = {"frame": 0, "connected": False, "widgets": []}
+            child = spawn(BINARY, *common, "--backend", "xorg", "--camera-device",
+                          "synthetic", "--output-device", "none", "--width", "320",
+                          "--height", "240", "--fps", "20")
+            wait_until(lambda: ui()["frame"] and ui()["connected"], "application did not start panel + daemon")
+            window = xdo("search", "--onlyvisible", "--pid", child.pid, "--class", "CastPanel").splitlines()[0]
+            xdo("windowfocus", "--sync", window)
+            xdo("windowmove", window, 0, 0)
+            return child
 
         def start_panel():
             nonlocal window, last_ui
@@ -111,7 +124,7 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
                 item = fresh
                 x, y, width, height = item["box"]
                 area = ui()["scroll"]
-                pinned = (item["id"] in (5, 6, 7, 10, 11, 12, 22, 34, 99)
+                pinned = (item["id"] in (5, 6, 7, 8, 9, 10, 11, 12, 22, 99, 9100, 9101)
                           or 160 <= item["id"] <= 166
                           or 400 <= item["id"] < 500 or 700 <= item["id"] <= 717
                           or 6000 <= item["id"] <= 6501
@@ -217,19 +230,22 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             bounds = dict(line.split("=", 1) for line in
                           xdo("getwindowgeometry", "--shell", window).splitlines() if "=" in line)
             width, height = int(bounds["WIDTH"])/scale, int(bounds["HEIGHT"])/scale
-            for identifier in (5, 6, 7, 22, 34):
+            for identifier in (5, 6, 7, 8, 9, 22):
                 item = widget(identifier)
                 assert item, identifier
                 x, y, w, h = item["box"]
                 assert x >= 0 and y >= 0 and x+w <= width+1 and y+h <= height+1, (identifier, item, bounds)
-                if identifier in (7, 22, 34):
+                if identifier in (7, 8, 9, 22):
                     assert h == 36, ("privacy/preview height", item)
                 if identifier == 7:
                     assert item["enabled"], ("Close button unavailable", item)
-            assert abs(widget(22)["box"][2]-widget(34)["box"][2]) < 1, "meta-actions have unequal widths"
             close, preview = widget(7)["box"], widget(22)["box"]
             assert close[1] == preview[1] and close[0] >= preview[0]+preview[2], "Close is not beside Preview"
-            assert close[2] == 76 and preview[2] >= 110, "Close displaced preview state text"
+            header = [widget(i)["box"] for i in (22, 7, 8, 9)]
+            for left, right in zip(header, header[1:]):
+                assert left[1] == right[1] and left[0]+left[2] <= right[0], "header actions overlap"
+            if widget(34):
+                assert widget(34)["box"][1] >= ui()["scroll"][1], "privacy button remained in header"
             status = ui()["status_bar"]
             assert status[3] == 46, "status rows changed height"
             assert status[0] >= 0 and status[0]+status[2] <= width+1
@@ -264,6 +280,65 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             assert not widget(99) and not any(item["key"] for item in ui()["widgets"]), "list contains page controls"
 
         try:
+            if focused_lifecycle:
+                panel = start_application()
+                pinned_accessible()
+                for width in (360, 520, 800):
+                    xdo("windowsize", window, round(width*scale), round(760*scale))
+                    time.sleep(.2)
+                    pinned_accessible()
+                    capture(f"application-{width}")
+                click_widget(30)
+                wait_until(lambda: state()["virtual"]["state"] == "paused", "virtual start did not run")
+                click_widget(32)
+                wait_until(lambda: state()["record"]["state"] == "recording", "record start failed")
+                time.sleep(.4)
+                first_file = state()["record"]["path"]
+                cli("settings", "camera.width_percent", "31")
+                click_widget(22)
+                wait_until(lambda: ui()["preview_enabled"], "preview toggle failed")
+                before_close = state()
+                original_inode = (root / "daemon.sock").stat().st_ino
+                click_widget(7)
+                assert panel.wait(timeout=8) == 0
+                assert state()["record"]["path"] == first_file
+                assert state()["virtual"] == before_close["virtual"], "application Close changed output"
+                panel = start_application()
+                assert (root / "daemon.sock").stat().st_ino == original_inode, "second application replaced daemon"
+                assert state()["record"]["path"] == first_file, "second launch interrupted recording"
+                click_widget(8)
+                wait_until(lambda: not ui()["connected"] and not ui().get("daemon_stopping"), "Stop daemon failed", timeout=20)
+                assert panel.poll() is None and widget(8)["enabled"], "Stop closed panel or blocked restart"
+                assert not (root / "daemon.sock").exists()
+                subprocess.run(["ffprobe", "-v", "error", first_file], check=True, capture_output=True)
+                capture("application-stopped")
+                click_widget(8)
+                wait_until(lambda: ui()["connected"], "Start daemon failed")
+                navigate(1)
+                assert widget("camera.width_percent")["value"] == "31", "restart lost acknowledged session settings"
+                operate(1)
+                assert state()["record"]["state"] == "stopped", "restart resumed recording implicitly"
+                # Bare Xvfb has no WM to bring the panel above a reopened preview.
+                xdo("windowraise", window)
+                xdo("windowfocus", "--sync", window)
+                click_widget(32)
+                wait_until(lambda: state()["record"]["state"] == "recording", "recording after restart failed")
+                time.sleep(.4)
+                final_file = state()["record"]["path"]
+                click_widget(9)
+                wait_until(lambda: ui().get("quit_confirmation"), "Quit warning missing")
+                capture("application-quit-warning")
+                click_widget(9100)
+                wait_until(lambda: not ui().get("quit_confirmation"), "Cancel warning failed")
+                assert state()["record"]["path"] == final_file
+                click_widget(9)
+                wait_until(lambda: ui().get("quit_confirmation"), "second Quit warning missing")
+                click_widget(9101)
+                assert panel.wait(timeout=20) == 0
+                assert not (root / "daemon.sock").exists(), "Quit left daemon socket"
+                subprocess.run(["ffprobe", "-v", "error", final_file], check=True, capture_output=True)
+                assert config.read_bytes() == original_config
+                return
             daemon = start_daemon()
             wait_until(lambda: (root / "daemon.sock").exists(), "synthetic daemon did not start")
             initial = state()
@@ -607,7 +682,7 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             click_widget(714)
             acknowledge()
             capture("streaming-setup")
-            xdo("key", "--clearmodifiers", "ctrl+q")
+            click_widget(7)
             assert panel.wait(timeout=8) == 0
             panel = start_panel()
             wait_until(lambda: ui()["stream_setup"], "process restart forgot the setup sheet")
@@ -626,12 +701,28 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             cli("stream", "blur", "on")
             assert not state()["virtual"]["blurred"] and not state()["record"]["blurred"]
             cli("virtual", "pause")
-            click_widget(34)
+            cli("pause")
             wait_until(lambda: state()["group_paused"], "global privacy failed")
-            click_widget(34)
+            cli("resume")
             wait_until(lambda: not state()["group_paused"], "global restore failed")
             assert state()["virtual"]["paused"] and not state()["stream"]["paused"]
             assert state()["stream"]["blurred"] and not state()["record"]["paused"]
+            # Quit requires confirmation and traps focus; Cancel/Escape alter no lane.
+            quit_state = state()
+            click_widget(9)
+            wait_until(lambda: ui().get("quit_confirmation"), "Quit warning did not open")
+            assert ui()["focus"] == 9100, "Quit confirmation did not default to Cancel"
+            capture("quit-warning")
+            xdo("key", "--clearmodifiers", "alt+2")
+            assert ui().get("quit_confirmation"), "section shortcut escaped the warning"
+            click_widget(9100)
+            wait_until(lambda: not ui().get("quit_confirmation"), "Quit Cancel failed")
+            for lane in ("virtual", "record", "stream"):
+                assert state()[lane]["state"] == quit_state[lane]["state"], "Cancel changed an output"
+            xdo("key", "--clearmodifiers", "ctrl+q")
+            wait_until(lambda: ui().get("quit_confirmation"), "Ctrl+Q did not request app Quit")
+            xdo("key", "Escape")
+            wait_until(lambda: not ui().get("quit_confirmation"), "Escape did not cancel Quit")
             # Close owns only the panel process, including while both media lanes run.
             before_close = state()
             preview_before_close = ui()["preview_enabled"]
@@ -712,7 +803,7 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             remembered_scroll = ui()["scroll_offset"]
             assert remembered_scroll < -20
             before_close = state()
-            xdo("key", "--clearmodifiers", "ctrl+q")
+            click_widget(7)
             assert panel.wait(timeout=8) == 0
             panel = start_panel()
             wait_until(lambda: ui()["tab"] == 1 and ui()["open_section"] == 1,
@@ -726,7 +817,8 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             cli("quit")
             daemon.wait(timeout=8)
             wait_until(lambda: not ui()["connected"], "disconnect banner state did not appear")
-            assert not widget(34)["enabled"]
+            assert not widget(22)["enabled"]
+            assert widget(8)["enabled"], "Start daemon unavailable while disconnected"
             assert widget(7)["enabled"], "Close disabled while disconnected"
             capture("daemon-disconnected")
             daemon = start_daemon()
@@ -749,6 +841,9 @@ def exercise(focused_setup_parent=False, focused_exclusion=False):
             print("Native log tail:\n" + "\n".join((root / "native.log").read_text().splitlines()[-50:]), file=sys.stderr)
             raise
         finally:
+            if focused_lifecycle and (root / "daemon.sock").exists():
+                subprocess.run([BINARY, *common, "quit"], env=environment,
+                               stdout=log, stderr=log, timeout=8)
             for child in reversed(processes):
                 if child.poll() is None:
                     child.terminate()
@@ -776,10 +871,14 @@ if __name__ == "__main__":
         raise SystemExit(result.returncode)
     focused = "--setup-parent-only" in sys.argv
     exclusion = "--exclusion-only" in sys.argv
-    exercise(focused_setup_parent=focused, focused_exclusion=exclusion)
-    if focused:
+    lifecycle = "--lifecycle-only" in sys.argv
+    exercise(focused_setup_parent=focused, focused_exclusion=exclusion, focused_lifecycle=lifecycle)
+    if lifecycle:
+        print("native application: automatic panel + daemon, retained outputs on Close, daemon stop/restart, saved recording and confirmed Quit passed")
+    elif focused:
         print("native panel: streaming setup parent/view/reopen passed")
     elif exclusion:
         print("native Xorg panel: mask color validation/commit, eyedropper sample/cancellation, immediate annotation matrix and authoritative CLI synchronization passed")
     else:
+        exercise(focused_lifecycle=True)
         print("native panel: nine workflows, Compose pages/back/keys, pinned drafts, session navigation memory, compact status/header, privacy restore, private streaming, disconnect/reconnect and 360–800px density passed")

@@ -36,11 +36,13 @@ The panel follows the approved flow-first Operate/Compose prototype.
 Operate exposes independent Virtual camera, Recording and Streaming controls plus
 Audio. Compose opens six dedicated pages with Essentials/All settings, inline groups,
 a pinned draft bar, keyboard jumps and session navigation memory.
-Only the body scrolls; global privacy, preview toggle and exclusion
+Only the body scrolls; Preview, Close panel, Stop/Start daemon, Quit and exclusion
 remain pinned. Independent edits apply when the interaction finishes; coupled
 settings retain explicit Apply/Revert. Commands use acknowledged IPC.
 Streaming is one configured RTMP/RTMPS destination, without OAuth or service APIs.
-Opening/closing the panel never changes any output state.
+Ordinary application launch starts a daemon and opens the panel. Attach-only `cast panel`,
+window navigation and Close panel leave output state unchanged. Stop daemon finalizes
+outputs while retaining the panel; Quit requires confirmation and waits for shutdown.
 Camera mirroring defaults on and affects only the webcam. A custom paused message
 must be editable through both CLI and panel. Runtime changes affect the session;
 the program never automatically writes user configuration.

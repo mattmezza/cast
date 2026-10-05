@@ -1,17 +1,25 @@
 # Native control panel
 
-Build with `PANEL=1` and run `cast panel`. The panel is an independent client of the
-existing daemon. Opening, navigating, closing or reconnecting the panel never
-starts, stops, pauses or reveals an output. **Close**, beside **Preview**,
-or `Ctrl+Q` closes only this window, including while disconnected or waiting for
-a command acknowledgement.
+Build with `PANEL=1` and launch `cast` (or **Cast** from the application menu).
+Ordinary startup opens the panel and starts a daemon unless one is already running.
+`cast --headless` runs only the foreground daemon; `cast panel` attaches a panel
+without starting capture automatically. Navigating, resizing or reconnecting never
+starts, pauses or reveals an output.
+**Close panel**, beside **Preview**, and the window-manager close action close only
+this window. The daemon, recording, streaming and preview continue running.
+**Stop daemon** stops outputs, finalizes recordings and leaves the panel available;
+**Start daemon** restarts it using the last acknowledged session configuration.
+Stopped recordings and streams do not restart automatically. Virtual camera startup
+retains its privacy pause. **Quit** or `Ctrl+Q` opens a warning with Cancel selected;
+**Stop and quit** shuts down all outputs, saves recording trailers, closes preview,
+and waits for daemon cleanup before closing the panel. Cancel/Escape change no output.
 The optional Clay/SDL3 renderer uses bundled Inter at native display density and
 has no effect on a `PANEL=0` daemon’s streaming capability.
 
 ## Operate
 
-The pinned header is one 36-pixel row: **Pause all / Resume**, **Preview on/off**,
-and **Close**. Output state and actions live on four always-expanded, single-column
+The pinned header is one 36-pixel row: **Preview on/off**, **Close panel**,
+**Stop/Start daemon**, and **Quit**. Output state and actions live on four always-expanded, single-column
 task cards: **Virtual camera**, **Recording**, **Streaming**, and **Audio**.
 The capture-exclusion notice and Operate/Compose tabs remain pinned below the header.
 
@@ -35,7 +43,8 @@ Virtual-microphone controls stay with audio/output options. Streaming options sh
 server and key-file path and link to the dedicated setup view. No stream secret is
 shown. Options never nest, close with Escape/outside click and close on navigation.
 
-**Pause all / Resume** follows the daemon's remembered group restoration: stopped
+**Pause all / Resume outputs**, above the Operate cards, and
+`cast pause` / `cast resume` follow the daemon's remembered group restoration: stopped
 outputs remain stopped and independently paused outputs remain paused. Preview is
 a separate floating window; its toggle is unavailable while countdown owns it.
 
@@ -58,8 +67,10 @@ remaining fields inline with labeled groups. This one-level disclosure retains d
 and page scroll. Layout diagrams represent the five actual layouts. Camera position
 uses eight points around a disabled center; no drag-in-preview or Free option is
 advertised. Free coordinates remain advanced controls for CLI-selected free positioning.
-Camera shape and backdrop source use chips. Size, zoom, gains, countdown and pixel-valued
-settings use sliders. Pixel sliders also provide an exact numeric field; disabled
+Camera shape and backdrop source use chips. All 64 numeric settings use sliders
+with exact editable inputs, including sizes, opacity, brightness, duration, bitrates,
+zoom, gains and countdown. Slider ranges cover practical values; precise inputs
+retain the full supported range. Disabled
 startup-only dimensions remain read-only.
 Background fields change with the selected mode rather than exposing unrelated colors.
 Per-output click/keystroke visibility appears once as a three-column matrix.
@@ -67,10 +78,10 @@ Per-output click/keystroke visibility appears once as a three-column matrix.
 Enums and discovered devices use keyboard-operable, scrollable choice pickers.
 Color pickers offer swatches, editable #RRGGBB text and **Pick from screen**.
 Swatches apply immediately. Invalid hex stays visible and never reaches the daemon.
-On X11, Pick from screen changes the pointer to a crosshair: left-click samples the
-visible pixel, while Escape or right-click cancels without changing the setting.
+On X11, Pick from screen changes the pointer to a crosshair with a small swatch
+beside it showing the hovered pixel color. Left-click samples that visible pixel, while Escape or right-click cancels without changing the setting.
 On Wayland it asks the desktop portal for a color selection; availability depends on
-the installed portal. Cancellation or an unavailable picker leaves the color unchanged
+the installed portal; its picker owns the global UI and any hover preview. Cancellation or an unavailable picker leaves the color unchanged
 and reports an error when appropriate. No screenshot or sampled image is saved.
 Boolean controls have explicit On/Off segments. Unavailable capabilities and active
 output locks keep their controls visible with explanatory notes. Missing-resource
