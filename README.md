@@ -20,7 +20,7 @@ up-to-date Arch x86_64 system with curl installed:
 
 ```sh
 curl -fsSL --proto '=https' --proto-redir '=https' \
-  https://raw.githubusercontent.com/mattmezza/cast/v0.7/packaging/install.sh | sh -s -- v0.7
+  https://raw.githubusercontent.com/mattmezza/cast/v0.8/packaging/install.sh | sh -s -- v0.8
 cast setup
 ```
 
@@ -34,7 +34,7 @@ Virtual-camera setup is a separate step explained by `cast setup`; the installer
 does not create devices or change your configuration.
 
 ```sh
-cast update v0.7
+cast update v0.8
 cast completions
 ```
 
