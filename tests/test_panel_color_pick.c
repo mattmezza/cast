@@ -4,6 +4,207 @@
 #include <stdio.h>
 #include <string.h>
 
+#ifdef WITH_X11
+#include <X11/Xatom.h>
+#include <X11/Xlib.h>
+#include <X11/Xutil.h>
+#include <X11/extensions/shape.h>
+#include <spawn.h>
+#include <stdlib.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+extern char **environ;
+
+static void xdo(const char *verb, const char *first, const char *second)
+{
+    char *arguments[] = {"xdotool", (char *)verb, (char *)first, (char *)second, NULL};
+    pid_t child;
+    assert(!posix_spawnp(&child, arguments[0], NULL, NULL, arguments, environ));
+    int status;
+    assert(waitpid(child, &status, 0) == child);
+    assert(WIFEXITED(status) && !WEXITSTATUS(status));
+}
+
+static unsigned long fixture_color(Display *display, unsigned r, unsigned g, unsigned b)
+{
+    XColor color = {.red = r * 257, .green = g * 257, .blue = b * 257};
+    assert(XAllocColor(display, DefaultColormap(display, DefaultScreen(display)), &color));
+    return color.pixel;
+}
+
+static Window find_swatch(Display *display)
+{
+    Window root, parent, *children;
+    unsigned count;
+    assert(XQueryTree(display, DefaultRootWindow(display), &root, &parent, &children, &count));
+    Window result = None;
+    Atom marker = XInternAtom(display, "_CAST_COLOR_PICKER", False);
+    for (unsigned i = 0; i < count; i++) {
+        Atom type;
+        int format;
+        unsigned long length, remaining;
+        unsigned char *data = NULL;
+        assert(XGetWindowProperty(display, children[i], marker, 0, 1, False, XA_CARDINAL,
+                                  &type, &format, &length, &remaining, &data) == Success);
+        if (type == XA_CARDINAL && format == 32 && length == 1 && *(unsigned long *)data == 1) {
+            assert(result == None);
+            result = children[i];
+        }
+        if (data) {
+            XFree(data);
+        }
+    }
+    XFree(children);
+    return result;
+}
+
+static void assert_swatch(Display *display, Window swatch, int pointer_x, int pointer_y,
+                           unsigned r, unsigned g, unsigned b)
+{
+    XWindowAttributes attributes;
+    assert(XGetWindowAttributes(display, swatch, &attributes));
+    assert(attributes.override_redirect && attributes.map_state == IsViewable);
+    assert(attributes.width == attributes.height && attributes.width <= 32);
+    assert(pointer_x < attributes.x || pointer_x >= attributes.x + attributes.width ||
+           pointer_y < attributes.y || pointer_y >= attributes.y + attributes.height);
+    XWMHints *hints = XGetWMHints(display, swatch);
+    assert(hints && hints->flags & InputHint && !hints->input);
+    XFree(hints);
+    int shape_count, ordering;
+    XRectangle *shape = XShapeGetRectangles(display, swatch, ShapeInput, &shape_count, &ordering);
+    assert(shape_count == 0);
+    XFree(shape);
+    XImage *image = XGetImage(display, swatch, attributes.width / 2, attributes.height / 2,
+                             1, 1, AllPlanes, ZPixmap);
+    assert(image);
+    XColor color = {.pixel = XGetPixel(image, 0, 0)};
+    XQueryColor(display, attributes.colormap, &color);
+    if ((color.red + 128u) / 257u != r || (color.green + 128u) / 257u != g ||
+        (color.blue + 128u) / 257u != b) {
+        fprintf(stderr, "swatch at pointer %d,%d: expected %u,%u,%u, got %u,%u,%u\n",
+            pointer_x, pointer_y, r, g, b, (color.red + 128u) / 257u,
+            (color.green + 128u) / 257u, (color.blue + 128u) / 257u);
+    }
+    assert((color.red + 128u) / 257u == r && (color.green + 128u) / 257u == g &&
+           (color.blue + 128u) / 257u == b);
+    XDestroyImage(image);
+}
+
+static void x11_tick(PanelColorPick *pick, Display *display)
+{
+    for (int i = 0; i < 4; i++) {
+        assert(panel_color_pick_poll(pick, NULL) == PANEL_COLOR_PICK_PENDING);
+        XSync(display, False);
+        usleep(1000);
+    }
+}
+
+static void test_x11_swatch(void)
+{
+    /* Opt in only on a private Xvfb: never paint or warp the user's desktop. */
+    if (!getenv("CAST_PANEL_COLOR_PICK_TEST_X11")) {
+        return;
+    }
+    Display *display = XOpenDisplay(NULL);
+    assert(display);
+    Window root = DefaultRootWindow(display);
+    int width = DisplayWidth(display, DefaultScreen(display));
+    int height = DisplayHeight(display, DefaultScreen(display));
+    assert(width >= 400 && height >= 200);
+    XSetWindowAttributes attributes = {.override_redirect = True, .backing_store = Always};
+    Window fixture = XCreateWindow(display, root, 0, 0, width, height, 0, CopyFromParent,
+        InputOutput, CopyFromParent, CWOverrideRedirect | CWBackingStore, &attributes);
+    GC gc = XCreateGC(display, fixture, 0, NULL);
+    XMapRaised(display, fixture);
+    XSetForeground(display, gc, fixture_color(display, 17, 34, 51));
+    XFillRectangle(display, fixture, gc, 0, 0, width, height);
+    XSetForeground(display, gc, fixture_color(display, 170, 187, 204));
+    XFillRectangle(display, fixture, gc, 200, 0, width - 200, height);
+    XSync(display, False);
+    xdo("mousemove", "100", "100");
+    PanelColorPick *pick = panel_color_pick_new();
+    assert(pick && !panel_color_pick_begin(pick, "x11", NULL));
+    x11_tick(pick, display);
+    Window swatch = find_swatch(display);
+    assert(swatch);
+    assert_swatch(display, swatch, 100, 100, 17, 34, 51);
+    /* The old square's white corner must be replaced by the underlying color. */
+    XWindowAttributes old;
+    assert(XGetWindowAttributes(display, swatch, &old));
+    char x[32], y[32];
+    snprintf(x, sizeof x, "%d", old.x);
+    snprintf(y, sizeof y, "%d", old.y);
+    xdo("mousemove", x, y);
+    x11_tick(pick, display);
+    assert_swatch(display, swatch, old.x, old.y, 17, 34, 51);
+    xdo("mousemove", "300", "100");
+    x11_tick(pick, display);
+    assert_swatch(display, swatch, 300, 100, 170, 187, 204);
+    /* A stationary pointer still previews changing desktop content. */
+    XSetForeground(display, gc, fixture_color(display, 68, 187, 119));
+    XFillRectangle(display, fixture, gc, 295, 95, 10, 10);
+    XSync(display, False);
+    x11_tick(pick, display);
+    assert_swatch(display, swatch, 300, 100, 68, 187, 119);
+    xdo("click", "1", NULL);
+    uint8_t rgb[3];
+    for (int i = 0; i < 100 && panel_color_pick_poll(pick, rgb) == PANEL_COLOR_PICK_PENDING; i++) {
+        usleep(1000);
+    }
+    assert(panel_color_pick_poll(pick, rgb) == PANEL_COLOR_PICK_SUCCESS);
+    assert(rgb[0] == 68 && rgb[1] == 187 && rgb[2] == 119);
+    assert(!find_swatch(display));
+    /* A click that jumps into the old square reads its underlying desktop,
+     * even when no hover tick occurred between that move and the click. */
+    assert(!panel_color_pick_begin(pick, "x11", NULL));
+    x11_tick(pick, display);
+    assert(XGetWindowAttributes(display, find_swatch(display), &old));
+    snprintf(x, sizeof x, "%d", old.x + old.width / 2);
+    snprintf(y, sizeof y, "%d", old.y + old.height / 2);
+    xdo("mousemove", x, y);
+    xdo("click", "1", NULL);
+    for (int i = 0; i < 100 && panel_color_pick_poll(pick, rgb) == PANEL_COLOR_PICK_PENDING; i++) {
+        usleep(1000);
+    }
+    assert(panel_color_pick_poll(pick, rgb) == PANEL_COLOR_PICK_SUCCESS);
+    assert(rgb[0] == 170 && rgb[1] == 187 && rgb[2] == 204);
+    assert(!find_swatch(display));
+    assert(!panel_color_pick_begin(pick, "x11", NULL));
+    x11_tick(pick, display);
+    xdo("key", "Escape", NULL);
+    assert(panel_color_pick_poll(pick, NULL) == PANEL_COLOR_PICK_CANCELLED);
+    assert(!find_swatch(display));
+    assert(!panel_color_pick_begin(pick, "x11", NULL));
+    x11_tick(pick, display);
+    xdo("click", "3", NULL);
+    assert(panel_color_pick_poll(pick, NULL) == PANEL_COLOR_PICK_CANCELLED);
+    assert(!find_swatch(display));
+    /* Near screen edges the preview flips beside, never beneath, the pointer. */
+    snprintf(x, sizeof x, "%d", width - 1);
+    snprintf(y, sizeof y, "%d", height - 1);
+    xdo("mousemove", x, y);
+    assert(!panel_color_pick_begin(pick, "x11", NULL));
+    x11_tick(pick, display);
+    assert_swatch(display, find_swatch(display), width - 1, height - 1, 170, 187, 204);
+    panel_color_pick_cancel(pick);
+    assert(!find_swatch(display));
+    assert(XGrabPointer(display, root, False, ButtonPressMask, GrabModeAsync, GrabModeAsync,
+                         None, None, CurrentTime) == GrabSuccess);
+    assert(XGrabKeyboard(display, root, False, GrabModeAsync, GrabModeAsync, CurrentTime) == GrabSuccess);
+    XUngrabPointer(display, CurrentTime);
+    XUngrabKeyboard(display, CurrentTime);
+    XSync(display, False);
+    assert(!panel_color_pick_begin(pick, "x11", NULL));
+    x11_tick(pick, display);
+    panel_color_pick_free(pick);
+    assert(!find_swatch(display));
+    XFreeGC(display, gc);
+    XDestroyWindow(display, fixture);
+    XCloseDisplay(display);
+}
+#endif
+
 #ifdef WITH_WAYLAND
 #include <gio/gio.h>
 
@@ -231,6 +432,9 @@ int main(void)
     panel_color_pick_cancel(pick);
     assert(panel_color_pick_poll(pick, NULL) == PANEL_COLOR_PICK_IDLE);
     panel_color_pick_free(pick);
+#ifdef WITH_X11
+    test_x11_swatch();
+#endif
 #ifdef WITH_WAYLAND
     test_portal();
 #endif

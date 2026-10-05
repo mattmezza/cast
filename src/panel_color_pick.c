@@ -7,10 +7,16 @@
 #include <string.h>
 
 #ifdef WITH_X11
+#include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/cursorfont.h>
+#include <X11/extensions/shape.h>
 #include <X11/keysym.h>
+#include <unistd.h>
+
+#define SWATCH_SIZE 28
+#define SWATCH_GAP 16
 #endif
 #ifdef WITH_WAYLAND
 #include <gio/gio.h>
@@ -40,6 +46,12 @@ struct PanelColorPick {
 #ifdef WITH_X11
     Display *display;
     Cursor cursor;
+    Window swatch;
+    GC swatch_gc;
+    XImage *swatch_under;
+    int swatch_x, swatch_y;
+    unsigned long swatch_pixel;
+    bool swatch_visible;
     bool pointer_grabbed, keyboard_grabbed, x11_dead, x11_selected;
 #endif
 #ifdef WITH_WAYLAND
@@ -108,6 +120,12 @@ static void x11_close(PanelColorPick *pick)
     }
     x11_enter(pick);
     if (!pick->x11_dead) {
+        if (pick->swatch) {
+            XDestroyWindow(pick->display, pick->swatch);
+        }
+        if (pick->swatch_gc) {
+            XFreeGC(pick->display, pick->swatch_gc);
+        }
         if (pick->pointer_grabbed) {
             XUngrabPointer(pick->display, CurrentTime);
         }
@@ -121,8 +139,15 @@ static void x11_close(PanelColorPick *pick)
     /* Closing the connection also releases every grab after a partial start. */
     XCloseDisplay(pick->display);
     x11_leave();
+    if (pick->swatch_under) {
+        XDestroyImage(pick->swatch_under);
+        pick->swatch_under = NULL;
+    }
     pick->display = NULL;
     pick->cursor = None;
+    pick->swatch = None;
+    pick->swatch_gc = NULL;
+    pick->swatch_visible = false;
     pick->pointer_grabbed = pick->keyboard_grabbed = false;
     pick->x11_selected = false;
 }
@@ -169,6 +194,165 @@ static uint8_t x11_component(unsigned long pixel, unsigned long mask)
     return (uint8_t)lround((double)(pixel & mask) * 255.0 / (double)mask);
 }
 
+static bool x11_read_pixel(PanelColorPick *pick, Window root, int x, int y,
+                           uint8_t rgb[3], unsigned long *sample)
+{
+    /* Moving into the old square must use its underlying desktop patch.
+     * Merely unmapping is insufficient: application/compositor repaint may
+     * arrive after XSync and expose the old square in immediate readback. */
+    bool covered = pick->swatch_visible && pick->swatch_under &&
+        x >= pick->swatch_x && y >= pick->swatch_y &&
+        x < pick->swatch_x + SWATCH_SIZE && y < pick->swatch_y + SWATCH_SIZE;
+    XImage *image = covered ? pick->swatch_under
+                           : XGetImage(pick->display, root, x, y, 1, 1, AllPlanes, ZPixmap);
+    if (!image || pick->x11_dead || x11_error_code) {
+        if (image && !covered) {
+            XDestroyImage(image);
+        }
+        return false;
+    }
+    unsigned long pixel = XGetPixel(image, covered ? x - pick->swatch_x : 0,
+                                   covered ? y - pick->swatch_y : 0);
+    if (sample) {
+        *sample = pixel;
+    }
+    if (rgb) {
+        if (image->red_mask && image->green_mask && image->blue_mask) {
+            rgb[0] = x11_component(pixel, image->red_mask);
+            rgb[1] = x11_component(pixel, image->green_mask);
+            rgb[2] = x11_component(pixel, image->blue_mask);
+        } else {
+            XColor color = {.pixel = pixel};
+            XQueryColor(pick->display, DefaultColormap(pick->display, DefaultScreen(pick->display)), &color);
+            rgb[0] = (uint8_t)((color.red + 128u) / 257u);
+            rgb[1] = (uint8_t)((color.green + 128u) / 257u);
+            rgb[2] = (uint8_t)((color.blue + 128u) / 257u);
+        }
+    }
+    if (!covered) {
+        XDestroyImage(image);
+    }
+    return !pick->x11_dead && !x11_error_code;
+}
+
+static void x11_create_swatch(PanelColorPick *pick)
+{
+    Display *display = pick->display;
+    XSetWindowAttributes attributes = {
+        .override_redirect = True,
+        .save_under = True,
+        .background_pixel = BlackPixel(display, DefaultScreen(display)),
+    };
+    pick->swatch = XCreateWindow(display, DefaultRootWindow(display), 0, 0,
+        SWATCH_SIZE, SWATCH_SIZE, 0, CopyFromParent, InputOutput, CopyFromParent,
+        CWOverrideRedirect | CWSaveUnder | CWBackPixel, &attributes);
+    pick->swatch_gc = XCreateGC(display, pick->swatch, 0, NULL);
+    XStoreName(display, pick->swatch, "cast screen color");
+    XClassHint class_hint = {.res_name = "cast-color-picker", .res_class = "CastColorPicker"};
+    XSetClassHint(display, pick->swatch, &class_hint);
+    XWMHints hints = {.flags = InputHint, .input = False};
+    XSetWMHints(display, pick->swatch, &hints);
+    Atom tooltip = XInternAtom(display, "_NET_WM_WINDOW_TYPE_TOOLTIP", False);
+    XChangeProperty(display, pick->swatch, XInternAtom(display, "_NET_WM_WINDOW_TYPE", False),
+        XA_ATOM, 32, PropModeReplace, (unsigned char *)&tooltip, 1);
+    unsigned long one = 1, pid = (unsigned long)getpid();
+    XChangeProperty(display, pick->swatch, XInternAtom(display, "_CAST_COLOR_PICKER", False),
+        XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&one, 1);
+    XChangeProperty(display, pick->swatch, XInternAtom(display, "_NET_WM_PID", False),
+        XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&pid, 1);
+    int major, minor;
+    if (XShapeQueryVersion(display, &major, &minor) && (major > 1 || (major == 1 && minor >= 1))) {
+        /* The indicator is visual only and cannot intercept a click or focus. */
+        XShapeCombineRectangles(display, pick->swatch, ShapeInput, 0, 0, NULL, 0,
+                                ShapeSet, Unsorted);
+    }
+}
+
+static void x11_update_swatch(PanelColorPick *pick)
+{
+    Window root, child;
+    int x, y, window_x, window_y;
+    unsigned mask;
+    if (!XQueryPointer(pick->display, DefaultRootWindow(pick->display), &root, &child,
+                       &x, &y, &window_x, &window_y, &mask)) {
+        if (pick->swatch_visible) {
+            XUnmapWindow(pick->display, pick->swatch);
+            pick->swatch_visible = false;
+        }
+        return;
+    }
+    unsigned long pixel;
+    if (!x11_read_pixel(pick, root, x, y, NULL, &pixel)) {
+        fail(pick, "Cannot read that screen pixel. Try selecting another point.");
+        return;
+    }
+    if (!pick->swatch) {
+        x11_create_swatch(pick);
+    }
+    int width = DisplayWidth(pick->display, DefaultScreen(pick->display));
+    int height = DisplayHeight(pick->display, DefaultScreen(pick->display));
+    int swatch_x = x + SWATCH_GAP, swatch_y = y + SWATCH_GAP;
+    if (swatch_x + SWATCH_SIZE > width) {
+        swatch_x = x - SWATCH_GAP - SWATCH_SIZE;
+    }
+    if (swatch_y + SWATCH_SIZE > height) {
+        swatch_y = y - SWATCH_GAP - SWATCH_SIZE;
+    }
+    if (swatch_x < 0) {
+        swatch_x = 0;
+    }
+    if (swatch_y < 0) {
+        swatch_y = 0;
+    }
+    bool repaint = !pick->swatch_visible || pixel != pick->swatch_pixel;
+    if (!pick->swatch_visible || swatch_x != pick->swatch_x || swatch_y != pick->swatch_y) {
+        XImage *under = XGetImage(pick->display, root, swatch_x, swatch_y,
+                                  SWATCH_SIZE, SWATCH_SIZE, AllPlanes, ZPixmap);
+        if (!under || pick->x11_dead || x11_error_code) {
+            if (under) {
+                XDestroyImage(under);
+            }
+            fail(pick, "Cannot display the screen color preview.");
+            return;
+        }
+        /* Merge the previous patch where the new square overlaps it, before
+         * moving. Root readback there still contains our previous overlay. */
+        if (pick->swatch_visible && pick->swatch_under) {
+            for (int py = 0; py < SWATCH_SIZE; py++) {
+                for (int px = 0; px < SWATCH_SIZE; px++) {
+                    int old_x = swatch_x + px - pick->swatch_x;
+                    int old_y = swatch_y + py - pick->swatch_y;
+                    if (old_x >= 0 && old_x < SWATCH_SIZE && old_y >= 0 && old_y < SWATCH_SIZE) {
+                        XPutPixel(under, px, py, XGetPixel(pick->swatch_under, old_x, old_y));
+                    }
+                }
+            }
+        }
+        if (pick->swatch_under) {
+            XDestroyImage(pick->swatch_under);
+        }
+        pick->swatch_under = under;
+        XMoveWindow(pick->display, pick->swatch, swatch_x, swatch_y);
+        pick->swatch_x = swatch_x;
+        pick->swatch_y = swatch_y;
+        repaint = true;
+    }
+    if (!pick->swatch_visible) {
+        XMapRaised(pick->display, pick->swatch);
+        pick->swatch_visible = true;
+    }
+    if (repaint) {
+        XSetWindowBackground(pick->display, pick->swatch, pixel);
+        XClearWindow(pick->display, pick->swatch);
+        XSetForeground(pick->display, pick->swatch_gc, WhitePixel(pick->display, DefaultScreen(pick->display)));
+        XDrawRectangle(pick->display, pick->swatch, pick->swatch_gc, 0, 0, SWATCH_SIZE - 1, SWATCH_SIZE - 1);
+        XSetForeground(pick->display, pick->swatch_gc, BlackPixel(pick->display, DefaultScreen(pick->display)));
+        XDrawRectangle(pick->display, pick->swatch, pick->swatch_gc, 1, 1, SWATCH_SIZE - 3, SWATCH_SIZE - 3);
+        pick->swatch_pixel = pixel;
+    }
+    XFlush(pick->display);
+}
+
 static void x11_poll(PanelColorPick *pick)
 {
     x11_enter(pick);
@@ -191,30 +375,16 @@ static void x11_poll(PanelColorPick *pick)
         if (event.type != ButtonPress || event.xbutton.button != Button1 || pick->x11_selected) {
             continue;
         }
-        XImage *image = XGetImage(pick->display, event.xbutton.root,
-                                 event.xbutton.x_root, event.xbutton.y_root,
-                                 1, 1, AllPlanes, ZPixmap);
-        if (image && !pick->x11_dead && !x11_error_code) {
-            unsigned long pixel = XGetPixel(image, 0, 0);
-            if (image->red_mask && image->green_mask && image->blue_mask) {
-                pick->rgb[0] = x11_component(pixel, image->red_mask);
-                pick->rgb[1] = x11_component(pixel, image->green_mask);
-                pick->rgb[2] = x11_component(pixel, image->blue_mask);
-            } else {
-                XColor color = {.pixel = pixel};
-                XQueryColor(pick->display, DefaultColormap(pick->display, DefaultScreen(pick->display)), &color);
-                pick->rgb[0] = (uint8_t)((color.red + 128u) / 257u);
-                pick->rgb[1] = (uint8_t)((color.green + 128u) / 257u);
-                pick->rgb[2] = (uint8_t)((color.blue + 128u) / 257u);
-            }
+        if (x11_read_pixel(pick, event.xbutton.root, event.xbutton.x_root,
+                            event.xbutton.y_root, pick->rgb, NULL)) {
             pick->x11_selected = true;
         } else {
             fail(pick, "Cannot read that screen pixel. Try selecting another point.");
         }
-        if (image) {
-            XDestroyImage(image);
-        }
         break;
+    }
+    if (pick->status == PANEL_COLOR_PICK_PENDING && !pick->x11_selected && !pick->x11_dead) {
+        x11_update_swatch(pick);
     }
     if (pick->x11_dead) {
         fail(pick, "The X11 display disconnected during screen color selection.");
