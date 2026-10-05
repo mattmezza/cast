@@ -111,7 +111,8 @@ cards with direct output actions and an Audio card. Compose has six dedicated pa
 with Essentials first and **All settings** revealing the rest. Sticky Back and a
 pinned Apply/Revert bar stay accessible while scrolling. Alt+1…6 jump directly
 to sections, 1/2 switch tabs, and Escape goes back. Drafts stay local until Apply
-or Enter; page and scroll restore when reopening the panel in the same session. Preview remains a separate floating window with three target
+or Enter; camera and stage size sliders update the composition on release. Page
+and scroll restore when reopening the panel in the same session. Preview remains a separate floating window with three target
 pills. A recording countdown temporarily uses it and hides it before recording
 begins.
 

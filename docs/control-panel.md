@@ -88,7 +88,11 @@ The experimental transparent mode has been removed: it only revealed Cast's
 background, rather than the desktop hidden behind the control windows. Remove
 `[capture] exclusion` from configurations that used that unreleased setting.
 
-Text, numeric, enum and boolean composition edits are local drafts. **Apply** sends
+Composition edits are local drafts, except camera and stage screen-size sliders:
+dragging stays local, then release sends one acknowledged setting update to the
+daemon. Keyboard geometry adjustments commit each step. These geometry updates
+affect active outputs as well as the floating preview; there is no preview-only IPC.
+Other draft controls use **Apply**, which sends
 one validated settings batch for the current section; **Revert** discards its unsent
 drafts. A pinned draft bar above the status bar shows the current page's edit count,
 Apply/Revert and **session only**. Enter applies the current section's draft.
