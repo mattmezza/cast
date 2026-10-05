@@ -412,6 +412,8 @@ typedef struct {
     float width, height;
     char error[CAST_ERR], reply[CAST_ERR];
     uint64_t command_seen, draw_frame;
+    uint32_t pending_button;
+    uint64_t pending_button_request;
     bool draft_context;
     TextCache cache[TEXT_CACHE_MAX];
     char strings[49152];
@@ -721,6 +723,9 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
         p->snapshot.command_queued > p->snapshot.command_completed) {
         enabled = false;
     }
+    if (p->pending_button == id && p->pending_button_request) {
+        enabled = false;
+    }
     Widget *w = widget(p, id, W_BUTTON, action, enabled);
     if (w) {
         w->index = index;
@@ -747,6 +752,11 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
                                              : bg,
                      .width = outline_width}})
     {
+        if (p->pending_button == id && p->pending_button_request) {
+            CLAY({.layout = {.sizing = {.width = CLAY_SIZING_FIXED(14),
+                                        .height = CLAY_SIZING_FIXED(14)}},
+                  .custom = {.customData = (void *)(uintptr_t)(1048576 + 5)}}) {}
+        }
         Icon icon = button_icon(p, id, action);
         if (icon != ICON_NONE && !card_action) {
             icon_slot(icon, enabled, selected);
@@ -1053,6 +1063,7 @@ static int find_field(const char *key)
 #define FLOW_LAYOUT_DATA 2
 #define FLOW_ANCHOR_DATA 3
 #define FLOW_COLOR_DATA 4
+#define FLOW_PENDING_DATA 5
 static void stage_field(Panel *, int, const char *);
 static void apply_setting(Panel *, int, const char *, bool);
 static void lane_menu_body(Panel *, int);
@@ -1193,7 +1204,11 @@ static void flow_combo(Panel *p, size_t index)
           .border = {.color = p->focus == id ? accent : line, .width = outline_width}})
     {
         const char *value = flow_value(p, index);
-        label(fit_text(p, value[0] ? value : "Default device", available, 1), 1,
+        const char *empty = !strcmp(f->key, "capture.monitor") ? "Selected monitor"
+                            : !strcmp(f->key, "audio.mic_source") ? "Default microphone"
+                            : !strcmp(f->key, "audio.desktop_source") ? "Choose desktop source"
+                            : "Choose camera";
+        label(fit_text(p, value[0] ? value : empty, available, 1), 1,
               enabled ? foreground : muted);
     }
     (void)f;
@@ -2536,7 +2551,7 @@ static void flow_color_layout(Panel *p)
                 for (int col = 0; col < 8; col++) {
                     int swatch = row * 8 + col;
                     uint32_t id = 6000 + (uint32_t)swatch;
-                    Widget *w = widget(p, id, W_BUTTON, A_SWATCH, true);
+                    Widget *w = widget(p, id, W_BUTTON, A_SWATCH, flow_enabled(p, (size_t)p->color_field));
                     if (w) {
                         w->index = p->color_field;
                         w->draft = true;
@@ -2553,7 +2568,7 @@ static void flow_color_layout(Panel *p)
         }
         int index = p->color_field;
         uint32_t id = 6500;
-        Widget *w = widget(p, id, W_FIELD, A_FIELD, true);
+        Widget *w = widget(p, id, W_FIELD, A_FIELD, flow_enabled(p, (size_t)index));
         if (w) {
             w->index = index;
             w->draft = true;
@@ -3054,7 +3069,13 @@ static void flow_draw_control(Panel *p, SDL_FRect box, uintptr_t data)
     unsigned value = (unsigned)(data - FLOW_DATA_BASE);
     unsigned kind = value & 15;
     unsigned index = value >> 4;
-    if (kind == FLOW_SLIDER_DATA && index < FIELD_COUNT) {
+    if (kind == FLOW_PENDING_DATA) {
+        int bright = (int)((SDL_GetTicks() / 220) % 3);
+        for (int i = 0; i < 3; i++) {
+            rounded(p, (SDL_FRect){box.x + i * 5, box.y + 6, 3, 3}, 1.5f,
+                    i == bright ? accent : muted);
+        }
+    } else if (kind == FLOW_SLIDER_DATA && index < FIELD_COUNT) {
         const FieldSpec *f = &fields[index];
         double current = strtod(p->edit[index].value, NULL);
         float ratio = (float)fmax(0, fmin(1, (current - f->minimum) / (f->maximum - f->minimum)));
@@ -3402,6 +3423,8 @@ static void apply_setting(Panel *p, int index, const char *value, bool draft)
         return;
     }
     p->reply[0] = 0;
+    p->pending_button = p->focus;
+    p->pending_button_request = p->snapshot.command_queued + 1;
     if (draft) {
         p->edit[index].pending = p->snapshot.command_queued + 1;
         p->edit[index].submitted_revision = p->edit[index].revision;
@@ -3471,6 +3494,8 @@ static void apply_section(Panel *p, int section)
         return;
     }
     p->reply[0] = 0;
+    p->pending_button = p->focus;
+    p->pending_button_request = p->snapshot.command_queued + 1;
     for (size_t i = 0; i < submitted; i++) {
         FieldEdit *edit = &p->edit[indexes[i]];
         edit->pending = p->snapshot.command_queued + 1;
@@ -3542,6 +3567,11 @@ static void flow_read_devices(Panel *p, const PanelSnapshot *fresh)
         return;
     }
     const char *key = fields[p->dropdown_field].key;
+    if (!strcmp(key, "audio.mic_source")) {
+        p->device_values[0][0] = 0;
+        snprintf(p->device_labels[0], sizeof p->device_labels[0], "Default microphone");
+        p->device_count = 1;
+    }
     const char *row = fresh->last_reply;
     while (*row && p->device_count < 64) {
         const char *end = strchr(row, '\n');
@@ -3612,6 +3642,8 @@ static void activate(Panel *p, Widget *w)
     case A_COMMAND:
         p->error[0] = 0;
         if (!panel_client_command(p->client, w->argc, w->arg, p->error, sizeof p->error)) {
+            p->pending_button = w->id;
+            p->pending_button_request = p->snapshot.command_queued + 1;
             p->reply[0] = 0;
         }
         break;
@@ -3671,7 +3703,10 @@ static void activate(Panel *p, Widget *w)
     case A_OPTION:
         if (p->dropdown_field < 0) {
             const char *args[] = {"preset", w->value};
-            panel_client_command(p->client, 2, args, p->error, sizeof p->error);
+            if (!panel_client_command(p->client, 2, args, p->error, sizeof p->error)) {
+                p->pending_button = p->dropdown;
+                p->pending_button_request = p->snapshot.command_queued + 1;
+            }
         } else {
             Widget *selector = find_widget(p, p->dropdown);
             if (selector && selector->draft) {
@@ -3736,7 +3771,10 @@ static void activate(Panel *p, Widget *w)
                               : w->index == 1 ? "record"
                                               : "virtual"};
         p->error[0] = 0;
-        panel_client_command(p->client, 3, args, p->error, sizeof p->error);
+        if (!panel_client_command(p->client, 3, args, p->error, sizeof p->error)) {
+            p->pending_button = w->id;
+            p->pending_button_request = p->snapshot.command_queued + 1;
+        }
     } break;
     default:
         break;
@@ -3875,7 +3913,7 @@ static void key_event(Panel *p, const SDL_KeyboardEvent *event)
         return;
     }
     Widget *focused = find_widget(p, p->focus);
-    if (focused && focused->type == W_SLIDER &&
+    if (focused && focused->enabled && focused->type == W_SLIDER &&
         (key == SDLK_LEFT || key == SDLK_RIGHT || key == SDLK_PAGEUP || key == SDLK_PAGEDOWN)) {
         const FieldSpec *f = &fields[focused->index];
         double step = strstr(f->key, "gain") ? .01 : !strcmp(f->key, "zoom.factor") ? .05 : 1;
@@ -4167,6 +4205,10 @@ static void poll_client(Panel *p)
             p->navigation_attachment = fresh.daemon_generation;
         }
         p->snapshot = fresh;
+        if (p->pending_button_request && fresh.command_completed >= p->pending_button_request) {
+            p->pending_button = 0;
+            p->pending_button_request = 0;
+        }
         flow_read_devices(p, &fresh);
         if (fresh.command_completed != p->command_seen) {
             p->command_seen = fresh.command_completed;
