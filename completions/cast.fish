@@ -38,6 +38,10 @@ function __cast_at
     end
     return 0
 end
+# Fish rechecks option conditions while completing their required values.
+function __cast_global_option
+    __cast_at; or __cast_at __cast_option_value
+end
 function __cast_command
     set -l positional (__cast_arguments)
     test (count $positional) -gt 0; and test "$positional[1]" = "$argv[1]"
@@ -70,23 +74,23 @@ complete -c cast -n __cast_at -a 'edition features license layout split camera s
 complete -c cast -l help -d 'Show command reference'
 complete -c cast -n __cast_at -l headless -d 'Run the daemon without opening the app'
 complete -c cast -n __cast_at -l version -d 'Print cast version'
-complete -c cast -n __cast_at -l config -r -F -d 'Config file'
-complete -c cast -n __cast_at -l socket -r -F -d 'Daemon socket path'
-complete -c cast -n __cast_at -l backend -r -a 'xorg wayland synthetic' -d 'Capture backend'
-complete -c cast -n __cast_at -l output-device -r -F -d 'Virtual camera device'
-complete -c cast -n __cast_at -l camera-device -r -F -d 'Physical camera device'
-complete -c cast -n __cast_at -l width -r -d 'Output width'
-complete -c cast -n __cast_at -l height -r -d 'Output height'
-complete -c cast -n __cast_at -l fps -r -d 'Output frame rate'
+complete -c cast -n __cast_global_option -l config -r -F -d 'Config file'
+complete -c cast -n __cast_global_option -l socket -r -F -d 'Daemon socket path'
+complete -c cast -n __cast_global_option -l backend -r -a 'xorg wayland synthetic' -d 'Capture backend'
+complete -c cast -n __cast_global_option -l output-device -r -F -d 'Virtual camera device'
+complete -c cast -n __cast_global_option -l camera-device -r -F -d 'Physical camera device'
+complete -c cast -n __cast_global_option -l width -r -d 'Output width'
+complete -c cast -n __cast_global_option -l height -r -d 'Output height'
+complete -c cast -n __cast_global_option -l fps -r -d 'Output frame rate'
 complete -c cast -n __cast_at -l no-virtual -d 'Disable virtual-camera output'
 complete -c cast -n __cast_at -l no-camera -d 'Disable camera input'
-complete -c cast -n __cast_at -l mic-source -r -d 'PipeWire microphone source'
-complete -c cast -n __cast_at -l desktop-source -r -d 'PipeWire desktop source'
-complete -c cast -n __cast_at -l record-dir -r -a '(__fish_complete_directories)' -d 'Recording directory'
-complete -c cast -n __cast_at -l container -r -d 'Recording container'
-complete -c cast -n __cast_at -l video-codec -r -a 'auto libx264 libopenh264' -d 'Video encoder'
-complete -c cast -n __cast_at -l audio-codec -r -d 'Audio encoder'
-complete -c cast -n __cast_at -l countdown -r -d 'Recording countdown seconds'
+complete -c cast -n __cast_global_option -l mic-source -r -d 'PipeWire microphone source'
+complete -c cast -n __cast_global_option -l desktop-source -r -d 'PipeWire desktop source'
+complete -c cast -n __cast_global_option -l record-dir -r -a '(__fish_complete_directories)' -d 'Recording directory'
+complete -c cast -n __cast_global_option -l container -r -d 'Recording container'
+complete -c cast -n __cast_global_option -l video-codec -r -a 'auto libx264 libopenh264' -d 'Video encoder'
+complete -c cast -n __cast_global_option -l audio-codec -r -d 'Audio encoder'
+complete -c cast -n __cast_global_option -l countdown -r -d 'Recording countdown seconds'
 complete -c cast -n '__cast_at layout' -a 'overlay stage split screen camera next prev'
 complete -c cast -n '__cast_at split' -a 'side ratio'
 complete -c cast -n '__cast_at split side' -a 'left right'
@@ -166,9 +170,9 @@ complete -c cast -n '__cast_subcommand config check' -l availability
 complete -c cast -n '__cast_subcommand config migrate' -l edition -xa 'community pro'
 complete -c cast -n '__cast_subcommand config migrate' -l write -r -F
 complete -c cast -n '__cast_subcommand config migrate' -l backup -r -F
-complete -c cast -n '__cast_at' -l record-bitrate -x
-complete -c cast -n '__cast_at' -l record-rate-control -xa 'auto bitrate crf'
-complete -c cast -n '__cast_at' -l stream-video-encoder -xa 'auto libx264 libopenh264'
+complete -c cast -n __cast_global_option -l record-bitrate -x
+complete -c cast -n __cast_global_option -l record-rate-control -xa 'auto bitrate crf'
+complete -c cast -n __cast_global_option -l stream-video-encoder -xa 'auto libx264 libopenh264'
 
 # Both edition executables share this grammar.
 complete -c cast-pro -f
@@ -176,23 +180,23 @@ complete -c cast-pro -n __cast_at -a 'edition features license layout split came
 complete -c cast-pro -l help -d 'Show command reference'
 complete -c cast-pro -n __cast_at -l headless -d 'Run the daemon without opening the app'
 complete -c cast-pro -n __cast_at -l version -d 'Print cast version'
-complete -c cast-pro -n __cast_at -l config -r -F -d 'Config file'
-complete -c cast-pro -n __cast_at -l socket -r -F -d 'Daemon socket path'
-complete -c cast-pro -n __cast_at -l backend -r -a 'xorg wayland synthetic' -d 'Capture backend'
-complete -c cast-pro -n __cast_at -l output-device -r -F -d 'Virtual camera device'
-complete -c cast-pro -n __cast_at -l camera-device -r -F -d 'Physical camera device'
-complete -c cast-pro -n __cast_at -l width -r -d 'Output width'
-complete -c cast-pro -n __cast_at -l height -r -d 'Output height'
-complete -c cast-pro -n __cast_at -l fps -r -d 'Output frame rate'
+complete -c cast-pro -n __cast_global_option -l config -r -F -d 'Config file'
+complete -c cast-pro -n __cast_global_option -l socket -r -F -d 'Daemon socket path'
+complete -c cast-pro -n __cast_global_option -l backend -r -a 'xorg wayland synthetic' -d 'Capture backend'
+complete -c cast-pro -n __cast_global_option -l output-device -r -F -d 'Virtual camera device'
+complete -c cast-pro -n __cast_global_option -l camera-device -r -F -d 'Physical camera device'
+complete -c cast-pro -n __cast_global_option -l width -r -d 'Output width'
+complete -c cast-pro -n __cast_global_option -l height -r -d 'Output height'
+complete -c cast-pro -n __cast_global_option -l fps -r -d 'Output frame rate'
 complete -c cast-pro -n __cast_at -l no-virtual -d 'Disable virtual-camera output'
 complete -c cast-pro -n __cast_at -l no-camera -d 'Disable camera input'
-complete -c cast-pro -n __cast_at -l mic-source -r -d 'PipeWire microphone source'
-complete -c cast-pro -n __cast_at -l desktop-source -r -d 'PipeWire desktop source'
-complete -c cast-pro -n __cast_at -l record-dir -r -a '(__fish_complete_directories)' -d 'Recording directory'
-complete -c cast-pro -n __cast_at -l container -r -d 'Recording container'
-complete -c cast-pro -n __cast_at -l video-codec -r -a 'auto libx264 libopenh264' -d 'Video encoder'
-complete -c cast-pro -n __cast_at -l audio-codec -r -d 'Audio encoder'
-complete -c cast-pro -n __cast_at -l countdown -r -d 'Recording countdown seconds'
+complete -c cast-pro -n __cast_global_option -l mic-source -r -d 'PipeWire microphone source'
+complete -c cast-pro -n __cast_global_option -l desktop-source -r -d 'PipeWire desktop source'
+complete -c cast-pro -n __cast_global_option -l record-dir -r -a '(__fish_complete_directories)' -d 'Recording directory'
+complete -c cast-pro -n __cast_global_option -l container -r -d 'Recording container'
+complete -c cast-pro -n __cast_global_option -l video-codec -r -a 'auto libx264 libopenh264' -d 'Video encoder'
+complete -c cast-pro -n __cast_global_option -l audio-codec -r -d 'Audio encoder'
+complete -c cast-pro -n __cast_global_option -l countdown -r -d 'Recording countdown seconds'
 complete -c cast-pro -n '__cast_at layout' -a 'overlay stage split screen camera next prev'
 complete -c cast-pro -n '__cast_at split' -a 'side ratio'
 complete -c cast-pro -n '__cast_at split side' -a 'left right'
@@ -270,9 +274,9 @@ complete -c cast-pro -n '__cast_subcommand config check' -l availability
 complete -c cast-pro -n '__cast_subcommand config migrate' -l edition -xa 'community pro'
 complete -c cast-pro -n '__cast_subcommand config migrate' -l write -r -F
 complete -c cast-pro -n '__cast_subcommand config migrate' -l backup -r -F
-complete -c cast-pro -n '__cast_at' -l record-bitrate -x
-complete -c cast-pro -n '__cast_at' -l record-rate-control -xa 'auto bitrate crf'
-complete -c cast-pro -n '__cast_at' -l stream-video-encoder -xa 'auto libx264 libopenh264'
+complete -c cast-pro -n __cast_global_option -l record-bitrate -x
+complete -c cast-pro -n __cast_global_option -l record-rate-control -xa 'auto bitrate crf'
+complete -c cast-pro -n __cast_global_option -l stream-video-encoder -xa 'auto libx264 libopenh264'
 complete -c cast -n '__cast_subcommand config migrate' -F
 complete -c cast -n '__cast_subcommand license inspect' -l json
 complete -c cast-pro -n '__cast_subcommand config migrate' -F

@@ -339,7 +339,13 @@ class CompletionTests(unittest.TestCase):
                                    ('cast-pro ', {'edition', 'features', 'license'}),
                                    ('cast config migrate --', {'--edition', '--write', '--backup'}),
                                    ('cast config check input.conf --', {'--availability'}),
-                                   ('cast --record-rate-control ', {'auto', 'bitrate', 'crf'})):
+                                   ('cast --record-rate-control ', {'auto', 'bitrate', 'crf'}),
+                                   ('cast-pro --record-rate-control ', {'auto', 'bitrate', 'crf'}),
+                                   ('cast --backend ', {'xorg', 'wayland', 'synthetic'}),
+                                   ('cast --video-codec ', {'auto', 'libx264', 'libopenh264'}),
+                                   ('cast --record-rate-control=',
+                                    {'--record-rate-control=auto', '--record-rate-control=bitrate',
+                                     '--record-rate-control=crf'})):
             program = f'source {shlex.quote(str(script))}; complete -C {shlex.quote(command)}'
             value = subprocess.run(['fish', '--no-config', '-c', program], cwd=self.root,
                                    text=True, capture_output=True, timeout=10)
