@@ -321,8 +321,12 @@ deps-lgpl:
 check-public-boundary:
 	python3 packaging/public-boundary.py
 check-licenses: $(BINARY)
-	python3 packaging/audit.py inventory --binary $(BINARY) --edition $(EDITION) --media-profile $(MEDIA_PROFILE) --lgpl-root '$(LGPL_ROOT)' --official $(OFFICIAL_RELEASE) --output '$(BUILD)/audit' --strict
+	python3 packaging/audit.py inventory --binary $(BINARY) --edition $(EDITION) --media-profile $(MEDIA_PROFILE) --lgpl-root '$(LGPL_ROOT)' --pro-root '$(PRO_ROOT)' --official $(OFFICIAL_RELEASE) --output '$(BUILD)/audit' --strict
 check-editions: check-public-boundary
+check-runtime-acceptance:
+	python3 tests/test_runtime_acceptance.py
+check-editions: check-runtime-acceptance
+.PHONY: check-runtime-acceptance
 release-check:
 	@test '$(EDITION)' = community || { echo 'Pro uses private signed release staging; no public release channel' >&2; exit 1; }
 	sh packaging/release.sh check '$(VERSION)' '$(RELEASE_NOTES)' '$(X11)' '$(WAYLAND)' '$(RELEASE_TAG)' '$(PANEL)'

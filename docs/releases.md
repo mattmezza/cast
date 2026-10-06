@@ -161,6 +161,21 @@ signing happen outside public CI/repositories. Private CI must receive read-only
 private source and separately protected signing inputs; no private CI is fabricated
 in this public repository. Existing published releases stay immutable.
 
+The dynamic-runtime audit consumes a hash-bound owner acceptance record rather
+than permanently rejecting every official build. In private
+`pro/release/production.json`, `clean_runtime_acceptance_file` names the reviewed
+JSON file (relative to that directory or absolute), and
+`clean_runtime_acceptance_reference` is its exact lowercase SHA-256. The evidence
+must contain `schema: 1`, `reviewed: true`, `product: "cast-pro"`, an `identity`
+object matching version, core/private revision, release timestamp, platform and
+media profile, `runtime_dynamic_sha256` binding the exact
+`packaging/runtime-dynamic.json`, its unchanged `required_review` list as
+`required_reviews`, and `artifacts` mapping the native executable and speech-helper
+names to their exact hashes. The native executable's compiled identity is checked
+independently. Missing, changed, differently scoped or unreviewed evidence remains
+a release failure; it does not waive library-license or dependency-source checks.
+Compile first, perform clean-runtime acceptance, then package the same artifacts.
+
 No hosted Pro channel/storefront has been configured. `cast-pro update` reports that
 status honestly and never falls back to GitHub Community assets. The working local
 channel consumes a directory containing `manifest.json` and `cast-pro`. The manifest

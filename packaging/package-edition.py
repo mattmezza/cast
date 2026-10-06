@@ -76,6 +76,7 @@ def main():
         f'OFFICIAL_RELEASE={a.official}', f'DESTDIR={stage}', 'PREFIX=/usr', 'install')
     doc = stage / f'usr/share/doc/{a.binary}'
     audit_args = ['python3', 'packaging/audit.py', 'inventory', '--edition', a.edition, '--media-profile', a.media_profile,
+                  '--pro-root', a.pro_root,
                   '--binary', str(stage / f'usr/bin/{a.binary}'), '--official', str(a.official), '--lgpl-root', a.lgpl_root, '--output', str(doc / 'dependencies')]
     if a.official:
         audit_args.append('--strict')

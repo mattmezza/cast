@@ -134,6 +134,49 @@ def package_metadata(path):
     return pkg, fields
 
 
+def dynamic_acceptance(pro_root, binary, dynamic_path, requirements):
+    """Consume an owner's hash-bound review, never a blanket release exemption."""
+    private = pathlib.Path(pro_root).resolve()
+    if (private / 'pro/src/pro_provider.c').is_file():
+        private /= 'pro'
+    record_path = private / 'release/production.json'
+    proof = json.loads(record_path.read_text())
+    if proof.get('schema') != 1 or proof.get('reviewed') is not True:
+        raise ValueError('clean runtime acceptance needs reviewed production metadata')
+    evidence_path = pathlib.Path(proof.get('clean_runtime_acceptance_file', ''))
+    if not str(evidence_path) or evidence_path == pathlib.Path('.'):
+        raise ValueError('clean runtime acceptance file is missing')
+    if not evidence_path.is_absolute():
+        evidence_path = record_path.parent / evidence_path
+    expected = proof.get('clean_runtime_acceptance_reference', '')
+    if not re.fullmatch(r'[0-9a-f]{64}', expected) or digest(evidence_path) != expected:
+        raise ValueError('clean runtime acceptance hash differs from production review')
+    evidence = json.loads(evidence_path.read_text())
+    if (evidence.get('schema') != 1 or evidence.get('reviewed') is not True or
+            evidence.get('product') != 'cast-pro' or
+            evidence.get('runtime_dynamic_sha256') != digest(dynamic_path) or
+            evidence.get('required_reviews') != requirements):
+        raise ValueError('clean runtime acceptance does not cover the exact dynamic policy')
+    fields = ('version', 'core_revision', 'private_revision', 'release_timestamp',
+              'platform', 'media_profile')
+    identity = {field: proof.get(field) for field in fields}
+    if evidence.get('identity') != identity or any(value is None for value in identity.values()):
+        raise ValueError('clean runtime acceptance differs from release identity')
+    artifacts = evidence.get('artifacts')
+    if not isinstance(artifacts, dict) or artifacts.get(binary.name) != digest(binary):
+        raise ValueError('clean runtime acceptance does not cover the exact binary')
+    if binary.name == 'cast-pro':
+        # The existing release packager checks identity too. Standalone inventories
+        # must not accept a review of another release merely because a path matches.
+        actual = json.loads(run(str(binary), 'edition', '--json', required=True))
+        actual = actual.get('identity', actual)
+        if (actual.get('edition') != 'pro' or actual.get('official') is not True or
+                any(actual.get(field) != identity[field] for field in fields)):
+            raise ValueError('clean runtime acceptance differs from compiled identity')
+    return {'sha256': expected, 'runtime_dynamic_sha256': digest(dynamic_path),
+            'artifact_sha256': digest(binary), 'identity': identity}
+
+
 def inventory(args):
     output = pathlib.Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
@@ -220,13 +263,19 @@ def inventory(args):
         components.append({'name': 'Inter bundled font', 'license': 'OFL-1.1', 'linkage': 'asset', 'distributed': True})
     if 'Clay_Initialize' in symbols:
         components.append({'name': 'Clay v0.14', 'license': 'MIT', 'linkage': 'compiled', 'distributed': True})
+    acceptance = None
     if args.official and args.edition == 'pro' and dyn.get('required_review'):
-        failures.append('dynamic runtime closure lacks recorded clean-image acceptance')
+        try:
+            acceptance = dynamic_acceptance(args.pro_root, binary, dynamic,
+                                            dyn['required_review'])
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            failures.append('dynamic runtime acceptance failed: ' + str(error))
     sbom = {'schema': 1, 'format': 'cast-dependency-inventory', 'edition': args.edition,
             'media_profile': args.media_profile, 'binary': binary.name, 'binary_sha256': digest(binary),
             'runtime_libraries': entries, 'components': components,
             'controlled_media_evidence': media_evidence,
-            'dynamic_modules': dyn, 'build_only': ['compiler', 'GNU make', 'pkg-config', 'Python tests', 'curl dependency fetch', 'NASM'],
+            'dynamic_modules': dyn, 'clean_runtime_acceptance': acceptance,
+            'build_only': ['compiler', 'GNU make', 'pkg-config', 'Python tests', 'curl dependency fetch', 'NASM'],
             'external': ['v4l2loopback kernel module', 'system Noto fonts', 'portal service', 'PipeWire service'],
             'review_failures': failures}
     (output / 'inventory.json').write_text(json.dumps(sbom, indent=2) + '\n')
