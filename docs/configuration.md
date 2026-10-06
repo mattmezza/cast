@@ -374,3 +374,49 @@ composition, independently of `output.pause_background`. Covered desktop content
 cannot be reconstructed by the current capture path. There is no transparent
 exclusion setting; remove `[capture] exclusion` if an unreleased configuration
 contains it. Unknown settings fail validation without replacing the active config.
+
+## Edition and licensing settings
+
+Both editions read the same public schema. No setting selects the edition, trusted
+keys, entitlement, devices, release timestamp or feature grants. The following
+fields are new; existing `record.video_codec` now defaults to `auto`.
+
+| Setting | Default | Supported values and behavior |
+|---|---|---|
+| `licensing.file` | empty | Literal bounded license-file path. Empty selects the imported per-user Pro license store internally. Reads reject symlinks and nonregular files; imports copy a verified snapshot. |
+| `licensing.upgrade_url` | empty | Optional HTTPS info/purchase URL; empty hides the action. Opened only on an explicit panel click. |
+| `record.bitrate_kbps` | `6000` | Integer `100..100000`; used for encoder-neutral bitrate control. |
+| `record.rate_control` | `auto` | `auto`, `bitrate`, `crf`. Auto keeps x264/x265 CRF behavior when available and uses bitrate for OpenH264. Explicit unsupported CRF fails; no numeric CRF translation. |
+| `stream.video_encoder` | `auto` | FFmpeg encoder name, or `auto`. Uses the existing stream video bitrate; explicit selection never silently changes encoder. |
+
+`auto` initializes candidate encoders to test readiness. The controlled LGPL
+profile uses OpenH264; Community system builds retain x264 when available. Legacy
+`record.crf`, `record.preset`, and `stream.encoder_preset` remain readable. They
+are inactive with OpenH264 and are reported as such. Encoder acquisition does not
+start capture or change presentation privacy. Codec initialization fails before
+starting a recording/stream when an explicit selection cannot run.
+
+`cast config check [PATH]` checks schema syntax and cross-field constraints without
+requiring commercial entitlement. Add `--availability` to initialize local codecs
+and report media-profile/capability readiness; it does not acquire devices or
+connect to streaming services. Planned Pro workflows have no invented dormant
+configuration keys. Unknown keys remain strict errors.
+
+`cast config migrate [PATH] --edition pro` prints a dry-run of the original INI
+with encoder-neutral selections, preserving unrelated fields/comments and legacy
+quality values. `--write OUTPUT` writes a new mode-0600 file; an existing output is
+not overwritten. In-place replacement requires `--write PATH --backup NEW_FILE`.
+Startup/reload never runs migration or saves session changes automatically.
+
+## Optional Pro workflow fields
+
+Both editions parse and preserve the 93 declarative cinematic/cursor, transcription,
+subtitle and notes values. They stay dormant in Community. Existing configs retain
+legacy zoom and do not start local speech or notes motion. The full new field/range
+inventory is in [Pro workflow configuration](pro-workflows.md); merge-safe defaults
+are in [pro-workflows.conf](../examples/pro-workflows.conf). Unknown keys still fail.
+
+Model/language/device/VAD settings are shared by captions and speech-following
+notes. Subtitle and notes visual styles are separate because they render on
+different surfaces. Session edits never save navigation, consent or running state
+to the config.

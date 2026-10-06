@@ -1,4 +1,6 @@
 #include "panel.h"
+#include "edition_extensions.h"
+#include "ipc_identity.h"
 #include "panel_color_pick.h"
 #include "panel_lifecycle.h"
 #include "panel_transport.h"
@@ -19,6 +21,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
+#include <spawn.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,6 +29,8 @@
 #include <sys/file.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 /* Small immediate widgets share Clay's layout, clipping, and pointer geometry.
@@ -37,6 +42,7 @@ enum {
     TAB_EFFECTS,
     TAB_SETTINGS,
     TAB_STREAM,
+    TAB_NOTES,
     TAB_COUNT
 };
 #define GROUP_COUNT 6
@@ -55,7 +61,10 @@ enum {
     RECORD_LOCK = 8,
     READ_ONLY = 16,
     STREAM_LOCK = 32,
-    REQUIRE_EXCLUSION = 64
+    REQUIRE_EXCLUSION = 64,
+    EXTENSION_FIELD = 128,
+    FILE_FIELD = 256,
+    FONT_FIELD = 512
 };
 typedef struct {
     const char *key, *label, *choices;
@@ -79,11 +88,13 @@ typedef struct {
     FD(key, label, field, FIELD_ENUM, 0, 0, choices, tab, group, flags)
 #define FC(key, label, field, tab, group, flags)                                                   \
     FD(key, label, field, FIELD_COLOR, 0, 0, NULL, tab, group, flags)
-static const FieldSpec fields[] = {
+static const FieldSpec core_fields[] = {
     FE("stream.service", "Service preset", stream.service, "custom,twitch,youtube", TAB_STREAM, 0,
        STREAM_LOCK),
     FT("stream.server_url", "Server URL (rtmp/rtmps)", stream.server_url, TAB_STREAM, 0,
        STREAM_LOCK),
+    FT("stream.video_encoder", "Video encoder (auto or explicit name)", stream.video_encoder,
+       TAB_STREAM, 0, STREAM_LOCK),
     FT("stream.key_file", "Stream-key file — path only, never the secret", stream.key_file,
        TAB_STREAM, 0, STREAM_LOCK),
     FI("stream.video_bitrate_kbps", "Video bitrate (kbps)", stream.video_bitrate_kbps, 100, 50000,
@@ -261,6 +272,10 @@ static const FieldSpec fields[] = {
     FT("record.container", "Container", record_container, TAB_SETTINGS, 1, RECORD_LOCK),
     FT("record.video_codec", "Video codec", video_codec, TAB_SETTINGS, 1, RECORD_LOCK),
     FT("record.audio_codec", "Audio codec", audio_codec, TAB_SETTINGS, 1, RECORD_LOCK),
+    FE("record.rate_control", "Video rate control", record_rate_control, "auto,bitrate,crf",
+       TAB_SETTINGS, 1, RECORD_LOCK),
+    FI("record.bitrate_kbps", "Video bitrate (kbps)", record_bitrate_kbps, 100, 100000,
+       TAB_SETTINGS, 1, RECORD_LOCK),
     FI("record.crf", "Video quality (CRF)", record_crf, 0, 51, TAB_SETTINGS, 1, RECORD_LOCK),
     FT("record.preset", "Encoder preset", record_preset, TAB_SETTINGS, 1, RECORD_LOCK),
     FI("record.queue", "Recording queue (frames)", record_queue, 1, 120, TAB_SETTINGS, 1,
@@ -276,8 +291,65 @@ static const FieldSpec fields[] = {
     FT("ipc.socket", "Daemon socket", socket_path, TAB_SETTINGS, 3, READ_ONLY),
     FI("ipc.timeout_ms", "CLI timeout (ms)", ipc_timeout_ms, 100, 30000, TAB_SETTINGS, 3,
        READ_ONLY),
+    FT("licensing.file", "License storage path (empty: per-user default)", licensing_file,
+       TAB_SETTINGS, 3, 0),
+    FT("licensing.upgrade_url", "Pro information URL (optional HTTPS)", licensing_upgrade_url,
+       TAB_SETTINGS, 3, 0),
+    /* Local import draft: excluded from Config, settings batches and persistence. */
+    {"license.import_path", "License file to import", NULL, 0, PATH_MAX, FIELD_TEXT, 0, 0,
+     TAB_SETTINGS, 3, 0},
 };
-#define FIELD_COUNT (sizeof fields / sizeof fields[0])
+#define CORE_FIELD_COUNT (sizeof core_fields / sizeof core_fields[0] - 1)
+#define FIELD_CAPACITY (CORE_FIELD_COUNT + CAST_MAX_EXTENSION_SETTINGS)
+static FieldSpec fields[FIELD_CAPACITY + 1];
+static size_t field_count;
+#define FIELD_COUNT field_count
+static char extension_keys[CAST_MAX_EXTENSION_SETTINGS][128];
+static char extension_labels[CAST_MAX_EXTENSION_SETTINGS][160];
+static void initialize_fields(void)
+{
+    memcpy(fields, core_fields, CORE_FIELD_COUNT * sizeof *fields);
+    field_count = CORE_FIELD_COUNT;
+    if (cast_edition_identity()->pro) {
+        size_t count;
+        const CastExtensionSetting *schema = cast_shared_extension_schema(&count);
+        if (count > CAST_MAX_EXTENSION_SETTINGS) {
+            count = CAST_MAX_EXTENSION_SETTINGS;
+        }
+        for (size_t i = 0; i < count; i++) {
+            const CastExtensionSetting *s = &schema[i];
+            snprintf(extension_keys[i], sizeof extension_keys[i], "%s.%s", s->section, s->key);
+            snprintf(extension_labels[i], sizeof extension_labels[i], "%s%s%s%s", s->label,
+                     s->unit && *s->unit ? " (" : "", s->unit && *s->unit ? s->unit : "",
+                     s->unit && *s->unit ? ")" : "");
+            int tab = !strcmp(s->page, "notes")         ? TAB_NOTES
+                      : !strcmp(s->page, "audio")       ? TAB_AUDIO
+                      : !strcmp(s->page, "annotations") ? TAB_EFFECTS
+                      : !strcmp(s->page, "recording")   ? TAB_SETTINGS
+                                                        : TAB_SOURCE;
+            FieldType type = s->type == CAST_SETTING_BOOL     ? FIELD_BOOL
+                             : s->type == CAST_SETTING_INT    ? FIELD_INT
+                             : s->type == CAST_SETTING_NUMBER ? FIELD_DOUBLE
+                             : s->type == CAST_SETTING_ENUM   ? FIELD_ENUM
+                             : s->type == CAST_SETTING_COLOR  ? FIELD_COLOR
+                                                              : FIELD_TEXT;
+            fields[field_count++] =
+                (FieldSpec){extension_keys[i],
+                            extension_labels[i],
+                            s->choices,
+                            SIZE_MAX,
+                            s->max_bytes,
+                            type,
+                            s->minimum,
+                            s->maximum,
+                            tab,
+                            s->advanced ? 2 : 0,
+                            EXTENSION_FIELD | (s->type == CAST_SETTING_PATH ? FILE_FIELD : 0) |
+                                (!strcmp(s->key, "font") ? FILE_FIELD | FONT_FIELD : 0)};
+        }
+    }
+    fields[field_count] = core_fields[CORE_FIELD_COUNT];
+}
 #define WIDGET_MAX 384
 #define TEXT_CACHE_MAX 384
 typedef struct {
@@ -323,7 +395,19 @@ typedef enum {
     A_DAEMON,
     A_QUIT_APP,
     A_QUIT_CANCEL,
-    A_QUIT_CONFIRM
+    A_QUIT_CONFIRM,
+    A_LICENSE,
+    A_LICENSE_IMPORT,
+    A_LICENSE_REMOVE,
+    A_LICENSE_CANCEL,
+    A_LICENSE_CONFIRM,
+    A_LICENSE_COPY,
+    A_LICENSE_URL,
+    A_NOTES,
+    A_NOTES_ADVANCED,
+    A_SPEECH_ADVANCED,
+    A_SPEECH_SETUP,
+    A_FILE_PICK
 } Action;
 typedef enum {
     ICON_NONE,
@@ -375,16 +459,18 @@ typedef enum {
     VIEW_OPERATE,
     VIEW_COMPOSE,
     VIEW_SECTION,
-    VIEW_SETUP
+    VIEW_SETUP,
+    VIEW_LICENSE,
+    VIEW_NOTES
 } PanelView;
-#define VIEW_SCROLL_COUNT 10
+#define VIEW_SCROLL_COUNT 12
 typedef struct {
     uint32_t magic;
     uint64_t session_cookie;
-    PanelView view, return_view;
-    int section, lane, return_section;
+    PanelView view, return_view, license_return_view;
+    int section, lane, return_section, license_return_section;
     float scroll[VIEW_SCROLL_COUNT];
-    bool all_settings[6];
+    bool all_settings[6], speech_all_settings, notes_all_settings;
 } NavigationMemory;
 typedef struct {
     SDL_Window *window;
@@ -395,13 +481,13 @@ typedef struct {
     PanelLifecycle *lifecycle;
     PanelLifecycleSnapshot lifecycle_state;
     PanelSnapshot snapshot;
-    FieldEdit edit[FIELD_COUNT];
+    FieldEdit edit[FIELD_CAPACITY + 1];
     Widget widgets[WIDGET_MAX];
     int widget_count, tab;
     int main_tab, open_lane, open_section;
     bool stream_setup;
-    PanelView view, return_view;
-    int return_section;
+    PanelView view, return_view, license_return_view;
+    int return_section, license_return_section;
     float view_scroll[VIEW_SCROLL_COUNT];
     bool restore_scroll;
     uint64_t navigation_generation, navigation_attachment;
@@ -410,6 +496,8 @@ typedef struct {
     uint32_t focus, active_text, dropdown;
     int dropdown_field, dropdown_choice;
     bool all_settings[6];
+    bool speech_all_settings, notes_all_settings;
+    bool drawing_priority_command;
     int open_menu;
     int menu_start, menu_end, dropdown_start, dropdown_end, color_start, color_end;
     int lane_jump;
@@ -421,6 +509,8 @@ typedef struct {
     int device_count;
     char device_values[64][256], device_labels[64][256];
     bool select_all;
+    bool file_pick_pending;
+    uint32_t file_event;
     size_t caret;
     float mouse_x, mouse_y, scroll;
     float width, height;
@@ -429,6 +519,8 @@ typedef struct {
     uint32_t pending_button;
     uint64_t pending_button_request;
     bool draft_context;
+    bool license_remove_confirmation;
+    pid_t browser_pid;
     bool quit_confirmation, quit_after_stop, daemon_stopping, daemon_stopped;
     uint64_t shutdown_request, shutdown_started;
     TextCache cache[TEXT_CACHE_MAX];
@@ -471,6 +563,8 @@ static int scroll_index(const Panel *p)
     return p->view == VIEW_OPERATE   ? 0
            : p->view == VIEW_COMPOSE ? 1
            : p->view == VIEW_SETUP   ? 9
+           : p->view == VIEW_LICENSE ? 10
+           : p->view == VIEW_NOTES   ? 11
                                      : 2 + p->open_section;
 }
 static void remember_scroll(Panel *p)
@@ -484,13 +578,15 @@ static void navigate_view(Panel *p, PanelView view, int section)
 {
     remember_scroll(p);
     p->view = view;
-    p->main_tab = view == VIEW_SETUP ? p->return_view != VIEW_OPERATE
-                                     : view == VIEW_COMPOSE || view == VIEW_SECTION;
+    p->main_tab = view == VIEW_SETUP || view == VIEW_LICENSE || view == VIEW_NOTES
+                      ? p->return_view != VIEW_OPERATE
+                      : view == VIEW_COMPOSE || view == VIEW_SECTION;
     p->open_section = view == VIEW_SECTION ? section : -1;
     p->stream_setup = view == VIEW_SETUP;
     p->dropdown = 0;
     p->color_popup = 0;
     p->open_menu = 0;
+    p->license_remove_confirmation = false;
     p->restore_scroll = true;
 }
 /* POSIX shared memory keeps only navigation numbers across panel processes.
@@ -527,15 +623,19 @@ static void save_navigation(Panel *p)
         return;
     }
     remember_scroll(p);
-    NavigationMemory saved = {.magic = 0x43565033,
+    NavigationMemory saved = {.magic = 0x43565037,
                               .session_cookie = p->navigation_generation,
                               .view = p->view,
                               .section = p->open_section,
                               .lane = p->open_lane,
                               .return_view = p->return_view,
-                              .return_section = p->return_section};
+                              .return_section = p->return_section,
+                              .license_return_view = p->license_return_view,
+                              .license_return_section = p->license_return_section};
     memcpy(saved.scroll, p->view_scroll, sizeof saved.scroll);
     memcpy(saved.all_settings, p->all_settings, sizeof saved.all_settings);
+    saved.speech_all_settings = p->speech_all_settings;
+    saved.notes_all_settings = p->notes_all_settings;
     *p->navigation = saved;
 }
 static const char *format(Panel *p, const char *fmt, ...)
@@ -737,7 +837,7 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
     bool card_action = (id >= 30 && id <= 39 && id != 34) || id == 130 ||
                        (id >= 137 && id <= 141) || id == 150 || id == 154 || id == 151;
     bool primary_action = id == 30 || id == 32 || id == 130 || id == 150;
-    bool draft_action = id >= 700 && id <= 717;
+    bool draft_action = (id >= 700 && id <= 717) || id == 720 || id == 721;
     bool small_action = (card_action && !primary_action) || draft_action || action == A_ALL ||
                         action == A_PICK_COLOR || global_privacy;
     bool combo = action == A_DROPDOWN;
@@ -748,8 +848,10 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
                                                     : .27f);
     if (action != A_TAB && action != A_GROUP && action != A_PREVIEW && action != A_DROPDOWN &&
         action != A_BACK && action != A_CLOSE && action != A_QUIT_APP && action != A_QUIT_CANCEL &&
-        action != A_ALL && action != A_MENU &&
-        p->snapshot.command_queued > p->snapshot.command_completed) {
+        action != A_ALL && action != A_MENU && action != A_LICENSE && action != A_LICENSE_CANCEL &&
+        action != A_LICENSE_COPY && action != A_LICENSE_URL &&
+        p->snapshot.command_queued > p->snapshot.command_completed &&
+        !p->drawing_priority_command) {
         enabled = false;
     }
     if (p->pending_button == id && p->pending_button_request) {
@@ -836,7 +938,11 @@ static void command_button(Panel *p, uint32_t id, const char *text, bool enabled
         (id == 33 && (s->record_paused || s->record_cut)) ||
         (id == 130 && (!p->snapshot.stream.active || s->stream_paused)) ||
         (id == 137 && s->stream_frozen) || (id == 138 && s->stream_blurred);
+    const char *arguments[] = {a, b, c};
+    p->drawing_priority_command =
+        cast_command_privacy_priority(1 + (b != NULL) + (c != NULL), arguments);
     button(p, id, text, enabled, selected, A_COMMAND, 0);
+    p->drawing_priority_command = false;
     Widget *w = &p->widgets[p->widget_count - 1];
     w->arg[0] = a;
     w->argc = 1;
@@ -849,6 +955,21 @@ static void command_button(Panel *p, uint32_t id, const char *text, bool enabled
 }
 static void field_value(const FieldSpec *f, const Config *c, char *out, size_t n)
 {
+    if (f->flags & EXTENSION_FIELD) {
+        char section[64];
+        const char *dot = strchr(f->key, '.');
+        if (!dot || (size_t)(dot - f->key) >= sizeof section) {
+            if (n) {
+                out[0] = 0;
+            }
+            return;
+        }
+        memcpy(section, f->key, (size_t)(dot - f->key));
+        section[dot - f->key] = 0;
+        const char *value = config_extension_value(c, section, dot + 1);
+        snprintf(out, n, "%s", value ? value : "");
+        return;
+    }
     const void *v = (const char *)c + f->offset;
     switch (f->type) {
     case FIELD_BOOL:
@@ -868,6 +989,71 @@ static void field_value(const FieldSpec *f, const Config *c, char *out, size_t n
         break;
     }
 }
+static const CastFeatureInfo *workflow_feature(const Panel *p, const char *id)
+{
+    for (unsigned i = 0; i < CAST_FEATURE_COUNT; i++) {
+        if (!strcmp(p->snapshot.edition.features[i].id, id)) {
+            return &p->snapshot.edition.features[i];
+        }
+    }
+    return NULL;
+}
+static bool feature_unlocked(const CastFeatureInfo *feature)
+{
+    return feature && feature->implemented && feature->compiled && feature->platform_supported &&
+           feature->entitled;
+}
+static const char *extension_feature_id(const FieldSpec *field)
+{
+    if (!strncmp(field->key, "notes.", 6)) {
+        return "speech_teleprompter";
+    }
+    if (!strncmp(field->key, "subtitles.", 10)) {
+        return "transcription_subtitles";
+    }
+    if (!strncmp(field->key, "transcription.", 14)) {
+        return NULL;
+    } /* shared consumer resource */
+    return "cinematic_zoom";
+}
+static bool extension_unlocked(const Panel *p, const FieldSpec *field)
+{
+    if (!(field->flags & EXTENSION_FIELD)) {
+        return true;
+    }
+    const char *id = extension_feature_id(field);
+    if (!id) {
+        return p->snapshot.workflow.speech_compiled &&
+               (feature_unlocked(workflow_feature(p, "transcription_subtitles")) ||
+                feature_unlocked(workflow_feature(p, "speech_teleprompter")));
+    }
+    return feature_unlocked(workflow_feature(p, id));
+}
+static const char *workflow_availability(const CastFeatureInfo *feature)
+{
+    if (!feature) {
+        return "Feature status unavailable";
+    }
+    if (feature->reason == CAST_REASON_COMMUNITY_BUILD) {
+        return "Requires Pro";
+    }
+    if (!feature->implemented) {
+        return "Not implemented";
+    }
+    if (!feature->compiled) {
+        return "Unavailable in this build";
+    }
+    if (!feature->platform_supported) {
+        return "Unsupported capture platform";
+    }
+    if (!feature->entitled) {
+        return cast_feature_reason_name(feature->reason);
+    }
+    if (!feature->dependency_ready) {
+        return "Setup required";
+    }
+    return feature->active ? "Active" : "Ready";
+}
 static bool supported(const Panel *p, const FieldSpec *f)
 {
     return (!(f->flags & REQUIRE_CURSOR) || p->snapshot.capabilities.cursor_metadata) &&
@@ -877,7 +1063,8 @@ static bool supported(const Panel *p, const FieldSpec *f)
 }
 static bool writable(const Panel *p, const FieldSpec *f)
 {
-    return p->snapshot.connected && supported(p, f) && !(f->flags & READ_ONLY) &&
+    return p->snapshot.connected && supported(p, f) && extension_unlocked(p, f) &&
+           !(f->flags & READ_ONLY) &&
            (!(f->flags & STREAM_LOCK) || !p->snapshot.state.stream_active) &&
            (!(f->flags & RECORD_LOCK) ||
             (!p->snapshot.state.recording && !p->snapshot.finalizing && !p->snapshot.countdown));
@@ -1104,8 +1291,12 @@ static void pinned_header(Panel *p)
     CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .padding = {0, 0, 10, 0}},
           .border = {.color = line, .width = {.bottom = 1}}})
     {
-        text_button(p, 5, "Operate", true, A_MAIN_TAB, 0, p->main_tab == 0);
-        text_button(p, 6, "Compose", true, A_MAIN_TAB, 1, p->main_tab == 1);
+        text_button(p, 5, "Operate", true, A_MAIN_TAB, 0,
+                    p->view != VIEW_LICENSE && p->main_tab == 0);
+        text_button(p, 6, "Compose", true, A_MAIN_TAB, 1,
+                    p->view != VIEW_LICENSE && p->main_tab == 1);
+        text_button(p, 9200, cast_edition_identity()->pro ? "Pro · About" : "Community", true,
+                    A_LICENSE, 0, p->view == VIEW_LICENSE);
     }
 }
 static int find_field(const char *key)
@@ -1135,6 +1326,9 @@ static void lane_menu_body(Panel *, int);
 static const char *flow_value(Panel *p, size_t index)
 {
     FieldEdit *edit = &p->edit[index];
+    if (index == FIELD_COUNT) {
+        return edit->value;
+    }
     if (!edit->dirty && p->active_text != 1000 + index * 3 && p->active_text != 1002 + index * 3 &&
         !(p->active_text == 6500 && p->color_field == (int)index)) {
         field_value(&fields[index], &p->snapshot.config, edit->value, sizeof edit->value);
@@ -1143,6 +1337,9 @@ static const char *flow_value(Panel *p, size_t index)
 }
 static bool flow_enabled(const Panel *p, size_t index)
 {
+    if (index == FIELD_COUNT) {
+        return true;
+    }
     return writable(p, &fields[index]) && !p->edit[index].pending &&
            p->snapshot.command_queued <= p->snapshot.command_completed;
 }
@@ -1544,8 +1741,10 @@ static bool field_applies_immediately(const FieldSpec *field)
         "record.video_codec",
         "record.audio_codec",
         "record.preset",
+        "record.rate_control",
+        "record.bitrate_kbps",
     };
-    if (field->flags & (STREAM_LOCK | READ_ONLY)) {
+    if (field->flags & (STREAM_LOCK | READ_ONLY | EXTENSION_FIELD)) {
         return false;
     }
     for (size_t i = 0; i < sizeof grouped / sizeof *grouped; i++) {
@@ -1609,6 +1808,10 @@ static void flow_field_control(Panel *p, size_t index)
             }
         }
         flow_note(p, index);
+        if (f->flags & FILE_FIELD) {
+            button(p, 10000 + (uint32_t)index, "Choose file…", enabled && !p->file_pick_pending,
+                   false, A_FILE_PICK, (int)index);
+        }
     }
 }
 static void flow_chips(Panel *p, const char *key)
@@ -1952,6 +2155,12 @@ static void lane_body(Panel *p, int lane)
             effect_buttons(p, lane);
         }
     } else if (lane == 1) {
+        if (s->record_encoder[0]) {
+            text_wrapped(format(p, "Encoder: %s", s->record_encoder), secondary);
+            if (s->record_encoder_detail[0]) {
+                text_wrapped(s->record_encoder_detail, muted);
+            }
+        }
         if (s->countdown) {
             unsigned seconds =
                 (unsigned)((s->countdown_remaining_ns + 999999999ULL) / 1000000000ULL);
@@ -1993,6 +2202,12 @@ static void lane_body(Panel *p, int lane)
             }
         }
     } else if (lane == 2) {
+        if (s->stream.video_encoder[0]) {
+            text_wrapped(format(p, "Encoder: %s", s->stream.video_encoder), secondary);
+            if (s->stream.video_encoder_detail[0]) {
+                text_wrapped(s->stream.video_encoder_detail, muted);
+            }
+        }
         bool configured = s->config.stream.server_url[0] && s->config.stream.key_file[0];
         if (s->stream.state == STREAM_FAILED) {
             text_wrapped(s->stream.error[0] ? s->stream.error : "Connection failed.", danger);
@@ -2056,13 +2271,39 @@ static void lane_menu_body(Panel *p, int lane)
                      "that shows the camera.",
                      muted);
     } else if (lane == 1) {
+        if (cast_edition_identity()->pro && p->snapshot.workflow.speech_job_id) {
+            const CastWorkflowStatus *speech = &p->snapshot.workflow;
+            label("Recording transcription", 1, secondary);
+            text_wrapped(format(p, "Job %llu · %s · %u%%",
+                                (unsigned long long)speech->speech_job_id, speech->speech_job_state,
+                                speech->speech_job_progress),
+                         secondary);
+            if (speech->speech_job_srt[0]) {
+                text_wrapped(format(p, "SRT: %s", speech->speech_job_srt), muted);
+            }
+            if (speech->speech_job_vtt[0]) {
+                text_wrapped(format(p, "VTT: %s", speech->speech_job_vtt), muted);
+            }
+            if (speech->speech_error[0]) {
+                text_wrapped(speech->speech_error, danger);
+            }
+        }
         text_wrapped("Cut omits media time; resume continues the same file.", muted);
+        text_wrapped(
+            "Auto selects a usable encoder. CRF and preset apply to x264; they are "
+            "inactive for OpenH264. Explicit unavailable encoders fail without substitution.",
+            muted);
         flow_slider(p, "record.countdown");
         named_field(p, "record.directory");
         for (size_t i = 0; i < FIELD_COUNT; i++) {
             if (!strncmp(fields[i].key, "record.", 7) &&
                 strcmp(fields[i].key, "record.countdown") &&
                 strcmp(fields[i].key, "record.directory")) {
+                field_row(p, i);
+            }
+        }
+        for (size_t i = 0; i < FIELD_COUNT; i++) {
+            if ((fields[i].flags & EXTENSION_FIELD) && fields[i].tab == TAB_SETTINGS) {
                 field_row(p, i);
             }
         }
@@ -2083,11 +2324,47 @@ static void lane_menu_body(Panel *p, int lane)
               0, muted);
         button(p, 154, "Streaming setup…", true, false, A_SETUP, 1);
     } else {
+        if (cast_edition_identity()->pro) {
+            const CastWorkflowStatus *speech = &p->snapshot.workflow;
+            text_wrapped(format(p, "%s · %s · %u ms inference · %u ms queued",
+                                speech->speech_compiled
+                                    ? (speech->speech_ready ? "Model ready" : "Model not ready")
+                                    : "Inference unavailable in this build",
+                                speech->speech_state[0] ? speech->speech_state : "disabled",
+                                speech->speech_processing_ms, speech->speech_backlog_ms),
+                         secondary);
+            if (speech->speech_error[0]) {
+                text_wrapped(speech->speech_error, danger);
+            }
+            if (!feature_unlocked(workflow_feature(p, "transcription_subtitles")) &&
+                !feature_unlocked(workflow_feature(p, "speech_teleprompter"))) {
+                text_wrapped(
+                    "A current speech workflow entitlement is required to edit these resources.",
+                    muted);
+            }
+        }
         flow_device_picker(p, "audio.mic_source");
         flow_device_picker(p, "audio.desktop_source");
         flow_slider(p, "audio.mic_gain");
         flow_slider(p, "audio.desktop_gain");
         named_field(p, "audio.virtual_name");
+        if (cast_edition_identity()->pro) {
+            label("Speech recognition", 1, secondary);
+            text_wrapped("Choose a local model and language. Applying settings does not enable a "
+                         "microphone, captions or speech following.",
+                         muted);
+            text_wrapped("The selected speech source applies to captions. Speaker notes always "
+                         "use the permitted microphone.",
+                         muted);
+            for (size_t i = 0; i < FIELD_COUNT; i++) {
+                if ((fields[i].flags & EXTENSION_FIELD) && fields[i].tab == TAB_AUDIO &&
+                    (fields[i].group != 2 || p->speech_all_settings)) {
+                    field_row(p, i);
+                }
+            }
+            button(p, 9400, p->speech_all_settings ? "Essentials" : "All speech settings", true,
+                   false, A_SPEECH_ADVANCED, 0);
+        }
         text_wrapped("Disappeared sources never fall back to a broad capture. Cast cannot mute a "
                      "microphone the conferencing app selected — use the app's own mute.",
                      muted);
@@ -2098,6 +2375,15 @@ static void lane_menu_body(Panel *p, int lane)
 static int field_section(const FieldSpec *f)
 {
     const char *key = f->key;
+    if (!strncmp(key, "licensing.", 10)) {
+        return 9;
+    }
+    if (f->tab == TAB_NOTES) {
+        return 10;
+    }
+    if ((f->flags & EXTENSION_FIELD) && f->tab == TAB_SETTINGS) {
+        return 8;
+    }
     if (f->tab == TAB_STREAM) {
         return 7; /* The dedicated setup sheet owns all streaming drafts. */
     }
@@ -2328,6 +2614,20 @@ static void source_essentials(Panel *p, bool shown[FIELD_COUNT])
         command_button(p, 41, "Next", p->snapshot.connected, "preset", "next", NULL);
     }
     text_wrapped("Composition only — never touches outputs.", muted);
+    if (cast_edition_identity()->pro) {
+        compose_group("Zoom");
+        essential_field(p, "zoom.motion", shown);
+        essential_field(p, "zoom.factor", shown);
+        essential_field(p, "zoom.follow", shown);
+        essential_field(p, "zoom.auto", shown);
+        const CastFeatureInfo *feature = workflow_feature(p, "cinematic_zoom");
+        if (!feature_unlocked(feature)) {
+            text_wrapped(workflow_availability(feature), secondary);
+        }
+        if (p->snapshot.cinematic_active && p->snapshot.motion.limitation[0]) {
+            text_wrapped(p->snapshot.motion.limitation, secondary);
+        }
+    }
 }
 static void compose_essentials(Panel *p, int section, bool shown[FIELD_COUNT])
 {
@@ -2514,7 +2814,7 @@ static void compose_body(Panel *p)
         return;
     }
     int section = p->open_section;
-    bool shown[FIELD_COUNT] = {false};
+    bool shown[FIELD_CAPACITY] = {false};
     p->draft_context = true;
     CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
                      .padding = {16, 16, 10, 18},
@@ -2537,6 +2837,16 @@ static void stream_setup_body(Panel *p)
                      .childGap = 6,
                      .layoutDirection = CLAY_TOP_TO_BOTTOM}})
     {
+        if (p->snapshot.stream.video_encoder[0]) {
+            text_wrapped(format(p, "Selected encoder: %s", p->snapshot.stream.video_encoder),
+                         secondary);
+            if (p->snapshot.stream.video_encoder_detail[0]) {
+                text_wrapped(p->snapshot.stream.video_encoder_detail, muted);
+            }
+        }
+        text_wrapped("Auto selects a usable video encoder. Encoder preset applies to x264 and "
+                     "is inactive for OpenH264.",
+                     muted);
         text_wrapped("The key is read from the file at connect time; the panel never displays it.",
                      muted);
         for (size_t i = 0; i < FIELD_COUNT; i++) {
@@ -2551,9 +2861,171 @@ static void stream_setup_body(Panel *p)
         button(p, 153, "Cancel", true, false, A_SETUP, 0);
     }
 }
+static const char *license_date(Panel *p, int64_t value)
+{
+    if (value <= 0) {
+        return "—";
+    }
+    time_t seconds = (time_t)value;
+    if ((int64_t)seconds != value) {
+        return format(p, "%lld UTC", (long long)value);
+    }
+    struct tm utc;
+    char text[32];
+    if (!gmtime_r(&seconds, &utc) || !strftime(text, sizeof text, "%Y-%m-%d UTC", &utc)) {
+        return format(p, "%lld UTC", (long long)value);
+    }
+    return format(p, "%s", text);
+}
+static bool license_url_valid(const char *url)
+{
+    if (strncmp(url, "https://", 8) || !url[8]) {
+        return false;
+    }
+    for (const unsigned char *c = (const unsigned char *)url; *c; c++) {
+        if (*c <= 32 || *c == 127) {
+            return false;
+        }
+    }
+    return true;
+}
+static const char *license_state_label(CastLicenseState state)
+{
+    static const char *const labels[] = {"No imported license",
+                                         "Invalid license",
+                                         "License not yet valid",
+                                         "Subscription expired",
+                                         "Release not eligible",
+                                         "Valid license",
+                                         "License verification unavailable"};
+    return (unsigned)state < sizeof labels / sizeof *labels ? labels[state] : "Invalid license";
+}
+static const char *license_kind(const CastLicenseInfo *license)
+{
+    if (license->state == CAST_LICENSE_MISSING || license->state == CAST_LICENSE_INVALID ||
+        license->state == CAST_LICENSE_UNAVAILABLE) {
+        return "No verified license";
+    }
+    return license->perpetual ? "Perpetual" : "Subscription";
+}
+static void license_body(Panel *p)
+{
+    const CastEditionSnapshot *edition = &p->snapshot.edition;
+    const CastEditionIdentity *identity =
+        edition->schema == CAST_EDITION_SCHEMA ? &edition->identity : cast_edition_identity();
+    const CastLicenseInfo *license = &edition->license;
+    bool mutation_ready =
+        p->snapshot.connected && p->snapshot.command_queued <= p->snapshot.command_completed;
+    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
+                     .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                     .padding = {16, 16, 16, 20},
+                     .childGap = 10}})
+    {
+        label(format(p, "Cast %s · %s", identity->pro ? "Pro" : "Community", identity->version), 3,
+              foreground);
+        text_wrapped(identity->official ? "Official release" : "Development build · nonproduction",
+                     secondary);
+        if (!p->snapshot.connected) {
+            text_wrapped("Showing the last acknowledged status. Start or reconnect to the daemon "
+                         "to change its license.",
+                         secondary);
+        }
+        label(edition->schema == CAST_EDITION_SCHEMA ? license_state_label(license->state)
+                                                     : "License status unavailable",
+              1, foreground);
+        text_wrapped(format(p, "%s · ID %s", license_kind(license),
+                            license->masked_id[0] ? license->masked_id : "—"),
+                     secondary);
+        if (license->perpetual) {
+            text_wrapped(format(p,
+                                "Updates through %s. Eligible versions remain usable permanently.",
+                                license_date(p, license->updates_until)),
+                         secondary);
+        } else if (license->expires_at) {
+            text_wrapped(
+                format(p, "Subscription expires %s.", license_date(p, license->expires_at)),
+                secondary);
+        }
+        text_wrapped(
+            format(p, "Binary release: %s · eligibility: %s",
+                   license_date(p, identity->release_timestamp),
+                   license->state == CAST_LICENSE_VALID ? "eligible" : "no active entitlement"),
+            secondary);
+        if (edition->pending_downgrade) {
+            text_wrapped(
+                "Downgrade pending. New Pro work is blocked; existing bounded jobs finish safely.",
+                secondary);
+        }
+        text_wrapped(
+            "All existing capture, recording, streaming and manual zoom remain Community features.",
+            secondary);
+        label("Pro workflows", 1, foreground);
+        static const char *const names[] = {"Editable projects", "Cinematic zoom",
+                                            "Transcription and subtitles", "Speech teleprompter"};
+        for (unsigned i = 0; i < CAST_FEATURE_COUNT; i++) {
+            const CastFeatureInfo *feature =
+                edition->schema == CAST_EDITION_SCHEMA ? &edition->features[i] : NULL;
+            text_wrapped(format(p, "%s · %s", names[i], workflow_availability(feature)), secondary);
+            if (feature) {
+                text_wrapped(
+                    format(p, "Implemented: %s · build: %s · dependency: %s · entitlement: %s",
+                           feature->implemented ? "yes" : "no",
+                           feature->compiled ? "available" : "missing",
+                           feature->dependency_ready ? "ready" : "not ready",
+                           feature->entitled ? "accepted" : "unavailable"),
+                    muted);
+            }
+        }
+        label("Import a license", 1, foreground);
+        p->draft_context = true;
+        flow_field_control(p, FIELD_COUNT);
+        p->draft_context = false;
+        text_wrapped(
+            "Use a literal local file path. Import verifies and copies a private snapshot; "
+            "invalid replacement keeps the accepted license.",
+            secondary);
+        CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 8}})
+        {
+            button(p, 9201, "Import file", mutation_ready && p->edit[FIELD_COUNT].value[0], false,
+                   A_LICENSE_IMPORT, 0);
+            command_button(p, 9202, "Reload", mutation_ready, "license", "reload", NULL);
+            button(p, 9203, "Remove", mutation_ready, false, A_LICENSE_REMOVE, 0);
+        }
+        if (p->license_remove_confirmation) {
+            text_wrapped(
+                "Remove the imported license? Your media, projects and configuration stay intact.",
+                foreground);
+            CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()}, .childGap = 8}})
+            {
+                button(p, 9204, "Cancel", true, false, A_LICENSE_CANCEL, 0);
+                button(p, 9205, "Remove license", mutation_ready, false, A_LICENSE_CONFIRM, 0);
+            }
+        }
+        button(p, 9206, "Copy diagnostic summary", true, false, A_LICENSE_COPY, 0);
+        if (p->snapshot.config.licensing_upgrade_url[0]) {
+            button(p, 9207, "Open Pro information",
+                   license_url_valid(p->snapshot.config.licensing_upgrade_url) && !p->browser_pid,
+                   false, A_LICENSE_URL, 0);
+            text_wrapped("Opens your configured HTTPS information page in the system browser.",
+                         secondary);
+        }
+        label("Storage and information", 1, foreground);
+        named_field(p, "licensing.file");
+        named_field(p, "licensing.upgrade_url");
+        text_wrapped(
+            "Empty storage path uses the per-user data directory. Empty information URL hides "
+            "the browser action. Changes apply to this session; configuration is not saved.",
+            secondary);
+        if (p->error[0]) {
+            text_wrapped(p->error, danger);
+        }
+    }
+}
+
 static void page_header(Panel *p)
 {
-    if (p->view != VIEW_SECTION && p->view != VIEW_SETUP) {
+    if (p->view != VIEW_SECTION && p->view != VIEW_SETUP && p->view != VIEW_LICENSE &&
+        p->view != VIEW_NOTES) {
         return;
     }
     CLAY({.id = CLAY_ID("PageHeader"),
@@ -2564,11 +3036,158 @@ static void page_header(Panel *p)
           .backgroundColor = background,
           .border = {.color = line, .width = {.bottom = 1}}})
     {
-        button(p, 99, p->view == VIEW_SETUP ? "Back" : "Compose", true, false, A_BACK, 0);
-        const char *title =
-            p->view == VIEW_SETUP ? "Streaming setup" : section_names[p->open_section];
-        label(fit_text(p, title, fminf(p->width, 520) - 170, 3), 3, foreground);
+        button(p, 99,
+               p->view == VIEW_SETUP || p->view == VIEW_LICENSE || p->view == VIEW_NOTES
+                   ? "Back"
+                   : "Compose",
+               true, false, A_BACK, 0);
+        const char *title = p->view == VIEW_LICENSE ? "License / About"
+                            : p->view == VIEW_NOTES ? "Speaker notes options"
+                            : p->view == VIEW_SETUP ? "Streaming setup"
+                                                    : section_names[p->open_section];
+        label(fit_text(p, title, fminf(p->width, 520) - (p->view == VIEW_LICENSE ? 125 : 170), 3),
+              3, foreground);
     }
+}
+static const CastFeatureInfo *notes_feature(const Panel *p)
+{
+    for (unsigned i = 0; i < CAST_FEATURE_COUNT; i++) {
+        if (!strcmp(p->snapshot.edition.features[i].id, "speech_teleprompter")) {
+            return &p->snapshot.edition.features[i];
+        }
+    }
+    return NULL;
+}
+static void notes_entry(Panel *p)
+{
+    if (!cast_edition_identity()->pro) {
+        return;
+    }
+    const CastFeatureInfo *feature = notes_feature(p);
+    bool available = p->snapshot.connected && feature_unlocked(feature);
+    const CastWorkflowStatus *state = &p->snapshot.workflow;
+    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
+                     .padding = {0, 0, 6, 6},
+                     .childGap = 8,
+                     .layoutDirection = CLAY_TOP_TO_BOTTOM}})
+    {
+        label("Speaker notes", 1, secondary);
+        text_wrapped(!feature             ? "Feature state unavailable. Reconnect to the daemon."
+                     : !feature->entitled ? cast_feature_reason_name(feature->reason)
+                     : !state->notes_loaded
+                         ? "Open a local script. Motion starts only when you press Play."
+                         : format(p, "%s · source line %u", state->notes_state, state->notes_line),
+                     muted);
+        CLAY({.layout = {.childGap = 6}})
+        {
+            command_button(p, 9300, state->notes_window_open ? "Show notes" : "Open notes",
+                           available, "notes", "open", NULL);
+            button(p, 9301, "Options", true, false, A_NOTES, 0);
+            if (state->notes_running) {
+                command_button(p, 9302, "Pause", p->snapshot.connected, "notes", "pause", NULL);
+            }
+            if (state->notes_window_open) {
+                command_button(p, 9307, "Close", p->snapshot.connected, "notes", "close", NULL);
+            }
+        }
+        if (state->notes_error[0]) {
+            text_wrapped(state->notes_error, secondary);
+        }
+        if (state->speech_grace_remaining_seconds) {
+            text_wrapped(format(p, "Speech is stopped. Resources detach in %u seconds.",
+                                state->speech_grace_remaining_seconds),
+                         muted);
+        }
+        if (state->notes_window_open && state->notes_exclusion_requested &&
+            !state->notes_exclusion_effective) {
+            text_wrapped("Notes exclusion is not guaranteed here. Use another display or select an "
+                         "application window or region.",
+                         secondary);
+        }
+    }
+}
+static void notes_options_body(Panel *p)
+{
+    p->draft_context = true;
+    CLAY({.layout = {.sizing = {.width = CLAY_SIZING_GROW()},
+                     .padding = {16, 16, 10, 18},
+                     .childGap = 6,
+                     .layoutDirection = CLAY_TOP_TO_BOTTOM}})
+    {
+        text_wrapped(
+            "Speaker notes use a separate local window and typeface. Appearance changes preserve "
+            "the logical reading position; opening never starts listening or outputs.",
+            secondary);
+        text_wrapped(
+            "Speech uses the explicitly enabled microphone and the shared local model and language "
+            "configured in Audio → Speech recognition. Timed mode works without a speech model.",
+            muted);
+        button(p, 9401, "Shared speech setup…", true, false, A_SPEECH_SETUP, 0);
+        if (p->snapshot.workflow.speech_grace_remaining_seconds) {
+            text_wrapped(format(p, "Speech is stopped. Resources detach in %u seconds.",
+                                p->snapshot.workflow.speech_grace_remaining_seconds),
+                         muted);
+        }
+        const CastFeatureInfo *feature = workflow_feature(p, "speech_teleprompter");
+        if (!feature_unlocked(feature)) {
+            text_wrapped(workflow_availability(feature), secondary);
+        }
+        const char *file = config_extension_value(&p->snapshot.config, "notes", "file");
+        bool available = p->snapshot.connected && feature_unlocked(feature);
+        bool speech_mode =
+            !strcmp(config_extension_value(&p->snapshot.config, "notes", "mode"), "speech");
+        const char *model =
+            config_extension_value(&p->snapshot.config, "transcription", "model_path");
+        bool speech_start = p->snapshot.workflow.speech_compiled && p->snapshot.config.mic &&
+                            (p->snapshot.workflow.speech_ready || (model && *model));
+        if (speech_mode) {
+            text_wrapped(!p->snapshot.workflow.speech_compiled
+                             ? "Speech inference is unavailable in this build. Timed mode works."
+                         : !p->snapshot.config.mic ? "Enable the permitted microphone to follow "
+                                                     "speech. Notes never enables it automatically."
+                         : !speech_start ? "Choose a compatible local model in Shared speech setup."
+                                         : "Speech start prepares the selected local model, then "
+                                           "listens only to the permitted microphone.",
+                         muted);
+        }
+        if (p->snapshot.workflow.notes_loaded) {
+            text_wrapped(format(p, "Loaded document: %s", p->snapshot.workflow.notes_path),
+                         secondary);
+        }
+        text_wrapped("The file setting is the default for Open notes. Loading another document "
+                     "changes the current readable script; it keeps that default.",
+                     muted);
+        command_button(p, 9304, "Load selected file", available && file && *file, "notes", "load",
+                       file);
+        command_button(p, 9303, "Reload document", available && p->snapshot.workflow.notes_loaded,
+                       "notes", "reload", NULL);
+        CLAY({.layout = {.childGap = 6}})
+        {
+            bool start = available && p->snapshot.workflow.notes_loaded &&
+                         !p->snapshot.workflow.notes_running && !section_dirty(p, 10) &&
+                         (!speech_mode || speech_start) &&
+                         p->snapshot.command_queued <= p->snapshot.command_completed;
+            command_button(p, 9305, "Start", start, "notes", "start", NULL);
+            command_button(p, 9306, "Pause",
+                           p->snapshot.connected && p->snapshot.workflow.notes_running, "notes",
+                           "pause", NULL);
+            command_button(p, 9307, "Close",
+                           p->snapshot.connected && p->snapshot.workflow.notes_window_open, "notes",
+                           "close", NULL);
+        }
+        button(p, 9402, p->notes_all_settings ? "Essentials" : "All notes settings", true, false,
+               A_NOTES_ADVANCED, 0);
+        for (size_t i = 0; i < FIELD_COUNT; i++) {
+            if (fields[i].tab == TAB_NOTES && (fields[i].group != 2 || p->notes_all_settings)) {
+                field_row(p, i);
+            }
+        }
+        text_wrapped(
+            "Apply commits these session settings as one validated batch. Reload reads the chosen "
+            "file explicitly and pauses following. Close panel leaves the notes window open.",
+            muted);
+    }
+    p->draft_context = false;
 }
 static void operate_body(Panel *p)
 {
@@ -2581,6 +3200,7 @@ static void operate_body(Panel *p)
         command_button(p, 34, p->snapshot.state.group_paused ? "Resume outputs" : "Pause all",
                        p->snapshot.connected, p->snapshot.state.group_paused ? "resume" : "pause",
                        NULL, NULL);
+        notes_entry(p);
         for (int lane = 0; lane < 4; lane++) {
             CLAY({.id = CLAY_IDI("LaneCard", lane),
                   .layout = {.sizing = {.width = CLAY_SIZING_GROW()},
@@ -2611,7 +3231,9 @@ static void operate_body(Panel *p)
 }
 static void pinned_drafts(Panel *p)
 {
-    int section = p->view == VIEW_SETUP     ? 7
+    int section = p->view == VIEW_LICENSE   ? 9
+                  : p->view == VIEW_NOTES   ? 10
+                  : p->view == VIEW_SETUP   ? 7
                   : p->view == VIEW_SECTION ? p->open_section
                   : p->open_menu == 2       ? 8
                   : p->open_menu == 4       ? 6
@@ -3031,7 +3653,11 @@ static Clay_RenderCommandArray layout(Panel *p)
                              .layoutDirection = CLAY_TOP_TO_BOTTOM},
                   .clip = {.vertical = true, .childOffset = Clay_GetScrollOffset()}})
             {
-                if (p->stream_setup) {
+                if (p->view == VIEW_LICENSE) {
+                    license_body(p);
+                } else if (p->view == VIEW_NOTES) {
+                    notes_options_body(p);
+                } else if (p->stream_setup) {
                     stream_setup_body(p);
                 } else if (p->main_tab == 0) {
                     operate_body(p);
@@ -3477,7 +4103,8 @@ static void draw_field(Panel *p, size_t index, Clay_BoundingBox b, SDL_Rect oute
         : strstr(fields[index].key, "subtitle") ? "No subtitle"
         : strstr(fields[index].key, "title") || !strcmp(fields[index].key, "output.pause_text")
             ? "No title"
-            : "Default";
+        : index == FIELD_COUNT ? "Local license file path"
+                               : "Default";
     const char *text = value[0] ? value : placeholder;
     draw_text(p, text, strlen(text), 1, value[0] && flow_enabled(p, index) ? foreground : muted, x,
               y);
@@ -3699,7 +4326,7 @@ static void render(Panel *p, Clay_RenderCommandArray commands)
             rounded(p, box, c->renderData.custom.cornerRadius.topLeft,
                     c->renderData.custom.backgroundColor);
             size_t field = (size_t)(uintptr_t)c->renderData.custom.customData - 1;
-            if (field < FIELD_COUNT) {
+            if (field <= FIELD_COUNT) {
                 draw_field(p, field, c->boundingBox, clips[depth]);
             }
             break;
@@ -3778,9 +4405,9 @@ static bool flow_modal_widget(const Panel *p, const Widget *w)
 static bool widget_in_scroll(const Panel *p, const Widget *w)
 {
     (void)p;
-    return w->id != 5 && w->id != 6 && w->id != 7 && w->id != 8 && w->id != 9 && w->id != 22 &&
-           w->id != 9100 && w->id != 9101 && !(w->id >= 10 && w->id <= 12) && w->id != 99 &&
-           !(w->id >= 160 && w->id <= 166) && !(w->id >= 700 && w->id <= 717) &&
+    return w->id != 9200 && w->id != 5 && w->id != 6 && w->id != 7 && w->id != 8 && w->id != 9 &&
+           w->id != 22 && w->id != 9100 && w->id != 9101 && !(w->id >= 10 && w->id <= 12) &&
+           w->id != 99 && !(w->id >= 160 && w->id <= 166) && !(w->id >= 700 && w->id <= 717) &&
            w->type != W_OPTION;
 }
 static void cancel_editing(Panel *p)
@@ -3792,7 +4419,8 @@ static void cancel_editing(Panel *p)
 static void stop_editing(Panel *p)
 {
     Widget *active = find_widget(p, p->active_text);
-    if (active && active->type == W_FIELD && field_applies_immediately(&fields[active->index])) {
+    if (active && active->type == W_FIELD && (size_t)active->index < FIELD_COUNT &&
+        field_applies_immediately(&fields[active->index])) {
         commit_field(p, active->index);
     }
     cancel_editing(p);
@@ -4166,12 +4794,123 @@ static void start_color_pick(Panel *p)
     }
 }
 
+typedef struct {
+    uint32_t type, window;
+    int index;
+} PanelFileDialog;
+static void panel_file_chosen(void *context, const char *const *files, int filter)
+{
+    (void)filter;
+    PanelFileDialog *dialog = context;
+    char *path = files && files[0] ? strdup(files[0]) : NULL;
+    SDL_Event event = {.type = dialog->type};
+    event.user.windowID = dialog->window;
+    event.user.code = dialog->index;
+    event.user.data1 = path;
+    if (!SDL_PushEvent(&event)) {
+        free(path);
+    }
+    free(dialog);
+}
 static void activate(Panel *p, Widget *w)
 {
     if (!w || !w->enabled) {
         return;
     }
     switch (w->action) {
+    case A_LICENSE:
+        stop_editing(p);
+        if (p->view != VIEW_LICENSE) {
+            p->license_return_view = p->view;
+            p->license_return_section = p->open_section;
+            navigate_view(p, VIEW_LICENSE, -1);
+        } else {
+            navigate_view(p, p->license_return_view, p->license_return_section);
+        }
+        p->focus = 9200;
+        break;
+    case A_LICENSE_IMPORT: {
+        stop_editing(p);
+        const char *args[] = {"license", "import", p->edit[FIELD_COUNT].value};
+        p->error[0] = 0;
+        if (!panel_client_command(p->client, 3, args, p->error, sizeof p->error)) {
+            p->pending_button = w->id;
+            p->pending_button_request = ++p->snapshot.command_queued;
+            p->reply[0] = 0;
+        }
+        break;
+    }
+    case A_LICENSE_REMOVE:
+        stop_editing(p);
+        p->license_remove_confirmation = true;
+        p->focus = 9204;
+        break;
+    case A_LICENSE_CANCEL:
+        p->license_remove_confirmation = false;
+        p->focus = 9203;
+        break;
+    case A_LICENSE_CONFIRM: {
+        const char *args[] = {"license", "remove"};
+        p->error[0] = 0;
+        if (!panel_client_command(p->client, 2, args, p->error, sizeof p->error)) {
+            p->pending_button = w->id;
+            p->pending_button_request = ++p->snapshot.command_queued;
+            p->license_remove_confirmation = false;
+            p->reply[0] = 0;
+        }
+        break;
+    }
+    case A_LICENSE_COPY: {
+        const CastEditionSnapshot *edition = &p->snapshot.edition;
+        const CastEditionIdentity *identity =
+            edition->schema == CAST_EDITION_SCHEMA ? &edition->identity : cast_edition_identity();
+        char diagnostic[1024];
+        snprintf(
+            diagnostic, sizeof diagnostic,
+            "Cast %s %s; license=%s; kind=%s; ID=%s; release=%lld; updates_until=%lld; "
+            "pending_downgrade=%s; platform=%s; media=%s; API=%u; "
+            "status=%s",
+            identity->edition, identity->version, cast_license_state_name(edition->license.state),
+            license_kind(&edition->license), edition->license.masked_id,
+            (long long)identity->release_timestamp, (long long)edition->license.updates_until,
+            edition->pending_downgrade ? "yes" : "no", identity->platform, identity->media_profile,
+            identity->extension_api, p->snapshot.connected ? "acknowledged" : "last known");
+        size_t used = strlen(diagnostic);
+        for (unsigned i = 0; i < CAST_FEATURE_COUNT && used + 1 < sizeof diagnostic; i++) {
+            const CastFeatureInfo *feature = &edition->features[i];
+            int added = snprintf(
+                diagnostic + used, sizeof diagnostic - used,
+                "; %s=%s (implemented:%s,compiled:%s,dependency:%s,entitled:%s)", feature->id,
+                cast_feature_reason_name(feature->reason), feature->implemented ? "yes" : "no",
+                feature->compiled ? "yes" : "no", feature->dependency_ready ? "yes" : "no",
+                feature->entitled ? "yes" : "no");
+            if (added < 0 || (size_t)added >= sizeof diagnostic - used) {
+                break;
+            }
+            used += (size_t)added;
+        }
+        if (SDL_SetClipboardText(diagnostic)) {
+            snprintf(p->reply, sizeof p->reply, "Diagnostic summary copied.");
+        } else {
+            snprintf(p->error, sizeof p->error, "Copy failed: %s", SDL_GetError());
+        }
+        break;
+    }
+    case A_LICENSE_URL: {
+        const char *url = p->snapshot.config.licensing_upgrade_url;
+        if (!license_url_valid(url)) {
+            snprintf(p->error, sizeof p->error, "Information URL must be HTTPS.");
+            break;
+        }
+        extern char **environ;
+        char *args[] = {"xdg-open", (char *)url, NULL};
+        int result = posix_spawnp(&p->browser_pid, "xdg-open", NULL, NULL, args, environ);
+        if (result) {
+            p->browser_pid = 0;
+            snprintf(p->error, sizeof p->error, "Open browser: %s", strerror(result));
+        }
+        break;
+    }
     case A_ALL:
         if (w->index >= 0 && w->index < 6) {
             p->all_settings[w->index] = !p->all_settings[w->index];
@@ -4344,10 +5083,55 @@ static void activate(Panel *p, Widget *w)
             navigate_view(p, p->return_view, p->return_section);
         }
         break;
+    case A_NOTES:
+        stop_editing(p);
+        p->return_view = p->view;
+        p->return_section = p->open_section;
+        navigate_view(p, VIEW_NOTES, -1);
+        p->focus = 99;
+        break;
+    case A_NOTES_ADVANCED:
+        stop_editing(p);
+        p->notes_all_settings = !p->notes_all_settings;
+        break;
+    case A_SPEECH_ADVANCED:
+        p->speech_all_settings = !p->speech_all_settings;
+        break;
+    case A_SPEECH_SETUP:
+        cancel_editing(p);
+        p->return_view = VIEW_OPERATE;
+        navigate_view(p, VIEW_OPERATE, -1);
+        p->open_menu = 4; /* Existing Audio card's one-level options. */
+        p->dropdown = p->color_popup = 0;
+        break;
+    case A_FILE_PICK: {
+        if (p->file_pick_pending || w->index < 0 || (size_t)w->index >= FIELD_COUNT) {
+            break;
+        }
+        stop_editing(p);
+        PanelFileDialog *dialog = malloc(sizeof *dialog);
+        if (!dialog) {
+            snprintf(p->error, sizeof p->error, "Cannot open file chooser: allocation failed.");
+            break;
+        }
+        *dialog = (PanelFileDialog){p->file_event, SDL_GetWindowID(p->window), w->index};
+        static const SDL_DialogFileFilter fonts[] = {{"Fonts", "ttf;otf;ttc"}, {"All files", "*"}};
+        static const SDL_DialogFileFilter files[] = {{"All files", "*"}};
+        p->file_pick_pending = true;
+        SDL_ShowOpenFileDialog(panel_file_chosen, dialog, p->window,
+                               fields[w->index].flags & FONT_FIELD ? fonts : files,
+                               fields[w->index].flags & FONT_FIELD ? 2 : 1, NULL, false);
+        break;
+    }
     case A_BACK:
         stop_editing(p);
-        navigate_view(p, p->view == VIEW_SETUP ? p->return_view : VIEW_COMPOSE,
-                      p->view == VIEW_SETUP ? p->return_section : -1);
+        navigate_view(p,
+                      p->view == VIEW_LICENSE                          ? p->license_return_view
+                      : p->view == VIEW_SETUP || p->view == VIEW_NOTES ? p->return_view
+                                                                       : VIEW_COMPOSE,
+                      p->view == VIEW_LICENSE                          ? p->license_return_section
+                      : p->view == VIEW_SETUP || p->view == VIEW_NOTES ? p->return_section
+                                                                       : -1);
         p->focus = p->main_tab ? 6 : 5;
         break;
     case A_APPLY_SECTION:
@@ -4489,6 +5273,14 @@ static void key_event(Panel *p, const SDL_KeyboardEvent *event)
         return;
     }
     if (key == SDLK_ESCAPE) {
+        if (p->file_pick_pending) {
+            return;
+        }
+        if (p->license_remove_confirmation) {
+            p->license_remove_confirmation = false;
+            p->focus = 9203;
+            return;
+        }
         if (p->color_popup) {
             p->focus = p->color_popup;
             p->color_popup = 0;
@@ -4507,9 +5299,15 @@ static void key_event(Panel *p, const SDL_KeyboardEvent *event)
             return;
         }
         cancel_editing(p);
-        if (p->view == VIEW_SETUP || p->view == VIEW_SECTION) {
-            navigate_view(p, p->view == VIEW_SETUP ? p->return_view : VIEW_COMPOSE,
-                          p->view == VIEW_SETUP ? p->return_section : -1);
+        if (p->view == VIEW_SETUP || p->view == VIEW_SECTION || p->view == VIEW_LICENSE ||
+            p->view == VIEW_NOTES) {
+            navigate_view(p,
+                          p->view == VIEW_LICENSE                          ? p->license_return_view
+                          : p->view == VIEW_SETUP || p->view == VIEW_NOTES ? p->return_view
+                                                                           : VIEW_COMPOSE,
+                          p->view == VIEW_LICENSE ? p->license_return_section
+                          : p->view == VIEW_SETUP || p->view == VIEW_NOTES ? p->return_section
+                                                                           : -1);
             p->focus = p->main_tab ? 6 : 5;
         }
         return;
@@ -4608,7 +5406,7 @@ static void key_event(Panel *p, const SDL_KeyboardEvent *event)
             edit->dirty = true;
             edit->revision++;
         } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
-            if (edit->dirty) {
+            if (edit->dirty && (size_t)index < FIELD_COUNT) {
                 if (field_applies_immediately(&fields[index])) {
                     commit_field(p, index);
                 } else {
@@ -4619,7 +5417,10 @@ static void key_event(Panel *p, const SDL_KeyboardEvent *event)
         }
         return;
     }
-    int section = p->view == VIEW_SETUP ? 7 : p->view == VIEW_SECTION ? p->open_section : -1;
+    int section = p->view == VIEW_SETUP     ? 7
+                  : p->view == VIEW_NOTES   ? 10
+                  : p->view == VIEW_SECTION ? p->open_section
+                                            : -1;
     if (!p->dropdown && !p->color_popup && section >= 0 &&
         (key == SDLK_RETURN || key == SDLK_KP_ENTER) && section_dirty(p, section)) {
         apply_section(p, section);
@@ -4851,6 +5652,9 @@ static void poll_color_pick(Panel *p)
 
 static void poll_client(Panel *p)
 {
+    if (p->browser_pid > 0 && waitpid(p->browser_pid, NULL, WNOHANG) != 0) {
+        p->browser_pid = 0;
+    }
     PanelSnapshot fresh;
     if (panel_client_snapshot(p->client, &fresh)) {
         if (!fresh.connected) {
@@ -4874,19 +5678,28 @@ static void poll_client(Panel *p)
                 p->pending_button_request = 0;
                 NavigationMemory saved = p->navigation ? *p->navigation : (NavigationMemory){0};
                 bool valid =
-                    saved.magic == 0x43565033 && saved.session_cookie == cookie &&
-                    saved.view >= VIEW_OPERATE && saved.view <= VIEW_SETUP && saved.section >= -1 &&
+                    saved.magic == 0x43565037 && saved.session_cookie == cookie &&
+                    saved.view >= VIEW_OPERATE && saved.view <= VIEW_NOTES && saved.section >= -1 &&
                     saved.section < 6 && (saved.view != VIEW_SECTION || saved.section >= 0) &&
                     saved.lane >= -1 && saved.lane < 4 && saved.return_view >= VIEW_OPERATE &&
                     saved.return_view <= VIEW_SECTION &&
+                    saved.license_return_view >= VIEW_OPERATE &&
+                    saved.license_return_view <= VIEW_NOTES &&
+                    saved.license_return_view != VIEW_LICENSE &&
+                    (saved.license_return_view != VIEW_SECTION ||
+                     (saved.license_return_section >= 0 && saved.license_return_section < 6)) &&
                     (saved.return_view != VIEW_SECTION ||
                      (saved.return_section >= 0 && saved.return_section < 6));
                 memset(p->view_scroll, 0, sizeof p->view_scroll);
                 memset(p->all_settings, 0, sizeof p->all_settings);
+                p->speech_all_settings = false;
+                p->notes_all_settings = false;
                 p->restore_scroll = true;
                 if (valid) {
                     memcpy(p->view_scroll, saved.scroll, sizeof saved.scroll);
                     memcpy(p->all_settings, saved.all_settings, sizeof saved.all_settings);
+                    p->speech_all_settings = saved.speech_all_settings;
+                    p->notes_all_settings = saved.notes_all_settings;
                     for (size_t i = 0; i < VIEW_SCROLL_COUNT; i++) {
                         if (!isfinite(p->view_scroll[i]) || p->view_scroll[i] > 0 ||
                             p->view_scroll[i] < -1000000) {
@@ -4896,6 +5709,8 @@ static void poll_client(Panel *p)
                     p->open_lane = saved.lane;
                     p->return_view = saved.return_view;
                     p->return_section = saved.return_section;
+                    p->license_return_view = saved.license_return_view;
+                    p->license_return_section = saved.license_return_section;
                     navigate_view(p, saved.view, saved.section);
                 } else {
                     p->open_lane = -1;
@@ -4908,6 +5723,9 @@ static void poll_client(Panel *p)
             p->navigation_attachment = fresh.daemon_generation;
         }
         p->snapshot = fresh;
+        if (!fresh.connected) {
+            p->license_remove_confirmation = false;
+        }
         if (p->pending_button_request && fresh.command_completed >= p->pending_button_request) {
             p->pending_button = 0;
             p->pending_button_request = 0;
@@ -5022,7 +5840,9 @@ static uint64_t window_xid(SDL_Window *window)
     Display *display = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, NULL);
     Window xid = (Window)SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
     if (display && xid) {
-        XClassHint hint = {.res_name = "cast-panel", .res_class = "CastPanel"};
+        XClassHint hint = {
+            .res_name = cast_edition_identity()->pro ? "cast-pro-panel" : "cast-panel",
+            .res_class = cast_edition_identity()->pro ? "CastProPanel" : "CastPanel"};
         XSetClassHint(display, xid, &hint);
         Atom property = XInternAtom(display, "_NET_WM_WINDOW_TYPE", False);
         Atom utility = XInternAtom(display, "_NET_WM_WINDOW_TYPE_UTILITY", False);
@@ -5110,7 +5930,7 @@ static void write_ui_state(Panel *p, const char *path)
         const Widget *w = &p->widgets[i];
         const char *key = (w->action == A_SETTING || w->action == A_FIELD || w->action == A_COLOR ||
                            w->action == A_SWATCH || (w->action == A_DROPDOWN && w->index >= 0)) &&
-                                  w->index >= 0 && (size_t)w->index < FIELD_COUNT
+                                  w->index >= 0 && (size_t)w->index <= FIELD_COUNT
                               ? fields[w->index].key
                               : "";
         fprintf(file,
@@ -5120,10 +5940,14 @@ static void write_ui_state(Panel *p, const char *path)
                 w->box.x, w->box.y, w->box.width, w->box.height);
         char value[PATH_MAX] = "";
         if (key[0]) {
-            field_value(&fields[w->index], &p->snapshot.config, value, sizeof value);
+            if ((size_t)w->index == FIELD_COUNT) {
+                snprintf(value, sizeof value, "%s", p->edit[FIELD_COUNT].value);
+            } else {
+                field_value(&fields[w->index], &p->snapshot.config, value, sizeof value);
+            }
         }
         json_string(file, value);
-        bool is_field = key[0] && w->index >= 0 && (size_t)w->index < FIELD_COUNT;
+        bool is_field = key[0] && w->index >= 0 && (size_t)w->index <= FIELD_COUNT;
         fprintf(file,
                 ",\"dirty\":%s,\"draft\":", is_field && p->edit[w->index].dirty ? "true" : "false");
         json_string(file, is_field ? p->edit[w->index].value : "");
@@ -5153,6 +5977,11 @@ static void write_ui_state(Panel *p, const char *path)
     int edit_index;
     FieldEdit *edit = active_edit(p, &edit_index);
     json_string(file, edit ? edit->value : "");
+    fprintf(file,
+            ",\"license_remove_confirmation\":%s,\"edition\":\"%s\",\"license_state\":\"%s\","
+            "\"premium_implemented\":false",
+            p->license_remove_confirmation ? "true" : "false", cast_edition_identity()->edition,
+            cast_license_state_name(p->snapshot.edition.license.state));
     fputs(",\"pause_message\":", file);
     json_string(file, p->snapshot.config.pause_text);
     fputs(",\"camera_anchor\":", file);
@@ -5181,6 +6010,7 @@ static void write_ui_state(Panel *p, const char *path)
 int panel_run_application(const Config *config, int startup_argc, const char *const *startup_argv,
                           bool auto_start, char *error, size_t n)
 {
+    initialize_fields();
     void *clay_memory = NULL;
     Panel *p = calloc(1, sizeof *p);
     if (!p) {
@@ -5215,6 +6045,7 @@ int panel_run_application(const Config *config, int startup_argc, const char *co
         cleanup(p, NULL);
         return -1;
     }
+    p->file_event = SDL_RegisterEvents(1);
     /* X11 uses physical window dimensions. Create at its final scaled size so
      * SDL's saved position and mwm's first centering both use the same bounds. */
     float initial_scale = 1;
@@ -5225,7 +6056,8 @@ int panel_run_application(const Config *config, int startup_argc, const char *co
         }
     }
     p->window = SDL_CreateWindow(
-        "cast control panel", (int)roundf(480 * initial_scale), (int)roundf(760 * initial_scale),
+        cast_edition_identity()->pro ? "Cast Pro control panel" : "cast control panel",
+        (int)roundf(480 * initial_scale), (int)roundf(760 * initial_scale),
         SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN);
     if (!p->window) {
         snprintf(error, n, "cannot create control panel window: %s", SDL_GetError());
@@ -5314,6 +6146,15 @@ int panel_run_application(const Config *config, int startup_argc, const char *co
     while (!p->quit) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
+            if (e.type == p->file_event) {
+                p->file_pick_pending = false;
+                if (e.user.windowID == SDL_GetWindowID(p->window) && e.user.data1 &&
+                    e.user.code >= 0 && (size_t)e.user.code < FIELD_COUNT) {
+                    stage_field(p, e.user.code, e.user.data1);
+                }
+                free(e.user.data1);
+                continue;
+            }
             event(p, &e);
         }
         int width, height;

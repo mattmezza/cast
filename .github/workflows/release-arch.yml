@@ -125,12 +125,14 @@ jobs:
               git tag "$BUILD_TAG" "$SOURCE_COMMIT"
             fi
           fi
+          python3 packaging/public-boundary.py
+          make EDITION=community X11=0 WAYLAND=0 PANEL=0 check-editions
           chown -R builder:builder "$GITHUB_WORKSPACE"
       - name: Build package and run unit, Xorg, and panel checks
         shell: bash
         run: |
           set -euo pipefail
-          runuser -u builder -- sh packaging/ci-build-arch.sh \
+          runuser -u builder -- env CAST_CI_OFFICIAL="$PUBLISH" sh packaging/ci-build-arch.sh \
             "$BUILD_TAG" "$GITHUB_WORKSPACE/dist/arch"
       - name: Preserve tested Arch assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

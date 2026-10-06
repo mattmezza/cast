@@ -73,3 +73,16 @@ The full `make X11=0 WAYLAND=1 check` additionally starts an isolated mock porta
 to check asynchronous consent, delayed cancellation, reselection and shutdown.
 It requires permission to create local Unix sockets and fails promptly if that
 permission is unavailable. These tests do not replace compositor acceptance.
+
+## Pro motion and notes
+
+Explicit cinematic focal points use normalized selected-source coordinates even
+without global pointer metadata. Automatic click zoom requires real input events;
+synthetic cursor smoothing requires a separately controllable cursor. An embedded
+portal cursor is never drawn a second time. Status reports these limits.
+
+The SDL notes window can exist independently of native video preview support. The
+portal does not guarantee monitor exclusion: notes status distinguishes requested
+masking from effective masking. Application capture, an unshared display or hiding
+notes avoids exposing the notes window. Always-on-top is a compositor hint. Native
+window positioning and masking cannot be inferred from a successful headless build.

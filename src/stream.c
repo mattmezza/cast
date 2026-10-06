@@ -3,6 +3,7 @@
 #endif
 #include "stream.h"
 #include "media_internal.h"
+#include "media_codec.h"
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -93,7 +94,7 @@ struct StreamEncoder {
     AVCodecContext *video, *sound;
     AVStream *video_stream, *audio_stream;
     AVFrame *video_frame, *audio_frame;
-    struct SwsContext *scale;
+    MediaVideoConverter *conversion;
     uint64_t epoch, started_ns;
     int64_t video_pts, audio_pts;
     bool force_keyframe;
@@ -149,6 +150,7 @@ bool stream_settings_changed(const StreamConfig *a, const StreamConfig *b)
     return strcmp(a->service, b->service) || strcmp(a->server_url, b->server_url) ||
            strcmp(a->key_file, b->key_file) || strcmp(a->tls_ca_file, b->tls_ca_file) ||
            strcmp(a->encoder_preset, b->encoder_preset) ||
+           strcmp(a->video_encoder, b->video_encoder) ||
            a->video_bitrate_kbps != b->video_bitrate_kbps ||
            a->audio_bitrate_kbps != b->audio_bitrate_kbps || a->queue_frames != b->queue_frames ||
            a->lag_ms != b->lag_ms || a->connect_timeout_ms != b->connect_timeout_ms ||
@@ -263,12 +265,20 @@ static bool protocol_available(const char *name)
     }
     return false;
 }
-static int local_support(const Config *cfg, char *error, size_t size)
+static int local_support(const Config *cfg, MediaCodecSelection *chosen, char *error, size_t size)
 {
-    if (!avcodec_find_encoder_by_name("libx264") || !avcodec_find_encoder_by_name("aac")) {
-        snprintf(error, size,
-                 "streaming requires FFmpeg software libx264 and AAC encoders; install an FFmpeg "
-                 "build containing both");
+    AVCodecContext *context = NULL;
+    MediaCodecSelection selection;
+    if (media_video_open(cfg, true, true, &context, &selection, error, size)) {
+        return -1;
+    }
+    avcodec_free_context(&context);
+    if (chosen) {
+        *chosen = selection;
+    }
+    snprintf(error, size, "selected %s; %s", selection.encoder, selection.detail);
+    if (!avcodec_find_encoder_by_name("aac")) {
+        snprintf(error, size, "streaming requires the FFmpeg AAC encoder");
         return -1;
     }
     if (!av_guess_format("flv", NULL, NULL) || !protocol_available("rtmp")) {
@@ -381,41 +391,17 @@ static int setup_encoder(struct StreamEncoder *encoder)
     encoder->format->interrupt_callback = (AVIOInterruptCB){interrupted, shared};
     /* Avoid the interleaver retaining audio/video across a privacy epoch. */
     encoder->format->max_interleave_delta = 0;
-    const AVCodec *codec = avcodec_find_encoder_by_name("libx264");
-    encoder->video = avcodec_alloc_context3(codec);
+    MediaCodecSelection selection;
+    char error[CAST_ERR];
+    if (media_video_open(cfg, true, true, &encoder->video, &selection, error, sizeof(error))) {
+        return AVERROR(EINVAL);
+    }
     encoder->video_frame = av_frame_alloc();
     encoder->video_stream = avformat_new_stream(encoder->format, NULL);
-    if (!encoder->video || !encoder->video_frame || !encoder->video_stream) {
+    if (!encoder->video_frame || !encoder->video_stream) {
         return AVERROR(ENOMEM);
     }
     AVCodecContext *video = encoder->video;
-    video->width = cfg->width;
-    video->height = cfg->height;
-    video->pix_fmt = AV_PIX_FMT_YUV420P;
-    video->time_base = (AVRational){1, cfg->fps};
-    video->framerate = (AVRational){cfg->fps, 1};
-    video->bit_rate = (int64_t)cfg->stream.video_bitrate_kbps * 1000;
-    video->rc_max_rate = video->rc_min_rate = video->bit_rate;
-    video->rc_buffer_size = (int)(video->bit_rate * 2);
-    video->gop_size = cfg->fps * 2;
-    video->max_b_frames = 0;
-    video->thread_count = 2;
-    video->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-    video->color_primaries = AVCOL_PRI_BT709;
-    video->color_trc = AVCOL_TRC_BT709;
-    video->colorspace = AVCOL_SPC_BT709;
-    video->color_range = AVCOL_RANGE_MPEG;
-    AVDictionary *options = NULL;
-    av_dict_set(&options, "preset", cfg->stream.encoder_preset, 0);
-    av_dict_set(&options, "tune", "zerolatency", 0);
-    av_dict_set(&options, "profile", "high", 0);
-    av_dict_set(&options, "forced-idr", "1", 0);
-    av_dict_set(&options, "x264-params", "nal-hrd=cbr:force-cfr=1:scenecut=0", 0);
-    result = avcodec_open2(video, codec, &options);
-    av_dict_free(&options);
-    if (result < 0) {
-        return result;
-    }
     encoder->video_stream->time_base = video->time_base;
     encoder->video_stream->avg_frame_rate = video->framerate;
     result = avcodec_parameters_from_context(encoder->video_stream->codecpar, video);
@@ -429,19 +415,12 @@ static int setup_encoder(struct StreamEncoder *encoder)
     if (result < 0 || (result = setup_audio_encoder(encoder, true)) < 0) {
         return result;
     }
-    encoder->scale =
-        sws_getContext(cfg->width, cfg->height, AV_PIX_FMT_RGBA, cfg->width, cfg->height,
-                       video->pix_fmt, SWS_FAST_BILINEAR, NULL, NULL, NULL);
-    if (!encoder->scale) {
-        return AVERROR(ENOMEM);
-    }
-    const int *colors = sws_getCoefficients(SWS_CS_ITU709);
-    sws_setColorspaceDetails(encoder->scale, colors, 1, colors, 0, 0, 1 << 16, 1 << 16);
-    return 0;
+    return media_video_converter_prepare(&encoder->conversion, cfg->width, cfg->height,
+                                         encoder->video_frame, true);
 }
 static void free_encoder(struct StreamEncoder *encoder)
 {
-    sws_freeContext(encoder->scale);
+    media_video_converter_free(&encoder->conversion);
     av_frame_free(&encoder->video_frame);
     av_frame_free(&encoder->audio_frame);
     avcodec_free_context(&encoder->video);
@@ -511,8 +490,8 @@ static int epoch_refresh(struct StreamEncoder *encoder)
     if (encoder->epoch == current) {
         return 0;
     }
-    /* x264 zerolatency has no delayed reference frames. The next submitted
-     * video frame is an IDR; delayed AAC samples are retired by replacement. */
+    /* Reviewed CPU H.264 encoders use zero B frames and immediate output.
+     * The next submitted frame is an IDR; delayed AAC is retired by replacement. */
     encoder->epoch = current;
     encoder->force_keyframe = true;
     return setup_audio_encoder(encoder, false);
@@ -574,10 +553,9 @@ static int encode_video(struct StreamEncoder *encoder)
     }
     int result = av_frame_make_writable(encoder->video_frame);
     if (result >= 0) {
-        const uint8_t *source[] = {raw};
-        int stride[] = {shared->cfg.width * 4};
-        sws_scale(encoder->scale, source, stride, 0, shared->cfg.height, encoder->video_frame->data,
-                  encoder->video_frame->linesize);
+        Frame source = {.data = raw, .width = shared->cfg.width, .height = shared->cfg.height,
+                        .stride = shared->cfg.width * 4};
+        result = media_video_convert(&encoder->conversion, &source, encoder->video_frame, true);
     }
     wipe(raw, shared->frame_size);
     free(raw);
@@ -683,6 +661,14 @@ int stream_worker_main(int fd)
         munmap(shared, (size_t)metadata.st_size);
         return 2;
     }
+#ifdef CAST_EDITION_PRO
+    char profile_error[CAST_ERR];
+    if (media_profile_validate(true, profile_error, sizeof(profile_error))) {
+        worker_fail(shared, FAILURE_ENCODER, AVERROR(ENOTSUP));
+        munmap(shared, (size_t)metadata.st_size);
+        return 2;
+    }
+#endif
     /* A detached daemon must not leave an orphan credential-bearing worker. */
     pid_t parent = getppid();
     prctl(PR_SET_PDEATHSIG, SIGKILL);
@@ -812,7 +798,7 @@ static void worker_error(struct CastStream *stream, int failure, int code)
             "stream-key file changed or became inaccessible; finish editing it and start again";
         break;
     case FAILURE_ENCODER:
-        action = "stream encoder initialization failed; check FFmpeg libx264/AAC support and "
+        action = "stream encoder initialization failed; check configured H.264/AAC support and "
                  "encoding settings";
         break;
     case FAILURE_CONNECT:
@@ -1112,7 +1098,8 @@ int stream_start(CastStream *stream, const Config *cfg, char *error, size_t size
                  "stream start");
         return -1;
     }
-    if (local_support(cfg, error, size) || stream_key_validate(cfg->stream.key_file, error, size)) {
+    MediaCodecSelection chosen;
+    if (local_support(cfg, &chosen, error, size) || stream_key_validate(cfg->stream.key_file, error, size)) {
         return -1;
     }
     pthread_mutex_lock(&stream->mutex);
@@ -1157,6 +1144,9 @@ int stream_start(CastStream *stream, const Config *cfg, char *error, size_t size
     shared->frame_size = frame_size;
     shared->queue_capacity = (unsigned)cfg->stream.queue_frames;
     shared->cfg = *cfg;
+    /* Pin this start's initialized auto choice for the exec worker and retries. */
+    snprintf(shared->cfg.stream.video_encoder, sizeof(shared->cfg.stream.video_encoder),
+             "%s", chosen.encoder);
     shared->silent = true;
     pthread_mutexattr_t attributes;
     pthread_mutexattr_init(&attributes);
@@ -1174,6 +1164,9 @@ int stream_start(CastStream *stream, const Config *cfg, char *error, size_t size
     uint64_t generation = stream->status.generation + 1;
     memset(&stream->status, 0, sizeof(stream->status));
     stream->status.generation = generation;
+    snprintf(stream->status.video_encoder, sizeof(stream->status.video_encoder), "%s", chosen.encoder);
+    snprintf(stream->status.video_encoder_detail, sizeof(stream->status.video_encoder_detail),
+             "%.255s", chosen.detail);
     stream->status.state = STREAM_CONNECTING;
     stream->status.active = true;
     stream->status.session_started_ns = cast_now_ns();
@@ -1295,7 +1288,7 @@ void stream_status(CastStream *stream, StreamSnapshot *status)
 void stream_doctor(const Config *cfg, char *output, size_t size)
 {
     char error[CAST_ERR] = "";
-    int support = local_support(cfg, error, sizeof(error));
+    int support = local_support(cfg, NULL, error, sizeof(error));
     size_t used = strlen(output);
     if (used >= size) {
         return;
@@ -1303,8 +1296,8 @@ void stream_doctor(const Config *cfg, char *output, size_t size)
     snprintf(output + used, size - used,
              "Streaming: %s%s; software H.264/AAC, FLV RTMP/RTMPS, TLS verification enabled; no "
              "network probe.\n",
-             support ? "unavailable: " : "local codec/muxer/protocol support available",
-             support ? error : "");
+             support ? "unavailable: " : "local codec/muxer/protocol support available; ",
+             error);
     used = strlen(output);
     if (used >= size) {
         return;
@@ -1314,6 +1307,80 @@ void stream_doctor(const Config *cfg, char *output, size_t size)
              valid ? "invalid: " : "accessible, owned regular mode-600 file", valid ? error : "");
 }
 #ifdef CAST_TEST
+/* Exercise the production codec, cadence, privacy epoch and FLV packet paths
+ * through a local file. Network transport remains a separate integration test. */
+int stream_test_file(const Config *cfg, const char *path)
+{
+    size_t bytes = (size_t)cfg->width * cfg->height * 4;
+    struct StreamShared *shared = calloc(1, sizeof(*shared) + bytes * 2);
+    if (!shared) {
+        return -1;
+    }
+    shared->cfg = *cfg;
+    shared->frame_size = bytes;
+    shared->queue_capacity = 1;
+    shared->have_frame = true;
+    shared->frame_epoch = 1;
+    pthread_mutex_init(&shared->media_mutex, NULL);
+    atomic_init(&shared->epoch, 1);
+    atomic_init(&shared->session, 1);
+    for (size_t i = 0; i < bytes; i += 4) {
+        shared->frame[i] = shared->frame[i + 3] = 255;
+    }
+    struct StreamEncoder encoder = {.shared = shared, .force_keyframe = true, .epoch = 1};
+    int result = setup_encoder(&encoder);
+    if (result < 0) {
+        goto finished;
+    }
+    encoder.started_ns = cast_now_ns();
+    shared->audio_begin = samples_at(encoder.started_ns - 60000000ULL);
+    shared->audio_end = shared->audio_begin + STREAM_AUDIO_RING;
+    for (unsigned i = 0; i < STREAM_AUDIO_RING; i++) {
+        float sample = (i % 100 < 50) ? 0.2f : -0.2f;
+        unsigned slot = (unsigned)((shared->audio_begin + i) % STREAM_AUDIO_RING) * 2;
+        shared->audio[slot] = shared->audio[slot + 1] = sample;
+    }
+    result = avio_open(&encoder.format->pb, path, AVIO_FLAG_WRITE);
+    if (result < 0 || (result = avformat_write_header(encoder.format, NULL)) < 0) {
+        goto finished;
+    }
+    bool paused = false;
+    while (encoder.video_pts < cfg->fps) {
+        if (!paused && encoder.video_pts >= cfg->fps / 2) {
+            paused = true;
+            shared->silent = true;
+            atomic_fetch_add(&shared->epoch, 1);
+            clear_media_locked(shared);
+        }
+        result = epoch_refresh(&encoder);
+        if (result < 0) {
+            goto finished;
+        }
+        int64_t video_due = av_rescale(encoder.video_pts, STREAM_RATE, cfg->fps) +
+                            encoder.sound->initial_padding;
+        if (video_due <= encoder.audio_pts) {
+            result = encode_video(&encoder);
+            encoder.video_pts++;
+        } else {
+            result = encode_audio(&encoder);
+        }
+        if (result < 0) {
+            goto finished;
+        }
+    }
+    result = avcodec_send_frame(encoder.sound, NULL);
+    if (result >= 0) {
+        result = write_packets(&encoder, encoder.sound, encoder.audio_stream);
+    }
+    if (result >= 0) {
+        result = av_write_trailer(encoder.format);
+    }
+finished:
+    free_encoder(&encoder);
+    pthread_mutex_destroy(&shared->media_mutex);
+    free(shared);
+    return result < 0 ? -1 : 0;
+}
 void stream_test_hold(CastStream *stream, int milliseconds)
 {
     pthread_mutex_lock(&stream->mutex);

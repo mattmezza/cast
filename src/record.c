@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #endif
 #include "media_internal.h"
+#include "media_codec.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <libavcodec/avcodec.h>
@@ -33,6 +34,8 @@ struct CastRecorder {
     CastAudio *audio;
     Config cfg;
     char path[PATH_MAX], file_path[PATH_MAX], error[CAST_ERR], codec_error[CAST_ERR];
+    char encoder_info[CAST_ERR];
+    MediaCodecSelection selected, pending_selection;
     uint64_t segment_ns, elapsed_ns, generation, accept_after_ns, audio_segment_sample;
     int64_t audio_produced, audio_encoded, last_video_pts;
     struct VideoJob *queue;
@@ -42,7 +45,7 @@ struct CastRecorder {
     AVStream *vs, *as;
     AVFrame *vframe, *aframe;
     AVAudioFifo *fifo;
-    struct SwsContext *scale;
+    MediaVideoConverter *conversion;
     SwrContext *resample;
     int fd;
     AVIOContext *io;
@@ -50,6 +53,7 @@ struct CastRecorder {
     atomic_int slow_ms, hold_ms, fail_after;
     atomic_bool codec_busy;
     atomic_int_fast64_t write_limit;
+    atomic_uint_fast64_t scale_ns, encode_ns, encoded_frames;
     int64_t written;
     int video_count;
 #endif
@@ -125,8 +129,7 @@ static int64_t seek_file(void *opaque, int64_t offset, int whence)
 }
 static void free_encoder(CastRecorder *r)
 {
-    sws_freeContext(r->scale);
-    r->scale = NULL;
+    media_video_converter_free(&r->conversion);
     swr_free(&r->resample);
     av_audio_fifo_free(r->fifo);
     r->fifo = NULL;
@@ -192,45 +195,19 @@ static int send_frame(CastRecorder *r, AVCodecContext *c, AVStream *s, AVFrame *
 }
 static int setup_video(CastRecorder *r)
 {
-    const AVCodec *codec = avcodec_find_encoder_by_name(r->cfg.video_codec);
-    if (!codec) {
-        snprintf(r->codec_error, sizeof(r->codec_error),
-                 "video encoder '%s' unavailable; use software libx264", r->cfg.video_codec);
+    MediaCodecSelection selection;
+    if (media_video_open(&r->cfg, false, r->format->oformat->flags & AVFMT_GLOBALHEADER,
+                         &r->video, &selection, r->codec_error, sizeof(r->codec_error))) {
         return -1;
     }
+    r->pending_selection = selection;
     r->vs = avformat_new_stream(r->format, NULL);
-    r->video = avcodec_alloc_context3(codec);
     r->vframe = av_frame_alloc();
-    if (!r->vs || !r->video || !r->vframe) {
+    if (!r->vs || !r->vframe) {
         return fferror(r->codec_error, sizeof(r->codec_error), "video allocation", AVERROR(ENOMEM));
     }
     AVCodecContext *v = r->video;
-    v->width = r->cfg.width;
-    v->height = r->cfg.height;
-    v->pix_fmt = AV_PIX_FMT_YUV420P;
-    v->time_base = (AVRational){1, 1000000};
-    v->framerate = (AVRational){r->cfg.fps, 1};
-    v->gop_size = r->cfg.fps * 2;
-    v->max_b_frames = 0;
-    v->thread_count = 2;
-    if (r->format->oformat->flags & AVFMT_GLOBALHEADER) {
-        v->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-    }
-    AVDictionary *opts = NULL;
-    char crf[32];
-    snprintf(crf, sizeof(crf), "%d", r->cfg.record_crf);
-    if (!strncmp(r->cfg.video_codec, "libx264", 7) || !strcmp(r->cfg.video_codec, "libx265")) {
-        av_dict_set(&opts, "preset", r->cfg.record_preset, 0);
-        av_dict_set(&opts, "crf", crf, 0);
-        if (!strncmp(r->cfg.video_codec, "libx264", 7)) {
-            av_dict_set(&opts, "tune", "zerolatency", 0);
-        }
-    }
-    int z = avcodec_open2(v, codec, &opts);
-    av_dict_free(&opts);
-    if (z < 0) {
-        return fferror(r->codec_error, sizeof(r->codec_error), "open software video encoder", z);
-    }
+    int z;
     r->vs->time_base = v->time_base;
     r->vs->avg_frame_rate = v->framerate;
     if ((z = avcodec_parameters_from_context(r->vs->codecpar, v)) < 0) {
@@ -402,18 +379,16 @@ static int encode_video(CastRecorder *r, const struct VideoJob *job)
         return fferror(r->codec_error, sizeof(r->codec_error), "video writable buffer", z);
     }
     const Frame *f = &job->frame;
-    r->scale =
-        sws_getCachedContext(r->scale, f->width, f->height, AV_PIX_FMT_RGBA, r->cfg.width,
-                             r->cfg.height, r->video->pix_fmt, SWS_FAST_BILINEAR, NULL, NULL, NULL);
-    if (!r->scale) {
-        return fferror(r->codec_error, sizeof(r->codec_error), "video conversion", AVERROR(ENOMEM));
+#ifdef CAST_TEST
+    uint64_t scale_began = cast_now_ns();
+#endif
+    z = media_video_convert(&r->conversion, f, r->vframe, false);
+    if (z < 0) {
+        return fferror(r->codec_error, sizeof(r->codec_error), "video conversion", z);
     }
-    const uint8_t *src[4] = {f->data, NULL, NULL, NULL};
-    int stride[4] = {f->stride, 0, 0, 0};
-    if (sws_scale(r->scale, src, stride, 0, f->height, r->vframe->data, r->vframe->linesize) !=
-        r->cfg.height) {
-        return fferror(r->codec_error, sizeof(r->codec_error), "video scaling", AVERROR(EIO));
-    }
+#ifdef CAST_TEST
+    atomic_fetch_add(&r->scale_ns, cast_now_ns() - scale_began);
+#endif
     int64_t pts = (int64_t)(job->pts_ns / 1000);
     int64_t tick = av_rescale_q(1, r->vs->time_base, r->video->time_base);
     if (tick < 1) {
@@ -424,7 +399,15 @@ static int encode_video(CastRecorder *r, const struct VideoJob *job)
     }
     r->last_video_pts = pts;
     r->vframe->pts = pts;
-    return send_frame(r, r->video, r->vs, r->vframe);
+#ifdef CAST_TEST
+    uint64_t encode_began = cast_now_ns();
+#endif
+    int rc = send_frame(r, r->video, r->vs, r->vframe);
+#ifdef CAST_TEST
+    atomic_fetch_add(&r->encode_ns, cast_now_ns() - encode_began);
+    atomic_fetch_add(&r->encoded_frames, 1);
+#endif
+    return rc;
 }
 /* Only the recording worker owns codec/muxer resources while a recording exists.
  * encoder_mutex also gives privacy barriers a point after all in-flight codec
@@ -742,6 +725,9 @@ int recorder_start(CastRecorder *r, const Config *cfg, const char *path, char *r
     }
     pthread_mutex_lock(&r->mutex);
     r->error[0] = 0;
+    r->selected = r->pending_selection;
+    snprintf(r->encoder_info, sizeof(r->encoder_info), "%.63s; %.900s",
+             r->selected.encoder, r->selected.detail);
     snprintf(r->path, sizeof(r->path), "%s", r->file_path);
     r->elapsed_ns = 0;
     r->audio_segment_sample = 0;
@@ -751,7 +737,7 @@ int recorder_start(CastRecorder *r, const Config *cfg, const char *path, char *r
     atomic_store(&r->active, true);
     atomic_store(&r->silent, false);
     pthread_cond_broadcast(&r->changed);
-    snprintf(reply, n, "recording started: %s", r->path);
+    snprintf(reply, n, "recording started: %s; encoder=%s", r->path, r->encoder_info);
     pthread_mutex_unlock(&r->mutex);
     pthread_mutex_unlock(&r->encoder_mutex);
     return 0;
@@ -953,6 +939,13 @@ bool recorder_finalizing(CastRecorder *r)
 {
     return atomic_load(&r->finalizing);
 }
+void recorder_encoder(CastRecorder *r, char *name, size_t name_size, char *detail, size_t detail_size)
+{
+    pthread_mutex_lock(&r->mutex);
+    snprintf(name, name_size, "%s", r->selected.encoder);
+    snprintf(detail, detail_size, "%s", r->selected.detail);
+    pthread_mutex_unlock(&r->mutex);
+}
 uint64_t recorder_duration(CastRecorder *r)
 {
     pthread_mutex_lock(&r->mutex);
@@ -991,6 +984,12 @@ void recorder_close(CastRecorder *r)
     free(r);
 }
 #ifdef CAST_TEST
+void recorder_test_timings(CastRecorder *r, uint64_t *scale, uint64_t *encode, uint64_t *frames)
+{
+    *scale = atomic_load(&r->scale_ns);
+    *encode = atomic_load(&r->encode_ns);
+    *frames = atomic_load(&r->encoded_frames);
+}
 void recorder_test_slow(CastRecorder *r, int ms)
 {
     atomic_store(&r->slow_ms, ms);

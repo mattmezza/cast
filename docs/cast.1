@@ -1,4 +1,4 @@
-.TH CAST 1 "October 2026" "cast 0.9.0" "User Commands"
+.TH CAST 1 "October 2026" "cast 0.10.0" "User Commands"
 .SH NAME
 cast \- presentation camera, recorder and RTMP streamer
 .SH SYNOPSIS
@@ -232,3 +232,109 @@ The old live command is now virtual; \-\-no\-live is \-\-no\-virtual.
 preview target live becomes virtual. annotations.live_keys/live_clicks become
 annotations.virtual_keys/virtual_clicks. Status JSON uses virtual and stream objects.
 Old spellings fail with migration instructions and execute no operation.
+.SH EDITIONS AND OFFLINE LICENSES
+All existing free controls remain in MIT Community. Cast Pro requires a separate
+private checkout and controlled LGPL media libraries. Pro implements cinematic
+motion, local transcription/subtitles and timed or speech-following speaker notes.
+Editable recording projects remain planned. Optional speech builds also require
+the audited CPU SDK/helper and an explicitly selected local model; an eligible
+license alone does not establish model/platform readiness.
+.TP
+.B edition [--json]
+Report edition, platform, build/release identity and media profile offline.
+.TP
+.B features [--json]
+Report implementation, dependencies and entitlement independently.
+.TP
+.B license status [--json]
+Report authoritative license state without exposing a complete identifier.
+.TP
+.B license inspect FILE [--json]
+Verify a bounded signed file without devices or network access.
+.TP
+.B license import FILE; license reload; license remove
+Use authenticated daemon IPC when running; otherwise hold the exclusive instance
+and store locks. Import copies a verified snapshot atomically. Remove preserves
+configuration/media. Community requires an installed compatible Pro verifier.
+.TP
+.B config check [PATH] [--availability]
+Check syntax; optionally initialize codecs and report local readiness.
+.TP
+.B config migrate [PATH] [--edition community|pro] [--write OUTPUT] [--backup FILE]
+Dry-run encoder migration by default. New output refuses overwriting. In-place
+replacement requires an explicit new backup file. Startup never migrates config.
+.SH LICENSE EXIT STATUS
+0 success or read-only state; 2 malformed; 3 invalid license; 4 valid but
+ineligible; 5 verifier, I/O, or readiness unavailable.
+.SH PRO CINEMATIC MOTION
+.B cast-pro zoom cinematic
+applies a validated session batch: cinematic motion, 450 ms zoom settling, 400 ms
+pan settling, a 35 percent safe region with 5 percent hysteresis, bilinear filtering
+and motion blur off. It does not start/resume outputs or write configuration.
+Existing configurations use legacy motion by default.
+.PP
+zoom motion legacy|cinematic switches the model. zoom focus X Y [--factor FACTOR]
+uses normalized selected-source coordinates 0..1 and atomically sets focus/factor.
+Focus remains locked until explicit follow or automatic control resumes.
+zoom auto off|click selects causal, clustered click automation with hold/cooldown/
+idle and manual override. Global input is required for clicks; metadata and a
+controllable separate cursor are required for cursor smoothing. Embedded pointers
+are never drawn twice. zoom status [--json] reports requested/effective factor,
+viewport, follow/auto/manual state, filter/blur budget and render timing.
+.PP
+In cinematic mode zoom.transition_ms controls approximately 99 percent rest-step
+settling of analytic critically damped log-scale motion. Retargeting carries
+velocity. Source generation/dimension changes reset 1x. Privacy/appearance clearing
+discards motion history without resetting the active viewport; mode exit or losing
+entitlement hands the current viewport to legacy without a position jump.
+.PP
+Motion blur samples transforms from the same eligible source frame; no old frame
+history is retained. At rest there is one sample. Requested 2..8 samples and the
+actual live budget are visible. At 1080p above 30 fps the live adapter selects
+bilinear/one sample; at 1080p up to 30 fps it limits bicubic to one sample and
+bilinear to two. Composition timings do not establish full capture/encoder cadence.
+.SH PRO TRANSCRIPTION AND SUBTITLES
+transcription on|off enables/disables the configured private speech consumer.
+transcription model PATH selects a local model; language auto|CODE and
+source mic|desktop|mix set explicit recognition choices. models and status [--json]
+are read-only diagnostics. Device/source readiness and consent are checked before
+capture or inference; Cast never silently broadens a source or downloads a model.
+.PP
+transcription transcribe INPUT --output OUTPUT --format srt|vtt|both [--overwrite]
+accepts a bounded asynchronous daemon job. transcription job status JOB_ID [--json]
+and job cancel JOB_ID inspect/cancel it. The local alias cast-pro transcribe INPUT
+with the same options waits for offline completion. Output replacement requires
+explicit --overwrite; failed work preserves existing output files.
+.PP
+subtitles virtual|record|stream on|off controls each lane independently;
+subtitles sidecar none|srt|vtt|both selects recording sidecars. Captions remain
+unzoomed. Privacy, cut and source-generation barriers retire stale hypotheses;
+disabling a lane does not reveal its output. STT=0 builds report unavailable speech
+dependencies rather than pretend to infer. Explicit GPU inference is unavailable
+in the CPU-only profile; auto reports its effective CPU selection.
+.SH PRO SPEAKER NOTES
+notes load FILE validates a local text/Markdown document before replacing it.
+notes open [FILE] requests the separate native window, initially paused; PANEL=0
+builds retain the engine/status/navigation and report the window unavailable.
+notes close, reload, start, pause, toggle, next, prev, center and restart control
+only notes. notes mode timed|speech and notes speed LINES_PER_MINUTE select motion;
+notes goto --line NUMBER uses original source line numbers. notes status [--json]
+reports document generation, reading position, confidence/readiness, window and
+capture-exclusion state. Speech following uses explicit microphone consent and
+the shared private speech service; it does not reuse caption consent or hypotheses.
+.PP
+Notes stay out of composition output layers. Native-window exclusion is
+capability-dependent: inspect requested/effective exclusion and backend guidance
+before sharing a desktop. Navigation, opening a window and changing settings never
+resume or reveal an output. Pause/close/cancel and read-only status remain available
+on downgrade; long-lived paid consumers use the visible five-minute grace policy.
+.SH PRO OFFLINE UPDATE
+cast-pro update --bundle DIRECTORY verifies a signed local manifest and artifact
+against product/platform/API/profile identity, hash and license release terms.
+--install PATH requires a stopped instance, stages the replacement and retains a
+rollback file; --rollback explicitly permits an eligible older release.
+--download-only DIRECTORY stages an eligible or valid but currently ineligible
+signed bundle without installing it. Pro uses its own signed channel and never
+falls back to Community release downloads. Production delivery requires reviewed
+dependency/source manifests and production trust inputs; local test keys do not
+make a production release.

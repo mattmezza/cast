@@ -9,3 +9,5 @@
 *.o
 *.d
 __pycache__/
+
+/cast-pro

@@ -70,7 +70,12 @@ static bool existing_producer(const Config *config)
         return false;
     }
     struct sockaddr_un address = {.sun_family = AF_UNIX};
-    snprintf(address.sun_path, sizeof address.sun_path, "%s", config->socket_path);
+    size_t path_length = strnlen(config->socket_path, sizeof config->socket_path);
+    if (path_length >= sizeof address.sun_path) {
+        close(fd);
+        return false;
+    }
+    memcpy(address.sun_path, config->socket_path, path_length + 1);
     bool connected = connect(fd, (void *)&address, sizeof address) == 0;
     struct ucred peer;
     socklen_t bytes = sizeof peer;
@@ -188,7 +193,12 @@ int panel_lifecycle_start(PanelLifecycle *lifecycle, const Config *config, char 
         return 0;
     }
     char log_path[PATH_MAX];
-    snprintf(log_path, sizeof log_path, "%s.log", config->socket_path);
+    size_t path_length = strnlen(config->socket_path, sizeof config->socket_path);
+    if (path_length > sizeof log_path - sizeof ".log") {
+        return fail(error, n, "daemon log path exceeds its bound");
+    }
+    memcpy(log_path, config->socket_path, path_length);
+    memcpy(log_path + path_length, ".log", sizeof ".log");
     int log =
         open(log_path, O_RDWR | O_APPEND | O_CREAT | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0600);
     struct stat st;

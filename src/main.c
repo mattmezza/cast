@@ -1,5 +1,10 @@
 #include "app_internal.h"
+#include "compositor.h"
+#include "config_migrate.h"
+#include "edition_extensions.h"
 #include "help_commands.h"
+#include "ipc_identity.h"
+#include "media_codec.h"
 #include "panel_lifecycle.h"
 #include "update.h"
 #ifdef WITH_PANEL
@@ -42,6 +47,7 @@ static const char help[] =
     "  --width N --height N --fps N --no-virtual --no-camera --mic-source NAME\n"
     "  --desktop-source NAME --record-dir PATH --container NAME --video-codec NAME\n"
     "  --audio-codec NAME --countdown SECONDS --config PATH --socket PATH\n"
+    "  --record-bitrate KBPS --record-rate-control auto|bitrate|crf --stream-video-encoder NAME\n"
     "Test-only: --backend synthetic --camera-device synthetic --output-device none\n"
     "Commands (append --help for this reference):\n"
     "  layout overlay|stage|split|screen|camera|next|prev\n"
@@ -77,8 +83,23 @@ static const char help[] =
     "  preset NAME|next|prev; preview on|off|toggle; preview target virtual|record|stream\n"
     "  stream start|stop|pause|resume|toggle|freeze|unfreeze|unblur\n"
     "  stream blur [on|off|toggle]; stream status [--json]\n"
-    "  status [--json]; doctor; config check [PATH]; config defaults; config reload\n"
+    "  status [--json]; doctor; config check [PATH] [--availability]; config defaults; config "
+    "reload\n"
+    "  edition [--json]; features [--json]; license status [--json]\n"
+    "  license inspect FILE [--json]; license import FILE; license reload; license remove\n"
+    "  config migrate [PATH] [--edition community|pro] [--write OUTPUT] [--backup FILE]\n"
     "  settings SECTION.KEY VALUE [SECTION.KEY VALUE ...] (session only)\n"
+    "Pro workflows (require private modules and an eligible license):\n"
+    "  zoom cinematic; zoom motion legacy|cinematic; zoom focus X Y [--factor FACTOR]\n"
+    "  zoom auto off|click; zoom status [--json]\n"
+    "  transcription on|off|status|models; transcription model PATH\n"
+    "  transcription language auto|CODE; transcription source mic|desktop|mix\n"
+    "  transcription transcribe INPUT --output OUTPUT --format srt|vtt|both [--overwrite]\n"
+    "  transcription job status|cancel JOB_ID; subtitles virtual|record|stream on|off\n"
+    "  subtitles sidecar none|srt|vtt|both\n"
+    "  notes open [FILE]; notes close|reload|start|pause|toggle|next|prev|center|restart\n"
+    "  notes load FILE; notes mode timed|speech; notes speed LINES_PER_MINUTE\n"
+    "  notes goto --line NUMBER; notes status [--json]\n"
     "  panel (optional native control panel)\n"
     "  setup; completions [bash|zsh|fish]; completions --script bash|zsh|fish\n"
     "  update [VERSION] [--download-only DIRECTORY] (Arch release package)\n"
@@ -103,6 +124,9 @@ static const Option options[] = {OS("--backend", backend),
                                  OS("--container", record_container),
                                  OS("--video-codec", video_codec),
                                  OS("--audio-codec", audio_codec),
+                                 OI("--record-bitrate", record_bitrate_kbps, 100, 100000),
+                                 OS("--record-rate-control", record_rate_control),
+                                 OS("--stream-video-encoder", stream.video_encoder),
                                  OI("--countdown", record_countdown, 0, 60)};
 #define NOPT (sizeof options / sizeof options[0])
 int app_apply_overrides(Config *c, const Startup *s, char *e, size_t n)
@@ -222,7 +246,8 @@ int app_socket_path(Config *c, char *e, size_t n)
         (st.st_mode & 0077)) {
         return app_error(e, n, "XDG_RUNTIME_DIR must be an owned directory with mode 0700");
     }
-    if (snprintf(c->socket_path, sizeof c->socket_path, "%s/cast.sock", runtime) >=
+    if (snprintf(c->socket_path, sizeof c->socket_path, "%s/%s.sock", runtime,
+                 cast_edition_identity()->pro ? "cast-pro" : "cast") >=
         (int)sizeof c->socket_path) {
         return app_error(e, n, "runtime path too long");
     }
@@ -250,89 +275,52 @@ static int validate_socket_parent(const char *path, char *e, size_t n)
     }
     return 0;
 }
-static int connect_socket(const char *path, int timeout, char *e, size_t n)
-{
-    if (validate_socket_parent(path, e, n)) {
-        return -1;
-    }
-    struct stat st;
-    if (lstat(path, &st) || !S_ISSOCK(st.st_mode) || st.st_uid != getuid() || (st.st_mode & 0077)) {
-        return app_error(e, n, "no owned user-only cast socket at %s; start cast first", path);
-    }
-    int fd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
-    if (fd < 0) {
-        return app_error(e, n, "socket: %s", strerror(errno));
-    }
-    struct sockaddr_un a = {.sun_family = AF_UNIX};
-    strcpy(a.sun_path, path);
-    if (connect(fd, (void *)&a, sizeof a) < 0 && errno != EINPROGRESS) {
-        close(fd);
-        return app_error(e, n, "connect %s: %s", path, strerror(errno));
-    }
-    struct pollfd p = {fd, POLLOUT, 0};
-    if (poll(&p, 1, timeout) <= 0) {
-        close(fd);
-        return app_error(e, n, "daemon connection timeout");
-    }
-    int result = 0;
-    socklen_t len = sizeof result;
-    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &result, &len) || result) {
-        close(fd);
-        return app_error(e, n, "daemon connection failed: %s", strerror(result ? result : errno));
-    }
-    struct ucred cred;
-    len = sizeof cred;
-    if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) || cred.uid != getuid()) {
-        close(fd);
-        return app_error(e, n, "daemon peer ownership mismatch");
-    }
-    return fd;
-}
 static int client(const Config *c, int argc, char **argv)
 {
-    char e[CAST_ERR], packet[CAST_IPC_MAX];
-    if (argc > CAST_MAX_ARGS) {
-        return fprintf(stderr, "cast: too many command arguments\n"), 1;
+    char output[CAST_IPC_MAX];
+    int result = app_runtime_client(c, argc, (const char *const *)argv, output, sizeof output);
+    fprintf(result ? stderr : stdout, "%s\n", output);
+    return result < 0 ? 1 : result;
+}
+typedef struct {
+    CastLicenseSession *session;
+    const Config *config;
+} StandaloneLicense;
+static bool standalone_authorize(void *context, const char *feature, char *error, size_t size)
+{
+    StandaloneLicense *license = context;
+    CastEditionSnapshot snapshot;
+    if (cast_edition_snapshot_in_session(license->session, license->config->licensing_file,
+                                         (int64_t)time(NULL), &snapshot, error, size)) {
+        return false;
     }
-    size_t size = 0;
-    memcpy(packet, "CAST1\0", 6);
-    size = 6;
-    for (int i = 0; i < argc; i++) {
-        size_t len = strlen(argv[i]) + 1;
-        if (size + len > sizeof packet) {
-            return fprintf(stderr, "cast: command exceeds IPC limit\n"), 1;
+    return cast_edition_require(feature, &snapshot, error, size) == 0;
+}
+static int standalone_transcribe(const Config *config, int argc, char **argv)
+{
+    char output[CAST_IPC_MAX];
+    const CastRuntimeHooks *hooks = cast_runtime_hooks();
+    if (!hooks || !hooks->transcribe || !hooks->initialize) {
+        return fprintf(stderr, "cast: transcription_subtitles: unavailable in this build\n"), 5;
+    }
+    StandaloneLicense license = {.config = config};
+    license.session = cast_license_session_open(config->licensing_file, output, sizeof output);
+    if (!license.session) {
+        return fprintf(stderr, "cast: %s\n", output), 5;
+    }
+    int result = 5;
+    if (standalone_authorize(&license, "transcription_subtitles", output, sizeof output)) {
+        CastRuntimeHost host = {.context = &license, .authorize = standalone_authorize};
+        cast_runtime_set_host(&host);
+        if (!hooks->initialize(cast_runtime_host(), config, output, sizeof output)) {
+            result = hooks->transcribe(config, argc, argv, output, sizeof output);
         }
-        memcpy(packet + size, argv[i], len);
-        size += len;
+        cast_edition_shutdown();
+        cast_runtime_set_host(NULL);
     }
-    int fd = connect_socket(c->socket_path, c->ipc_timeout_ms, e, sizeof e);
-    if (fd < 0) {
-        return fprintf(stderr, "cast: %s\n", e), 1;
-    }
-    if (send(fd, packet, size, MSG_NOSIGNAL) != (ssize_t)size) {
-        close(fd);
-        return fprintf(stderr, "cast: cannot send command: %s\n", strerror(errno)), 1;
-    }
-    struct pollfd p = {fd, POLLIN, 0};
-    if (poll(&p, 1, c->ipc_timeout_ms) <= 0) {
-        close(fd);
-        return fprintf(stderr,
-                       "cast: command timed out; its completion is unknown (check status)\n"),
-               1;
-    }
-    ssize_t received = recv(fd, packet, sizeof packet - 1, MSG_TRUNC);
-    close(fd);
-    if (received < 2 || received >= (ssize_t)sizeof packet) {
-        return fprintf(stderr, "cast: invalid daemon response\n"), 1;
-    }
-    packet[received] = 0;
-    if ((packet[0] != '0' && packet[0] != '1') || packet[1] != ' ') {
-        return fprintf(stderr, "cast: invalid daemon response header\n"), 1;
-    }
-    bool ok = packet[0] == '0';
-    FILE *out = ok ? stdout : stderr;
-    fprintf(out, "%s\n", packet + 2);
-    return ok ? 0 : 1;
+    cast_license_session_close(license.session);
+    fprintf(result ? stderr : stdout, "%s\n", output);
+    return result;
 }
 
 static void remember_error(App *a, const char *e)
@@ -349,6 +337,7 @@ void app_sync_source(App *a)
         return;
     }
     a->source_generation = generation;
+    app_runtime_barrier(a, CAST_BARRIER_SOURCE, (1u << CAST_CONSUMER_COUNT) - 1);
     a->config.zoom_factor = 1;
     platform_events(a->platform, a->compositor, &a->config, true);
     compositor_clear(a->compositor);
@@ -420,6 +409,9 @@ static int lane_output_frame(App *a, int lane, Frame *out, char *error, size_t n
         return app_error(error, n, "cannot prepare %s output; emitting neutral content",
                          record ? "recording" : "virtual");
     }
+    if (!solid && !frozen && !blurred) {
+        app_runtime_captions(a, lane, out);
+    }
     out->ts_ns = cast_now_ns();
     return 0;
 }
@@ -439,6 +431,7 @@ int app_output_frames(App *a, char *error, size_t n)
 }
 int app_shutdown_privacy(App *a, char *e, size_t n)
 {
+    app_runtime_barrier(a, CAST_BARRIER_SHUTDOWN, (1u << CAST_CONSUMER_COUNT) - 1);
     a->state.virtual_paused = true;
     a->state.stream_paused = true;
     a->state.stream_active = false;
@@ -495,8 +488,12 @@ static void tick(App *a)
         fprintf(stderr, "cast: %s%s\n",
                 recording_error[0] ? "finalization failed: " : "recording finalized: ",
                 recording_error[0] ? recording_error : a->state.record_path);
+        if (!recording_error[0]) {
+            app_runtime_recording_finished(a);
+        }
     }
     a->record_finalizing = finalizing;
+    app_runtime_sync(a);
     a->state.dropped_frames = dropped + a->loop_drops;
     if (a->state.recording && !running) {
         a->state.recording = a->state.record_paused = a->state.group_record_restore = false;
@@ -554,6 +551,7 @@ static void tick(App *a)
     bool capture_ok = platform_capture(a->platform, &a->screen, &a->cursor, e, sizeof e) == 0;
     /* Portal responses can commit a source during capture's event dispatch. */
     app_sync_source(a);
+    app_runtime_sync(a);
     if (!capture_ok) {
         remember_error(a, e);
     }
@@ -654,10 +652,11 @@ typedef struct {
 } Peer;
 static int decode_packet(char *packet, ssize_t size, int *argc, char **argv, char *e, size_t n)
 {
-    if (size < 7 || size > CAST_IPC_MAX || memcmp(packet, "CAST1\0", 6)) {
+    if (size < 7 || size > CAST_IPC_MAX ||
+        (memcmp(packet, "CAST1\0", 6) && !cast_command_header_valid(packet, (size_t)size))) {
         return app_error(e, n, "invalid IPC header or size");
     }
-    size_t offset = 6;
+    size_t offset = !memcmp(packet, "CAST1\0", 6) ? 6 : CAST_COMMAND_HEADER_SIZE;
     *argc = 0;
     while (offset < (size_t)size) {
         if (*argc == CAST_MAX_ARGS) {
@@ -684,7 +683,7 @@ static int decode_packet(char *packet, ssize_t size, int *argc, char **argv, cha
 static void reply_peer(int fd, int rc, const char *out)
 {
     char response[CAST_IPC_MAX];
-    response[0] = rc ? '1' : '0';
+    response[0] = rc >= 2 && rc <= 5 ? (char)('0' + rc) : rc ? '1' : '0';
     response[1] = ' ';
     snprintf(response + 2, sizeof response - 2, "%s",
              out[0] ? out : (rc ? "command failed" : "ok"));
@@ -725,9 +724,29 @@ static void drain_peers(App *a, Peer *peers, int *count)
                 command += 16;
                 size -= 16;
             }
+            if (size < 0 || !cast_command_header_valid(command, (size_t)size)) {
+                reply_peer(p->fd, -1, "IPC edition/build mismatch; use the matching Cast binary");
+                memmove(peers, peers + 1, (size_t)(--*count) * sizeof *peers);
+                continue;
+            }
             rc = decode_packet(command, size, &argc, argv, out, sizeof out);
             if (!rc) {
-                rc = app_command(a, argc, argv, out, sizeof out);
+                int safety = app_runtime_safety(a,argc,argv,out,sizeof out);
+                if (safety != 1) rc = safety;
+                else if (!strcmp(argv[0], "--notes-window")) {
+                    rc = app_runtime_notes_register(a, argc, argv, p->pid, out, sizeof out);
+                } else if (!strcmp(argv[0], "license") || !strcmp(argv[0], "edition") ||
+                           !strcmp(argv[0], "features") || cast_edition_has_request(argc, argv)) {
+                    rc = edition_service_submit(a->edition, p->fd, argc, argv, &a->config, out,
+                                                sizeof out);
+                    if (!rc) {
+                        memmove(peers, peers + 1, (size_t)(--*count) * sizeof *peers);
+                        continue;
+                    }
+                } else {
+                    rc = app_command(a, argc, argv, out, sizeof out);
+                    edition_service_path(a->edition, a->config.licensing_file);
+                }
                 if (rc) {
                     remember_error(a, out);
                 }
@@ -808,12 +827,20 @@ static void doctor(const Config *c)
 {
     char report[CAST_IPC_MAX];
     puts("cast doctor (read-only; no setup commands executed)");
+    printf("Edition: %s; %s build; media profile %s\n", cast_edition_identity()->edition,
+           cast_edition_identity()->official ? "official" : "nonproduction",
+           cast_edition_identity()->media_profile);
     platform_doctor(c, report, sizeof report);
     puts(report);
     media_doctor(c, report, sizeof report);
     puts(report);
     stream_doctor(c, report, sizeof report);
     puts(report);
+    const CastRuntimeHooks *hooks = cast_runtime_hooks();
+    if (hooks && hooks->doctor) {
+        hooks->doctor(c, report, sizeof report);
+        puts(report);
+    }
     struct statvfs fs;
     if (access(c->record_dir, W_OK) || statvfs(c->record_dir, &fs)) {
         printf("Recording directory %s: %s; create an owned writable directory\n", c->record_dir,
@@ -828,6 +855,9 @@ static void doctor(const Config *c)
 static int run_daemon(Config config, Startup startup)
 {
     char e[CAST_ERR];
+    if (media_profile_validate(cast_edition_identity()->pro, e, sizeof e)) {
+        return fprintf(stderr, "cast: %s\n", e), 1;
+    }
     App *a = calloc(1, sizeof *a);
     if (!a) {
         return fprintf(stderr, "cast: out of memory\n"), 1;
@@ -844,6 +874,10 @@ static int run_daemon(Config config, Startup startup)
     int count = 0;
     int rc = 1;
     if (server < 0) {
+        goto failed;
+    }
+    a->edition = edition_service_open(a->config.licensing_file, e, sizeof e);
+    if (!a->edition) {
         goto failed;
     }
     struct sigaction act = {0};
@@ -895,9 +929,24 @@ static int run_daemon(Config config, Startup startup)
             config.socket_path);
     a->source_generation = platform_source_generation(a->platform);
     a->panel = panel_transport_create();
+    if (app_runtime_open(a, e, sizeof e)) {
+        goto failed;
+    }
     uint64_t interval = 1000000000ULL / (unsigned)config.fps, next = cast_now_ns();
     while (!stopping) {
         uint64_t now = cast_now_ns();
+        app_runtime_sync(a);
+        app_runtime_drain(a);
+        app_runtime_startup_motion(a);
+        EditionReply license_reply;
+        while (edition_service_reply(a->edition, &license_reply)) {
+            if (license_reply.fd < 0) {
+                app_runtime_internal_reply(a, license_reply.result, license_reply.output);
+            } else {
+                reply_peer(license_reply.fd, license_reply.result, license_reply.output);
+            }
+            panel_transport_barrier(a->panel, a, false);
+        }
         panel_transport_check(a->panel, a);
         if (now >= next) {
             tick(a);
@@ -977,6 +1026,8 @@ cleanup:
         if (a->record_finalizing || media_record_finalizing(a->media)) {
             /* Controls have already stopped; shutdown waits for the durable trailer. */
             while (media_record_finalizing(a->media)) {
+                a->state.recording = false;
+                app_runtime_sync(a);
                 struct timespec delay = {.tv_nsec = 20000000};
                 nanosleep(&delay, NULL);
             }
@@ -985,8 +1036,19 @@ cleanup:
             fprintf(stderr, "cast: %s%s\n",
                     e[0] ? "finalization failed: " : "recording finalized: ",
                     e[0] ? e : a->state.record_path);
+            if (!e[0]) {
+                app_runtime_recording_finished(a);
+            }
         }
+        app_runtime_stop(a);
+        edition_service_close(a->edition);
+        a->edition = NULL;
         media_close(a->media);
+    }
+    if (a->edition) {
+        app_runtime_stop(a);
+        edition_service_close(a->edition);
+        a->edition = NULL;
     }
     if (a->platform) {
         platform_close(a->platform);
@@ -994,6 +1056,7 @@ cleanup:
     if (a->compositor) {
         compositor_destroy(a->compositor);
     }
+    app_runtime_close(a);
     frame_free(&a->screen);
     frame_free(&a->camera);
     frame_free(&a->virtual);
@@ -1020,6 +1083,11 @@ cleanup:
 }
 int main(int argc, char **argv)
 {
+    if (cast_edition_identity()->pro && !cast_edition_extensions()) {
+        return fprintf(stderr, "cast-pro: incompatible private extension API/provider; rebuild "
+                               "matching sources\n"),
+               5;
+    }
     Config inherited_config;
     bool inherited = false;
     if (argc >= 3 && !strcmp(argv[1], "--internal-daemon-config")) {
@@ -1078,7 +1146,7 @@ int main(int argc, char **argv)
         return 0;
     }
     if (argc == 2 && !strcmp(argv[1], "--version")) {
-        puts("cast " CAST_VERSION);
+        puts(CAST_APPLICATION_NAME " " CAST_VERSION);
         return 0;
     }
     char e[CAST_ERR];
@@ -1095,7 +1163,19 @@ int main(int argc, char **argv)
             }
             return result ? 1 : 0;
         }
-        if (!strcmp(argv[first], "update")) {
+        bool paid_request =
+            !strcmp(argv[first], "transcription") || !strcmp(argv[first], "transcribe") ||
+            !strcmp(argv[first], "subtitles") || !strcmp(argv[first], "notes") ||
+            (!strcmp(argv[first], "zoom") && first + 1 < argc &&
+             (!strcmp(argv[first + 1], "motion") || !strcmp(argv[first + 1], "focus") ||
+              !strcmp(argv[first + 1], "auto") || !strcmp(argv[first + 1], "cinematic") ||
+              !strcmp(argv[first + 1], "status")));
+        if (paid_request && !cast_edition_identity()->pro) {
+            return fprintf(stderr, "cast: %s is unavailable: community_build; use cast features\n",
+                           argv[first]),
+                   5;
+        }
+        if (!strcmp(argv[first], "update") && !cast_edition_identity()->pro) {
             result = cast_update(argc - first, argv + first, e, sizeof e);
             if (result) {
                 fprintf(stderr, "cast: %s\n", e);
@@ -1112,21 +1192,77 @@ int main(int argc, char **argv)
         return 0;
     }
     if (first < argc && !strcmp(argv[first], "config") && first + 1 < argc &&
-        !strcmp(argv[first + 1], "check")) {
-        if (argc - first > 3) {
-            return fprintf(stderr, "cast: config check [PATH]\n"), 1;
+        (!strcmp(argv[first + 1], "check") || !strcmp(argv[first + 1], "migrate"))) {
+        if (config_path(&startup, e, sizeof e)) {
+            return fprintf(stderr, "cast: %s\n", e), 2;
         }
-        if (argc - first != 3 && config_path(&startup, e, sizeof e)) {
-            return fprintf(stderr, "cast: %s\n", e), 1;
+        if (!strcmp(argv[first + 1], "migrate")) {
+            int rc =
+                cast_config_migrate(argc - first, argv + first, startup.config_path, e, sizeof e);
+            if (rc) {
+                fprintf(stderr, "cast: %s\n", e);
+            }
+            return rc;
         }
-        const char *path = argc - first == 3 ? argv[first + 2] : startup.config_path;
+        bool availability = false;
+        const char *path = startup.config_path;
+        bool explicit_path = startup.explicit_config, positional_path = false;
+        for (int i = first + 2; i < argc; ++i) {
+            if (!strcmp(argv[i], "--availability") && !availability) {
+                availability = true;
+            } else if (argv[i][0] != '-' && !positional_path) {
+                path = argv[i];
+                explicit_path = true;
+                positional_path = true;
+            } else {
+                return fprintf(stderr, "cast: config check [PATH] [--availability]\n"), 2;
+            }
+        }
         Config candidate;
-        if (config_load(&candidate, path, argc - first == 3 || startup.explicit_config, e,
-                        sizeof e)) {
-            return fprintf(stderr, "cast: %s\n", e), 1;
+        if (config_load(&candidate, path, explicit_path, e, sizeof e)) {
+            return fprintf(stderr, "cast: %s\n", e), 2;
         }
         printf("configuration valid: %s\n", path);
+        if (availability) {
+            char report[CAST_ERR];
+            bool unavailable =
+                media_profile_validate(cast_edition_identity()->pro, e, sizeof e) != 0;
+            if (unavailable) {
+                fprintf(stderr, "cast: %s\n", e);
+            }
+            if (media_codec_check(&candidate, false, report, sizeof report)) {
+                unavailable = true;
+                fprintf(stderr, "recording unavailable: %s\n", report);
+            } else {
+                printf("recording: %s\n", report);
+            }
+            if (media_codec_check(&candidate, true, report, sizeof report)) {
+                unavailable = true;
+                fprintf(stderr, "streaming encoder unavailable: %s\n", report);
+            } else {
+                printf("streaming encoder: %s\n", report);
+            }
+            CastEditionSnapshot snapshot;
+            cast_edition_snapshot(candidate.licensing_file, (int64_t)time(NULL), &snapshot, e,
+                                  sizeof e);
+            for (int i = 0; i < CAST_FEATURE_COUNT; ++i) {
+                printf("%s: %s\n", snapshot.features[i].id,
+                       cast_feature_reason_name(snapshot.features[i].reason));
+            }
+            return unavailable ? 5 : 0;
+        }
         return 0;
+    }
+    if (first < argc && !strcmp(argv[first], "edition")) {
+        char output[CAST_IPC_MAX];
+        int result = cast_edition_command(argc - first, argv + first, "", false, output,
+                                          sizeof output, e, sizeof e);
+        if (result) {
+            fprintf(stderr, "cast: %s\n", e);
+        } else {
+            puts(output);
+        }
+        return result;
     }
     bool explicit_socket = false;
     for (int i = 0; i < startup.override_count; i++) {
@@ -1134,8 +1270,10 @@ int main(int argc, char **argv)
             explicit_socket = true;
         }
     }
-    bool remote_command =
-        first < argc && strcmp(argv[first], "doctor") && strcmp(argv[first], "panel");
+    bool remote_command = first < argc && strcmp(argv[first], "doctor") &&
+                          strcmp(argv[first], "panel") && strcmp(argv[first], "edition") &&
+                          strcmp(argv[first], "features") && strcmp(argv[first], "license") &&
+                          strcmp(argv[first], "update");
     Config config;
     if (inherited) {
         if (!startup.headless || first < argc || config_path(&startup, e, sizeof e)) {
@@ -1154,6 +1292,64 @@ int main(int argc, char **argv)
     if (!inherited && app_apply_overrides(&config, &startup, e, sizeof e)) {
         return fprintf(stderr, "cast: %s\n", e), 1;
     }
+    if (first < argc && (!strcmp(argv[first], "edition") || !strcmp(argv[first], "features") ||
+                         !strcmp(argv[first], "license"))) {
+        bool mutation = !strcmp(argv[first], "license") && first + 1 < argc &&
+                        (!strcmp(argv[first + 1], "import") || !strcmp(argv[first + 1], "reload") ||
+                         !strcmp(argv[first + 1], "remove"));
+        int state_lock = -1;
+        if (mutation) {
+            if (app_socket_path(&config, e, sizeof e) ||
+                validate_socket_parent(config.socket_path, e, sizeof e)) {
+                return fprintf(stderr, "cast: %s\n", e), 5;
+            }
+            char lock_path[PATH_MAX];
+            if (snprintf(lock_path, sizeof lock_path, "%s.lock", config.socket_path) >=
+                (int)sizeof lock_path) {
+                return fprintf(stderr, "cast: instance lock path too long\n"), 5;
+            }
+            state_lock = open(lock_path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+            struct stat st;
+            if (state_lock < 0 || fstat(state_lock, &st) || !S_ISREG(st.st_mode) ||
+                st.st_uid != getuid() || (st.st_mode & 0077) || st.st_nlink != 1) {
+                if (state_lock >= 0) {
+                    close(state_lock);
+                }
+                return fprintf(stderr, "cast: unsafe or unavailable instance lock\n"), 5;
+            }
+            if (flock(state_lock, LOCK_EX | LOCK_NB)) {
+                int lock_error = errno;
+                close(state_lock);
+                if (lock_error == EWOULDBLOCK) {
+                    return client(&config, argc - first, argv + first);
+                }
+                return fprintf(stderr, "cast: cannot lock license transaction\n"), 5;
+            }
+        }
+        char output[CAST_IPC_MAX];
+        int result = cast_edition_command(argc - first, argv + first, config.licensing_file,
+                                          mutation, output, sizeof output, e, sizeof e);
+        if (state_lock >= 0) {
+            close(state_lock);
+        }
+        if (result && e[0]) {
+            fprintf(stderr, "cast: %s\n", e);
+        } else if (output[0]) {
+            printf("%s\n", output);
+        }
+        return result;
+    }
+    if (first < argc && !strcmp(argv[first], "update")) {
+        if (app_socket_path(&config, e, sizeof e)) {
+            return fprintf(stderr, "cast: %s\n", e), 5;
+        }
+        int result = cast_update_with_context(argc - first, argv + first, config.licensing_file,
+                                              config.socket_path, e, sizeof e);
+        if (result) {
+            fprintf(stderr, "cast: %s\n", e);
+        }
+        return result;
+    }
     if (first < argc && !strcmp(argv[first], "doctor")) {
         if (argc - first != 1) {
             return fprintf(stderr, "cast: doctor takes no arguments\n"), 1;
@@ -1161,8 +1357,43 @@ int main(int argc, char **argv)
         doctor(&config);
         return 0;
     }
-    if (app_socket_path(&config, e, sizeof e)) {
+    bool offline_request =
+        first < argc && (!strcmp(argv[first], "transcribe") ||
+                         (!strcmp(argv[first], "transcription") && first + 1 < argc &&
+                          !strcmp(argv[first + 1], "transcribe")));
+    bool socket_available = app_socket_path(&config, e, sizeof e) == 0;
+    if (!socket_available && !offline_request) {
         return fprintf(stderr, "cast: %s\n", e), 1;
+    }
+    if (offline_request) {
+        struct stat socket_state;
+        bool daemon_present = socket_available && !lstat(config.socket_path, &socket_state) &&
+                              S_ISSOCK(socket_state.st_mode);
+        if (!daemon_present) {
+            if (!strcmp(argv[first], "transcribe")) {
+                if (argc - first >= CAST_MAX_ARGS) {
+                    return fprintf(stderr, "cast: too many transcribe arguments\n"), 2;
+                }
+                char *arguments[CAST_MAX_ARGS] = {"transcription", "transcribe"};
+                for (int i = first + 1; i < argc; ++i) {
+                    arguments[i - first + 1] = argv[i];
+                }
+                return standalone_transcribe(&config, argc - first + 1, arguments);
+            }
+            return standalone_transcribe(&config, argc - first, argv + first);
+        }
+    }
+    if (first < argc && !strcmp(argv[first], "notes-window")) {
+        const CastRuntimeHooks *hooks = cast_runtime_hooks();
+        CastRuntimeHost host = {.client_command = app_runtime_client};
+        if (argc - first != 1 || !hooks || !hooks->notes_client) {
+            return fprintf(stderr, "cast: notes native window is unavailable in this build\n"), 5;
+        }
+        int rc = hooks->notes_client(&config, &host, e, sizeof e);
+        if (rc) {
+            fprintf(stderr, "cast: %s\n", e);
+        }
+        return rc ? 5 : 0;
     }
     if (first < argc) {
         if (!strcmp(argv[first], "panel")) {

@@ -1,4 +1,6 @@
 #include "app_internal.h"
+#include "compositor.h"
+#include "edition.h"
 #include <errno.h>
 #include <math.h>
 #include <stdarg.h>
@@ -164,6 +166,9 @@ static int stream_status_reply(App *a, bool json, char *out, size_t n)
     stream_destination(&a->config.stream, destination, sizeof destination);
     json_string(safe_destination, sizeof safe_destination, destination);
     json_string(safe_error, sizeof safe_error, status.error);
+    char encoder[387], encoder_detail[1539];
+    json_string(encoder, sizeof encoder, status.video_encoder);
+    json_string(encoder_detail, sizeof encoder_detail, status.video_encoder_detail);
     uint64_t now = cast_now_ns();
     double session = status.active && status.session_started_ns && now > status.session_started_ns
                          ? (now - status.session_started_ns) / 1e9
@@ -183,19 +188,22 @@ static int stream_status_reply(App *a, bool json, char *out, size_t n)
             "\"session_duration\":%.3f,\"connected_duration\":%.3f,\"outgoing_bitrate_kbps\":%.3f,"
             "\"bytes_written\":%llu,\"video_frames\":%llu,\"audio_samples\":%llu,"
             "\"queue_depth\":%u,\"dropped_frames\":%llu,\"retry_attempt\":%u,"
-            "\"next_retry_seconds\":%.3f,\"error\":%s}",
+            "\"next_retry_seconds\":%.3f,\"error\":%s,\"video_encoder\":%s,\"video_encoder_"
+            "detail\":%s}",
             stream_lifecycle_name(status.state), status.active ? "true" : "false",
             a->state.stream_paused ? "true" : "false", a->state.stream_frozen ? "true" : "false",
             a->state.stream_blurred ? "true" : "false", a->config.stream.service, safe_destination,
             (unsigned long long)status.generation, session, connected, bitrate,
             (unsigned long long)status.bytes_written, (unsigned long long)status.video_frames,
             (unsigned long long)status.audio_samples, status.queue_depth,
-            (unsigned long long)status.dropped_frames, status.retry_attempt, retry, safe_error);
+            (unsigned long long)status.dropped_frames, status.retry_attempt, retry, safe_error,
+            encoder, encoder_detail);
     } else {
         length = snprintf(
             out, n,
             "stream=%s presentation=%s service=%s destination=%s session=%.3fs connected=%.3fs "
             "outgoing=%.1fkbps queue=%u dropped=%llu retry=%u next_retry=%.3fs error=%s\n"
+            "video_encoder=%s encoder_detail=%s\n"
             "Network writes describe local transmission; service/viewer delivery is not measured.",
             stream_lifecycle_name(status.state),
             a->state.stream_paused    ? "paused"
@@ -203,7 +211,9 @@ static int stream_status_reply(App *a, bool json, char *out, size_t n)
             : a->state.stream_frozen  ? "frozen"
                                       : "composition",
             a->config.stream.service, destination, session, connected, bitrate, status.queue_depth,
-            (unsigned long long)status.dropped_frames, status.retry_attempt, retry, status.error);
+            (unsigned long long)status.dropped_frames, status.retry_attempt, retry, status.error,
+            status.video_encoder[0] ? status.video_encoder : "not selected",
+            status.video_encoder_detail);
     }
     if (length < 0 || (size_t)length >= n) {
         return app_error(out, n, "stream status exceeds IPC limit");
@@ -222,7 +232,12 @@ static int status(App *a, bool json, char *out, size_t n)
     char virtual_name[sizeof c->virtual_name * 6 + 3];
     char pause_text[sizeof c->pause_text * 6 + 3];
     int length;
-    char stream[CAST_ERR * 2];
+    char stream[CAST_ERR * 4];
+    char record_encoder[64], record_detail[256], safe_encoder[387], safe_detail[1539];
+    media_record_encoder(a->media, record_encoder, sizeof record_encoder, record_detail,
+                         sizeof record_detail);
+    json_string(safe_encoder, sizeof safe_encoder, record_encoder);
+    json_string(safe_detail, sizeof safe_detail, record_detail);
     if (stream_status_reply(a, json, stream, sizeof stream)) {
         return app_error(out, n, "%s", stream);
     }
@@ -236,6 +251,12 @@ static int status(App *a, bool json, char *out, size_t n)
     json_string(pause_text, sizeof pause_text, c->pause_text);
     media_audio_status(a->media, audio, sizeof audio);
     double seconds = media_record_duration(a->media) / 1e9;
+    char workflows[3072] = "{}", motion[1536] = "{}";
+    const CastRuntimeHooks *hooks = cast_runtime_hooks();
+    if (a->runtime && hooks && hooks->status) {
+        hooks->status(workflows, sizeof workflows, json);
+    }
+    compositor_motion_status(a->compositor, motion, sizeof motion, json);
     if (json) {
         length = snprintf(
             out, n,
@@ -248,20 +269,20 @@ static int status(App *a, bool json, char *out, size_t n)
             "s,\"paused\":%s,\"frozen\":%s,\"blurred\":%s},"
             "\"record\":{\"state\":\"%s\",\"path\":%s,\"duration\":%.3f,\"countdown\":%s,"
             "\"finalizing\":%s,\"paused\":%s,\"frozen\":%s,\"blurred\":%s,\"cut\":%s,"
-            "\"countdown_kind\":%s},"
+            "\"countdown_kind\":%s,\"video_encoder\":%s,\"video_encoder_detail\":%s},"
             "\"stream\":%s,\"group_paused\":%s,\"layout\":\"%s\",\"zoom\":%.3f,\"camera_visible\":%"
             "s,"
             "\"audio\":{\"mic\":{\"enabled\":%s,\"source\":%s,\"gain\":%.3f},"
             "\"desktop\":{\"enabled\":%s,\"source\":%s,\"gain\":%.3f},"
             "\"virtual\":{\"enabled\":%s,\"name\":%s},\"readiness\":%s},"
-            "\"last_error\":%s,\"dropped_frames\":%llu}",
+            "\"edition\":\"%s\",\"build_id\":\"%s\",\"workflows\":%s,\"motion\":%s,\"last_error\":%"
+            "s,\"dropped_frames\":%llu}",
             CAST_VERSION, backend, cap.capture ? "true" : "false",
             cap.cursor_metadata ? "true" : "false", cap.embedded_cursor ? "true" : "false",
             cap.input ? "true" : "false", cap.region_selection ? "true" : "false",
             cap.window_selection ? "true" : "false", cap.preview ? "true" : "false", source,
             c->capture_kind, c->region_x, c->region_y, c->region_w, c->region_h,
-            c->capture_mask_color,
-            c->virtual_enabled ? "true" : "false",
+            c->capture_mask_color, c->virtual_enabled ? "true" : "false",
             !c->virtual_enabled  ? "stopped"
             : s->virtual_paused  ? "paused"
             : s->virtual_blurred ? "blurred"
@@ -282,17 +303,19 @@ static int status(App *a, bool json, char *out, size_t n)
             !a->countdown         ? "null"
             : a->countdown_resume ? "\"resume\""
                                   : "\"start\"",
-            stream, s->group_paused ? "true" : "false", c->layout, c->zoom_factor,
-            c->camera_visible ? "true" : "false", c->mic ? "true" : "false", mic_source,
-            c->mic_gain, c->desktop ? "true" : "false", desktop_source, c->desktop_gain,
-            c->virtual_audio ? "true" : "false", virtual_name, audio[0] ? audio : "{}", err,
-            (unsigned long long)s->dropped_frames);
+            safe_encoder, safe_detail, stream, s->group_paused ? "true" : "false", c->layout,
+            c->zoom_factor, c->camera_visible ? "true" : "false", c->mic ? "true" : "false",
+            mic_source, c->mic_gain, c->desktop ? "true" : "false", desktop_source, c->desktop_gain,
+            c->virtual_audio ? "true" : "false", virtual_name, audio[0] ? audio : "{}",
+            cast_edition_identity()->edition, cast_edition_identity()->build_id, workflows, motion,
+            err, (unsigned long long)s->dropped_frames);
     } else {
         length = snprintf(
             out, n,
             "backend=%s source=%s:%s layout=%s camera=%s zoom=%.2f\nvirtual=%s recording=%s "
             "duration=%.3fs path=%s "
-            "countdown=%s\nvirtual_message=%s\n%s\naudio=%s\ndropped_frames=%llu error=%s",
+            "countdown=%s\nvirtual_message=%s\nrecord_encoder=%s "
+            "encoder_detail=%s\n%s\naudio=%s\n%s\n%s\ndropped_frames=%llu error=%s",
             c->backend, c->capture_kind, c->monitor[0] ? c->monitor : "selected", c->layout,
             c->camera_visible ? "visible" : "hidden", c->zoom_factor,
             s->virtual_paused    ? "PAUSED"
@@ -306,8 +329,9 @@ static int status(App *a, bool json, char *out, size_t n)
                                                                        : "RECORDING")
             : media_record_finalizing(a->media) ? "finalizing"
                                                 : "stopped",
-            seconds, s->record_path, a->countdown ? "pending" : "off", c->pause_text, stream, audio,
-            (unsigned long long)s->dropped_frames, s->last_error);
+            seconds, s->record_path, a->countdown ? "pending" : "off", c->pause_text,
+            record_encoder[0] ? record_encoder : "not selected", record_detail, stream, audio,
+            workflows, motion, (unsigned long long)s->dropped_frames, s->last_error);
     }
     if (length < 0 || (size_t)length >= n) {
         return app_error(out, n, "status exceeds IPC limit; use shorter paths/source names");
@@ -330,7 +354,29 @@ static int barrier(App *a, State *candidate, char *e, size_t n)
         app_freeze_frame(a, 2, &a->stream_frozen, e, n)) {
         return -1;
     }
+    bool global_privacy = !previous.group_paused && candidate->group_paused;
+    unsigned privacy_mask = 0;
+    if (candidate->virtual_paused != previous.virtual_paused ||
+        candidate->virtual_frozen != previous.virtual_frozen ||
+        candidate->virtual_blurred != previous.virtual_blurred) {
+        privacy_mask |= 1u;
+    }
+    if (candidate->record_paused != previous.record_paused ||
+        candidate->record_cut != previous.record_cut ||
+        candidate->record_frozen != previous.record_frozen ||
+        candidate->record_blurred != previous.record_blurred ||
+        candidate->recording != previous.recording) {
+        privacy_mask |= 2u;
+    }
+    if (candidate->stream_paused != previous.stream_paused ||
+        candidate->stream_frozen != previous.stream_frozen ||
+        candidate->stream_blurred != previous.stream_blurred) {
+        privacy_mask |= 4u;
+    }
+    app_runtime_barrier(a, global_privacy ? CAST_BARRIER_GLOBAL_PRIVACY : CAST_BARRIER_PRESENTATION,
+                        global_privacy ? (1u << CAST_CONSUMER_COUNT) - 1 : privacy_mask);
     a->state = *candidate;
+    app_runtime_sync(a);
     platform_events(a->platform, a->compositor, &a->config, true);
     compositor_clear(a->compositor);
     if (candidate->virtual_paused || (previous.virtual_frozen && !candidate->virtual_frozen) ||
@@ -490,16 +536,22 @@ static int restart_reasons(const Config *old, const Config *c, bool recording, c
             strcmp(old->video_codec, c->video_codec) || strcmp(old->audio_codec, c->audio_codec) ||
                 strcmp(old->record_container, c->record_container) ||
                 old->record_crf != c->record_crf || strcmp(old->record_preset, c->record_preset) ||
+                old->record_bitrate_kbps != c->record_bitrate_kbps ||
+                strcmp(old->record_rate_control, c->record_rate_control) ||
                 old->record_queue != c->record_queue,
             "recording encoder/container/queue while recording");
     }
 #undef RESTART
     return e[0] ? -1 : 0;
 }
-static int apply_candidate(App *a, Config *c, char *e, size_t n)
+int app_apply_candidate(App *a, Config *c, char *e, size_t n)
 {
     if (config_validate(c, e, n)) {
         return -1;
+    }
+    if (strcmp(c->licensing_file, a->config.licensing_file) && edition_service_busy(a->edition)) {
+        return app_error(e, n,
+                         "license operation pending; retry the path change after acknowledgement");
     }
     StreamSnapshot stream;
     media_stream_status(a->media, &stream);
@@ -547,13 +599,38 @@ static int apply_candidate(App *a, Config *c, char *e, size_t n)
         }
         return -1;
     }
-    bool mask_color_only =
-        a->config.capture_mask_color != c->capture_mask_color &&
-        !strcmp(a->config.capture_kind, c->capture_kind) &&
-        !strcmp(a->config.monitor, c->monitor) && a->config.region_x == c->region_x &&
-        a->config.region_y == c->region_y && a->config.region_w == c->region_w &&
-        a->config.region_h == c->region_h;
+    bool mask_color_only = a->config.capture_mask_color != c->capture_mask_color &&
+                           !strcmp(a->config.capture_kind, c->capture_kind) &&
+                           !strcmp(a->config.monitor, c->monitor) &&
+                           a->config.region_x == c->region_x && a->config.region_y == c->region_y &&
+                           a->config.region_w == c->region_w && a->config.region_h == c->region_h;
+    bool audio_changed = a->config.mic != c->mic || a->config.desktop != c->desktop ||
+                         strcmp(a->config.mic_source, c->mic_source) ||
+                         strcmp(a->config.desktop_source, c->desktop_source);
+    bool protect_notes =
+        platform_notes_registered(a->platform) &&
+        strcmp(config_extension_value(&a->config, "notes", "exclude_from_capture"), "true") &&
+        !strcmp(config_extension_value(c, "notes", "exclude_from_capture"), "true");
+    if (audio_changed) {
+        app_runtime_barrier(a, CAST_BARRIER_AUDIO, (1u << CAST_CONSUMER_COUNT) - 1);
+    }
+    if (protect_notes) {
+        /* Explicit privacy opt-in must also retire a previously exposed Freeze
+         * image. Opening/closing an already protected window keeps that image. */
+        frame_free(&a->screen);
+        frame_free(&a->frozen);
+        frame_free(&a->record_frozen);
+        frame_free(&a->stream_frozen);
+        frame_free(&a->virtual);
+        frame_free(&a->record);
+        frame_free(&a->stream);
+    }
     a->config = *c;
+    if (a->runtime_prepared) {
+        app_runtime_commit(a);
+    } else {
+        app_runtime_sync(a);
+    }
     app_sync_source(a);
     if (mask_color_only) {
         /* Retire source pixels without changing the user's current zoom. */
@@ -980,6 +1057,14 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
     bool change = false;
     char applied_preset[sizeof a->current_preset] = "";
     out[0] = 0;
+    if (IS(0, "edition") || IS(0, "features") || IS(0, "license")) {
+        char error[CAST_ERR] = "";
+        int rc = cast_edition_command(ac, av, c.licensing_file, true, out, n, error, sizeof error);
+        if (rc && error[0]) {
+            snprintf(out, n, "%s", error);
+        }
+        return rc;
+    }
     if (IS(0, "live") || (IS(0, "annotations") && IS(1, "live")) ||
         (IS(0, "preview") && IS(1, "target") && IS(2, "live"))) {
         return app_error(out, n,
@@ -1043,7 +1128,7 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
             const char *key = IS(1, "title")      ? "output.pause_title"
                               : IS(1, "subtitle") ? "output.pause_subtitle"
                                                   : "output.pause_footer";
-            if (config_set_value(&c, key, av[2], out, n) || apply_candidate(a, &c, out, n)) {
+            if (config_set_value(&c, key, av[2], out, n) || app_apply_candidate(a, &c, out, n)) {
                 return -1;
             }
             snprintf(out, n, "shared output %s updated for this session", av[1]);
@@ -1126,7 +1211,7 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
         const char *key = IS(1, "title")      ? "output.pause_title"
                           : IS(1, "subtitle") ? "output.pause_subtitle"
                                               : "output.pause_footer";
-        if (config_set_value(&c, key, av[2], out, n) || apply_candidate(a, &c, out, n)) {
+        if (config_set_value(&c, key, av[2], out, n) || app_apply_candidate(a, &c, out, n)) {
             return -1;
         }
         snprintf(out, n, "shared output %s updated for this session", av[1]);
@@ -1146,7 +1231,7 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
                 return -1;
             }
         }
-        if (apply_candidate(a, &c, out, n)) {
+        if (app_apply_candidate(a, &c, out, n)) {
             return -1;
         }
         if (c.zoom_factor > 1) {
@@ -1341,7 +1426,7 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
         }
         fresh.virtual_enabled = a->config.virtual_enabled;
         Config effective = fresh;
-        if (apply_candidate(a, &fresh, out, n)) {
+        if (app_apply_candidate(a, &fresh, out, n)) {
             return -1;
         }
         a->defaults = effective;
@@ -1423,7 +1508,7 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
         fresh.zoom_factor = 1;
 #undef RESTORE
 #undef RESTORE_STR
-        if (apply_candidate(a, &fresh, out, n)) {
+        if (app_apply_candidate(a, &fresh, out, n)) {
             return -1;
         }
         a->zoom_last = a->defaults.zoom_factor;
@@ -1475,7 +1560,7 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
             if (config_set_value(&c, key, av[2], out, n)) {
                 return -1;
             }
-            if (apply_candidate(a, &c, out, n)) {
+            if (app_apply_candidate(a, &c, out, n)) {
                 return -1;
             }
             snprintf(out, n, "%s: %s", key, av[2]);
@@ -1588,6 +1673,8 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
             return 0;
         }
         a->config = c;
+        app_runtime_barrier(a, CAST_BARRIER_AUDIO, (1u << CAST_CONSUMER_COUNT) - 1);
+        app_runtime_sync(a);
         return 0;
     } else if (IS(0, "preset")) {
         if (command_preset(a, &c, ac, av, applied_preset, out, n)) {
@@ -1598,7 +1685,27 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
         return app_error(out, n, "unknown command %s; cast --help", av[0]);
     }
     if (change) {
-        if (config_validate(&c, out, n) || compositor_prepare(a->compositor, &c, out, n)) {
+        CastMotionEvent follow_event = {.kind = CAST_MOTION_FOLLOW,
+                                        .timestamp_ns = cast_now_ns(),
+                                        .source_generation = a->source_generation,
+                                        .enabled = c.zoom_follow};
+        bool cinematic_follow = false;
+        if (IS(0, "zoom") && IS(1, "follow") && a->runtime &&
+            !strcmp(config_extension_value(&c, "zoom", "motion"), "cinematic") &&
+            compositor_motion_ready(a->compositor)) {
+            const CastRuntimeHost *host = cast_runtime_host();
+            char reason[CAST_ERR];
+            /* Basic following remains free when cinematic resources are dormant
+             * or entitlement has lapsed. An active cinematic focus also needs
+             * the explicit event, even if the boolean setting was already on. */
+            cinematic_follow =
+                host && host->authorize &&
+                host->authorize(host->context, "cinematic_zoom", reason, sizeof reason);
+        }
+        if (config_validate(&c, out, n) ||
+            (cinematic_follow &&
+             compositor_motion_event_validate(a->compositor, &follow_event, out, n)) ||
+            compositor_prepare(a->compositor, &c, out, n)) {
             return -1;
         }
         if (strcmp(c.camera_device, a->config.camera_device) ||
@@ -1606,6 +1713,12 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
             if (media_reconfigure(a->media, &c, a->state.recording, out, n)) {
                 return -1;
             }
+        }
+        /* No setting is committed until the bounded event queue accepts it.
+         * Both calls run on the daemon thread; failure remains an actionable
+         * reply instead of acknowledging a focus that stayed locked. */
+        if (cinematic_follow && compositor_motion_event(a->compositor, &follow_event, out, n)) {
+            return -1;
         }
         bool annotation_policy_changed = c.keys != a->config.keys || c.clicks != a->config.clicks ||
                                          strcmp(c.keys_mode, a->config.keys_mode);
@@ -1618,6 +1731,7 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
             media_stream_barrier(a->media);
         }
         a->config = c;
+        app_runtime_sync(a);
         if (c.zoom_factor > 1) {
             a->zoom_last = c.zoom_factor;
         }

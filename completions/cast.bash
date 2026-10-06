@@ -1,5 +1,11 @@
 # Bash completion for cast. Source this file, or use cast completions bash.
 # Settings keys come from the local defaults command; no daemon/device is opened.
+_cast_is_pro()
+{
+    local identity
+    identity=$(command "$1" edition --json 2>/dev/null) || return 1
+    [[ $identity =~ \"edition\"[[:space:]]*:[[:space:]]*\"pro\" ]]
+}
 _cast_complete()
 {
     local -a words=() matches=()
@@ -18,15 +24,22 @@ _cast_complete()
     done
     local cur=${words[current]} raw=${COMP_WORDS[COMP_CWORD]} offer='' mode=''
     local trim=$((${#cur} - ${#raw})) command_index=1 command='' argument=0
-    local commands='layout split camera screen logo text capture zoom cursor clicks keys annotations pause resume virtual stream record audio preset preview status doctor config settings panel reset quit completions setup update help'
-    local flags='--headless --config --socket --backend --output-device --camera-device --width --height --fps --no-virtual --no-camera --mic-source --desktop-source --record-dir --container --video-codec --audio-codec --countdown --help --version'
+    local commands='edition features license layout split camera screen logo text capture zoom cursor clicks keys annotations pause resume virtual stream record audio preset preview status doctor config settings panel reset quit completions setup update help'
+    local pro=0
+    if _cast_is_pro "${words[0]}"; then
+        pro=1
+        commands+=' transcription transcribe subtitles notes'
+    fi
+    local flags='--headless --config --socket --backend --output-device --camera-device --width --height --fps --no-virtual --no-camera --mic-source --desktop-source --record-dir --container --video-codec --audio-codec --countdown --record-bitrate --record-rate-control --stream-video-encoder --help --version'
     while ((command_index < current)); do
         token=${words[command_index]}
         case $token in
-            --config|--socket|--backend|--output-device|--camera-device|--width|--height|--fps|--mic-source|--desktop-source|--record-dir|--container|--video-codec|--audio-codec|--countdown)
+            --config|--socket|--backend|--output-device|--camera-device|--width|--height|--fps|--mic-source|--desktop-source|--record-dir|--container|--video-codec|--audio-codec|--countdown|--record-bitrate|--record-rate-control|--stream-video-encoder)
                 if ((current == command_index + 1)); then
                     case $token in
                         --backend) offer='xorg wayland synthetic' ;;
+                        --record-rate-control) offer='auto bitrate crf' ;;
+                        --video-codec|--stream-video-encoder) offer='auto libx264 libopenh264' ;;
                         --config|--socket|--output-device|--camera-device) mode=file ;;
                         --record-dir) mode=directory ;;
                     esac
@@ -76,8 +89,46 @@ _cast_complete()
                     window) offer='select active' ;;
                     fit) offer='contain cover' ;;
                 esac ;;
-            zoom:1) offer='toggle in out reset set follow' ;;
-            zoom:2) [[ $first == follow ]] && offer='on off' ;;
+            zoom:1) offer='toggle in out reset set follow'; ((pro)) && offer+=' motion focus auto status cinematic' ;;
+            zoom:2)
+                case $first in
+                    follow) offer='on off' ;;
+                    motion) ((pro)) && offer='legacy cinematic' ;;
+                    auto) ((pro)) && offer='off click' ;;
+                    status) ((pro)) && offer=--json ;;
+                esac ;;
+            zoom:4) [[ $first == focus && $pro == 1 ]] && offer=--factor ;;
+            transcription:1) ((pro)) && offer='on off status model language source models transcribe job' ;;
+            transcription:2)
+                if ((pro)); then
+                    case $first in
+                        status) offer=--json ;; model|transcribe) mode=file ;;
+                        language) offer=auto ;; source) offer='mic desktop mix' ;;
+                        job) offer='status cancel' ;;
+                    esac
+                fi ;;
+            transcribe:1) ((pro)) && mode=file ;;
+            transcription:*|transcribe:*)
+                if ((pro)) && [[ $first == transcribe || $command == transcribe ]]; then
+                    case ${words[current-1]-} in
+                        --format) offer='srt vtt both' ;;
+                        --output) mode=file ;;
+                        *) offer='--output --format --overwrite'; mode=file ;;
+                    esac
+                elif ((pro)) && [[ $first == job && $second == status && $argument == 4 ]]; then
+                    offer=--json
+                fi ;;
+            subtitles:1) ((pro)) && offer='virtual record stream sidecar' ;;
+            subtitles:2)
+                if ((pro)); then
+                    [[ $first == sidecar ]] && offer='none srt vtt both' || offer='on off'
+                fi ;;
+            notes:1) ((pro)) && offer='open close load reload start pause toggle next prev center restart mode speed goto status' ;;
+            notes:2)
+                if ((pro)); then
+                    case $first in open|load) mode=file ;; mode) offer='timed speech' ;;
+                        goto) offer=--line ;; status) offer=--json ;; esac
+                fi ;;
             cursor:1) offer='on off toggle highlight' ;;
             cursor:2) [[ $first == highlight ]] && offer='on off toggle' ;;
             clicks:1) offer='on off toggle' ;;
@@ -104,17 +155,32 @@ _cast_complete()
             preview:1) offer='on off toggle target' ;;
             preview:2) [[ $first == target ]] && offer='virtual record stream' ;;
             status:1) offer=--json ;;
-            config:1) offer='check defaults reload' ;;
-            config:2) [[ $first == check ]] && mode=file ;;
+            config:1) offer='check defaults reload migrate' ;;
+            edition:1|features:1) offer=--json ;;
+            license:1) offer='status inspect import reload remove' ;;
+            license:2) case $first in status) offer=--json ;; inspect|import) mode=file ;; esac ;;
+            license:3) [[ $first == inspect ]] && offer=--json ;;
+            config:*)
+                if [[ $first == check ]]; then mode=file; offer=--availability
+                elif [[ $first == migrate ]]; then
+                    mode=file; offer='--edition --write --backup'
+                    case ${words[current-1]-} in
+                        --edition) mode=words; offer='community pro' ;;
+                        --write|--backup) offer='' ;;
+                    esac
+                fi ;;
             completions:1) offer='bash zsh fish --script' ;;
             completions:2) [[ $first == --script ]] && offer='bash zsh fish' ;;
             update:*)
-                if [[ ${words[current-1]} == --download-only ]]; then mode=directory
+                if ((pro)); then
+                    case ${words[current-1]} in --bundle|--download-only) mode=directory ;; --install) mode=file ;;
+                        *) offer='--bundle --install --download-only --rollback' ;; esac
+                elif [[ ${words[current-1]} == --download-only ]]; then mode=directory
                 else offer=--download-only
                 fi ;;
             settings:*)
                 if ((argument % 2)); then
-                    offer=$(command cast config defaults 2>/dev/null | awk '
+                    offer=$(command "${words[0]}" config defaults 2>/dev/null | awk '
                         /^\[/ { section=$0; sub(/^\[/,"",section); sub(/\]$/,"",section) }
                         section !~ /^preset[.]/ && /^[a-z_]+[[:space:]]*=/ { key=$1; print section "." key }')
                 else
@@ -131,10 +197,29 @@ _cast_complete()
                         camera.anchor) offer='top-left top-right bottom-left bottom-right top bottom left right free' ;;
                         camera.aspect) offer='native 16:9 4:3 1:1' ;;
                         keys.mode) offer='shortcuts all' ;;
+                        zoom.motion) offer='legacy cinematic' ;;
+                        zoom.auto) offer='off click' ;;
+                        zoom.filter) offer='bilinear bicubic' ;;
+                        transcription.backend) offer=whisper ;;
+                        transcription.device) offer='cpu auto gpu' ;;
+                        transcription.language) offer=auto ;;
+                        transcription.source) offer='mic desktop mix' ;;
+                        transcription.task) offer='transcribe translate' ;;
+                        transcription.vad_backend) offer='energy silero' ;;
+                        subtitles.sidecar) offer='none srt vtt both' ;;
+                        subtitles.anchor) offer='top bottom' ;;
+                        subtitles.align) offer='left center right' ;;
+                        notes.mode) offer='timed speech' ;;
+                        notes.format) offer='auto plain markdown' ;;
+                        notes.align) offer='left center' ;;
+                        transcription.model_path|notes.file) mode=file ;;
+                        zoom.avoid_camera|zoom.motion_blur|cursor.smooth|transcription.enabled|transcription.show_partial|transcription.auto_finalize|subtitles.virtual|subtitles.record|subtitles.stream|subtitles.background|notes.always_on_top|notes.allow_backward_reacquire|notes.exclude_from_capture|notes.match_code_blocks) offer='true false' ;;
                         keys.position) offer='top-left top-right bottom-left bottom-right' ;;
                         preview.target) offer='virtual record stream' ;;
                         stream.service) offer='custom twitch youtube' ;;
-                        stream.key_file|stream.tls_ca_file|logo.path|camera.device|output.device) mode=file ;;
+                        licensing.file|stream.key_file|stream.tls_ca_file|logo.path|camera.device|output.device) mode=file ;;
+                        record.rate_control) offer='auto bitrate crf' ;;
+                        record.video_codec|stream.video_encoder) offer='auto libx264 libopenh264' ;;
                         stream.encoder_preset) offer='ultrafast superfast veryfast faster fast medium slow slower veryslow' ;;
                         logo.enabled|text.enabled|background.gradient_via_enabled|output.enabled|camera.enabled|camera.visible|camera.mirror|zoom.follow|cursor.enabled|cursor.highlight|clicks.enabled|clicks.middle|keys.enabled|annotations.virtual_keys|annotations.virtual_clicks|annotations.record_keys|annotations.record_clicks|annotations.stream_keys|annotations.stream_clicks|audio.mic|audio.desktop|audio.virtual|preview.enabled) offer='true false' ;;
                     esac
@@ -145,6 +230,9 @@ _cast_complete()
     COMPREPLY=()
     if [[ $mode == file ]]; then
         mapfile -t matches < <(compgen -f -- "$cur")
+        if [[ -n $offer ]]; then
+            while IFS= read -r token; do matches+=("$token"); done < <(compgen -W "$offer" -- "$cur")
+        fi
         compopt -o filenames 2>/dev/null || :
     elif [[ $mode == directory ]]; then
         mapfile -t matches < <(compgen -d -- "$cur")
@@ -155,4 +243,4 @@ _cast_complete()
     for token in "${matches[@]}"; do COMPREPLY+=("${token:trim}"); done
     return 0
 }
-complete -F _cast_complete cast
+complete -F _cast_complete cast cast-pro

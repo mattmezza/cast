@@ -1,4 +1,6 @@
 #include "app_internal.h"
+#include "compositor.h"
+#include "ipc_identity.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -21,6 +23,7 @@ typedef struct {
     char magic[8];
     uint32_t version, snapshot_size;
     uint64_t window;
+    CastEditionIdentity identity;
 } AttachRequest;
 typedef struct {
     char magic[8];
@@ -49,13 +52,16 @@ typedef struct {
     size_t size;
     char packet[CAST_IPC_MAX];
     uint64_t id;
+    int reply_timeout;
+    bool privacy_priority;
 } QueuedCommand;
 struct PanelClient {
     Config config;
     uint64_t window;
     pthread_t worker;
     pthread_mutex_t mutex;
-    bool stop;
+    bool stop, servicing_privacy;
+    uint32_t acknowledged;
     int peer, wake;
     SharedPreview *shared;
     PanelSnapshot snapshot;
@@ -134,6 +140,12 @@ static void snapshot_fill(PanelSnapshot *s, App *a, PanelTransport *t)
     memset(s, 0, sizeof *s);
     s->config = a->config;
     s->state = a->state;
+    edition_service_snapshot(a->edition, &s->edition);
+    const CastRuntimeHooks *hooks = cast_runtime_hooks();
+    if (a->runtime && hooks && hooks->snapshot) {
+        hooks->snapshot(&s->workflow);
+    }
+    s->cinematic_active = compositor_motion_snapshot(a->compositor, &s->motion);
     snprintf(s->current_preset, sizeof s->current_preset, "%s", a->current_preset);
     media_stream_status(a->media, &s->stream);
     s->capabilities = platform_capabilities(a->platform);
@@ -141,6 +153,8 @@ static void snapshot_fill(PanelSnapshot *s, App *a, PanelTransport *t)
     s->countdown = a->countdown;
     s->finalizing = media_record_finalizing(a->media);
     s->duration_ns = media_record_duration(a->media);
+    media_record_encoder(a->media, s->record_encoder, sizeof s->record_encoder,
+                         s->record_encoder_detail, sizeof s->record_encoder_detail);
     uint64_t now = cast_now_ns();
     s->countdown_remaining_ns =
         a->countdown && a->countdown_deadline > now ? a->countdown_deadline - now : 0;
@@ -250,7 +264,7 @@ static void attach_error(int fd, const char *error)
 bool panel_transport_request(PanelTransport *t, App *a, int fd, const void *packet, ssize_t size,
                              uid_t uid, pid_t pid)
 {
-    if (size < 6 || memcmp(packet, "CASTP1", 6)) {
+    if (size < 6 || memcmp(packet, "CASTP2", 6)) {
         return false;
     }
     char error[CAST_ERR];
@@ -260,8 +274,9 @@ bool panel_transport_request(PanelTransport *t, App *a, int fd, const void *pack
         return true;
     }
     memcpy(&req, packet, sizeof req);
-    if (memcmp(req.magic, "CASTP1\0", 8) || req.version != PANEL_PROTOCOL_VERSION ||
-        req.snapshot_size != sizeof(PanelSnapshot) || uid != getuid()) {
+    if (memcmp(req.magic, "CASTP2\0", 8) || req.version != PANEL_PROTOCOL_VERSION ||
+        req.snapshot_size != sizeof(PanelSnapshot) || !cast_identity_matches(&req.identity) ||
+        uid != getuid()) {
         attach_error(fd, "panel protocol/build or ownership mismatch");
         return true;
     }
@@ -312,7 +327,7 @@ bool panel_transport_request(PanelTransport *t, App *a, int fd, const void *pack
     t->shared->generation = t->generation;
     /* Registration may invalidate capture; begin neutral until the next capture tick. */
     panel_transport_publish(t, a, &a->neutral, &a->neutral);
-    AttachReply reply = {.magic = "CASTP1",
+    AttachReply reply = {.magic = "CASTP2",
                          .version = PANEL_PROTOCOL_VERSION,
                          .snapshot_size = sizeof(PanelSnapshot),
                          .bytes = sizeof(SharedPreview),
@@ -349,6 +364,9 @@ bool panel_transport_authorize(PanelTransport *t, uint64_t generation, pid_t pid
     return t && t->peer >= 0 && t->generation == generation && t->pid == pid;
 }
 static int client_wait(PanelClient *, int, short, int);
+static int client_execute(PanelClient *, const QueuedCommand *, char *, size_t);
+static void client_refresh(PanelClient *);
+static void client_service_privacy(PanelClient *);
 static int connect_daemon(PanelClient *client, char *error, size_t n)
 {
     const Config *c = &client->config;
@@ -423,6 +441,7 @@ static void client_disconnect(PanelClient *c, const char *error)
         snprintf(c->snapshot.last_reply, sizeof c->snapshot.last_reply,
                  "daemon disconnected; pending commands discarded; inspect state");
     }
+    c->acknowledged = 0;
     c->count = 0; /* Commands from an old daemon generation must never be replayed. */
     snprintf(c->snapshot.error, sizeof c->snapshot.error, "%s", error);
     pthread_mutex_unlock(&c->mutex);
@@ -448,6 +467,12 @@ static int client_wait(PanelClient *c, int fd, short events, int timeout)
             if (stop) {
                 return -1;
             }
+            if (!c->servicing_privacy) {
+                for (unsigned i = 0; i < PANEL_QUEUE; ++i) {
+                    client_service_privacy(c);
+                }
+                client_refresh(c);
+            }
         }
         if (p[0].revents) {
             return p[0].revents;
@@ -463,10 +488,11 @@ static int client_attach(PanelClient *c, char *error, size_t n)
     if (fd < 0) {
         return -1;
     }
-    AttachRequest request = {.magic = "CASTP1",
+    AttachRequest request = {.magic = "CASTP2",
                              .version = PANEL_PROTOCOL_VERSION,
                              .snapshot_size = sizeof(PanelSnapshot),
                              .window = c->window};
+    request.identity = *cast_edition_identity();
     if (send(fd, &request, sizeof request, MSG_NOSIGNAL) != (ssize_t)sizeof request) {
         app_error(error, n, "cannot send panel attachment");
         close(fd);
@@ -509,7 +535,7 @@ static int client_attach(PanelClient *c, char *error, size_t n)
         received == sizeof reply && !(msg.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) && descriptors == 1;
     if (valid) {
         memcpy(&reply, response, sizeof reply);
-        valid = !memcmp(reply.magic, "CASTP1\0", 8) && reply.version == PANEL_PROTOCOL_VERSION &&
+        valid = !memcmp(reply.magic, "CASTP2\0", 8) && reply.version == PANEL_PROTOCOL_VERSION &&
                 reply.snapshot_size == sizeof(PanelSnapshot) &&
                 reply.bytes == sizeof(SharedPreview) && reply.generation;
     }
@@ -586,14 +612,13 @@ static int client_execute(PanelClient *c, const QueuedCommand *command, char *re
         app_error(reply, n, "cannot send command");
         goto done;
     }
-    if (client_wait(c, fd, POLLIN, c->config.ipc_timeout_ms) <= 0) {
+    if (client_wait(c, fd, POLLIN, command->reply_timeout) <= 0) {
         app_error(reply, n, "command timed out; completion unknown; inspect state");
         goto done;
     }
     char packet[CAST_IPC_MAX];
     ssize_t size = recv(fd, packet, sizeof packet - 1, MSG_TRUNC);
-    if (size < 2 || size >= (ssize_t)sizeof packet || (packet[0] != '0' && packet[0] != '1') ||
-        packet[1] != ' ') {
+    if (size < 0 || !cast_command_reply_valid(packet, (size_t)size)) {
         app_error(reply, n, "invalid command acknowledgement");
         goto done;
     }
@@ -603,6 +628,49 @@ static int client_execute(PanelClient *c, const QueuedCommand *command, char *re
 done:
     close(fd);
     return rc;
+}
+/* Acknowledgements may arrive out of order when privacy interrupts a model
+ * load. Keep the public completion watermark contiguous so draft fields never
+ * mistake an earlier, still-pending command for an acknowledgement. */
+static void client_acknowledge(PanelClient *c, const QueuedCommand *command, int result,
+                               const char *reply)
+{
+    pthread_mutex_lock(&c->mutex);
+    c->acknowledged |= UINT32_C(1) << (command->id % 32);
+    while (c->acknowledged & (UINT32_C(1) << ((c->completed + 1) % 32))) {
+        c->acknowledged &= ~(UINT32_C(1) << ((c->completed + 1) % 32));
+        ++c->completed;
+    }
+    c->snapshot.command_failed = result != 0;
+    snprintf(c->snapshot.last_reply, sizeof c->snapshot.last_reply, "%s", reply);
+    pthread_mutex_unlock(&c->mutex);
+}
+static void client_service_privacy(PanelClient *c)
+{
+    QueuedCommand command;
+    bool found = false;
+    pthread_mutex_lock(&c->mutex);
+    for (unsigned i = 0; i < c->count; ++i) {
+        unsigned slot = (c->head + i) % PANEL_QUEUE;
+        if (!c->queue[slot].privacy_priority) {
+            continue;
+        }
+        command = c->queue[slot];
+        for (unsigned j = i; j + 1 < c->count; ++j) {
+            c->queue[(c->head + j) % PANEL_QUEUE] = c->queue[(c->head + j + 1) % PANEL_QUEUE];
+        }
+        --c->count;
+        found = true;
+        break;
+    }
+    pthread_mutex_unlock(&c->mutex);
+    if (found) {
+        char reply[CAST_ERR];
+        c->servicing_privacy = true;
+        int result = client_execute(c, &command, reply, sizeof reply);
+        c->servicing_privacy = false;
+        client_acknowledge(c, &command, result, reply);
+    }
 }
 static void *client_worker(void *data)
 {
@@ -636,11 +704,7 @@ static void *client_worker(void *data)
         if (have_command) {
             char reply[CAST_ERR];
             int result = client_execute(c, &command, reply, sizeof reply);
-            pthread_mutex_lock(&c->mutex);
-            c->completed = command.id;
-            c->snapshot.command_failed = result != 0;
-            snprintf(c->snapshot.last_reply, sizeof c->snapshot.last_reply, "%s", reply);
-            pthread_mutex_unlock(&c->mutex);
+            client_acknowledge(c, &command, result, reply);
         }
         if (client_wait(c, peer, POLLIN | POLLHUP, have_command ? 0 : 30) > 0) {
             client_disconnect(c, "daemon disconnected; previews cleared");
@@ -737,11 +801,11 @@ int panel_client_frame(PanelClient *c, int target, Frame *frame, char *error, si
     if (!c) {
         return app_error(error, n, "panel client unavailable");
     }
-    if (pthread_mutex_trylock(&c->mutex)) {
-        return 0;
-    }
     if (target < 0 || target > 2) {
         return app_error(error, n, "invalid preview target");
+    }
+    if (pthread_mutex_trylock(&c->mutex)) {
+        return 0;
     }
     int result = 0;
     SharedPreview *s = c->shared;
@@ -793,9 +857,12 @@ int panel_client_command(PanelClient *c, int argc, const char *const *argv, char
     if (!c || argc < 1 || argc > CAST_MAX_ARGS) {
         return app_error(error, n, "invalid panel command argument count");
     }
-    QueuedCommand command = {.size = 22};
+    QueuedCommand command = {.size = 16 + CAST_COMMAND_HEADER_SIZE,
+                             .reply_timeout =
+                                 cast_command_reply_timeout(argc, argv, c->config.ipc_timeout_ms),
+                             .privacy_priority = cast_command_privacy_priority(argc, argv)};
     memcpy(command.packet, "CASTG1\0", 8);
-    memcpy(command.packet + 16, "CAST1\0", 6);
+    cast_command_header_write(command.packet + 16);
     for (int i = 0; i < argc; i++) {
         size_t size = strlen(argv[i]) + 1;
         if (size > sizeof command.packet - command.size) {
@@ -807,7 +874,9 @@ int panel_client_command(PanelClient *c, int argc, const char *const *argv, char
     if (pthread_mutex_trylock(&c->mutex)) {
         return app_error(error, n, "panel busy; retry");
     }
-    if (!c->snapshot.connected || c->count == PANEL_QUEUE) {
+    /* Reserve the final outstanding slot for privacy while a model prepares. */
+    unsigned limit = command.privacy_priority ? PANEL_QUEUE : PANEL_QUEUE - 1;
+    if (!c->snapshot.connected || c->count == PANEL_QUEUE || c->queued - c->completed >= limit) {
         pthread_mutex_unlock(&c->mutex);
         return app_error(error, n, "daemon disconnected or command queue full");
     }

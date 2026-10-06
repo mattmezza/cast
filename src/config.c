@@ -1,4 +1,5 @@
 #include "cast.h"
+#include "edition_extensions.h"
 #include "ini.h"
 #include "presentation_text.h"
 #include <ctype.h>
@@ -183,7 +184,9 @@ static const Setting settings[] = {
     S("audio", "virtual_name", virtual_name, "cast-microphone"),
     S("record", "directory", record_dir, "."),
     S("record", "container", record_container, "matroska"),
-    S("record", "video_codec", video_codec, "libx264"),
+    S("record", "video_codec", video_codec, "auto"),
+    I("record", "bitrate_kbps", record_bitrate_kbps, 100, 100000, "6000"),
+    E("record", "rate_control", record_rate_control, "auto,bitrate,crf", "auto"),
     S("record", "audio_codec", audio_codec, "aac"),
     I("record", "crf", record_crf, 0, 51, "23"),
     S("record", "preset", record_preset, "veryfast"),
@@ -193,6 +196,7 @@ static const Setting settings[] = {
     S("stream", "server_url", stream.server_url, ""),
     S("stream", "key_file", stream.key_file, ""),
     S("stream", "tls_ca_file", stream.tls_ca_file, ""),
+    S("stream", "video_encoder", stream.video_encoder, "auto"),
     I("stream", "video_bitrate_kbps", stream.video_bitrate_kbps, 100, 50000, "2500"),
     I("stream", "audio_bitrate_kbps", stream.audio_bitrate_kbps, 32, 320, "128"),
     E("stream", "encoder_preset", stream.encoder_preset,
@@ -209,7 +213,9 @@ static const Setting settings[] = {
     B("preview", "enabled", preview, "false"),
     E("preview", "target", preview_target, "virtual,record,stream", "virtual"),
     S("ipc", "socket", socket_path, ""),
-    I("ipc", "timeout_ms", ipc_timeout_ms, 100, 30000, "5000")};
+    I("ipc", "timeout_ms", ipc_timeout_ms, 100, 30000, "5000"),
+    S("licensing", "file", licensing_file, ""),
+    S("licensing", "upgrade_url", licensing_upgrade_url, "")};
 #define NSET (sizeof settings / sizeof settings[0])
 static int fail(char *err, size_t n, const char *fmt, ...)
 {
@@ -363,6 +369,43 @@ void config_stream_preset(Config *config)
         snprintf(config->stream.encoder_preset, sizeof config->stream.encoder_preset, "veryfast");
     }
 }
+static int extension_assign(Config *config, const char *section, const char *key, const char *value,
+                            char *error, size_t size)
+{
+    int result = cast_edition_validate_setting(section, key, value, error, size);
+    if (result) {
+        return result;
+    }
+    if (strlen(section) >= sizeof config->extension_settings[0].section ||
+        strlen(key) >= sizeof config->extension_settings[0].key ||
+        strlen(value) >= sizeof config->extension_settings[0].value ||
+        config->extension_setting_count > CAST_MAX_EXTENSION_SETTINGS) {
+        return fail(error, size, "extension setting exceeds public schema bounds");
+    }
+    unsigned index;
+    for (index = 0; index < config->extension_setting_count; ++index) {
+        if (!strcmp(section, config->extension_settings[index].section) &&
+            !strcmp(key, config->extension_settings[index].key)) {
+            break;
+        }
+    }
+    if (index == CAST_MAX_EXTENSION_SETTINGS) {
+        return fail(error, size, "too many extension settings");
+    }
+    ConfigExtensionValue *entry = &config->extension_settings[index];
+    snprintf(entry->section, sizeof entry->section, "%s", section);
+    snprintf(entry->key, sizeof entry->key, "%s", key);
+    const CastExtensionSetting *metadata = cast_extension_setting_find(section, key);
+    if (metadata && metadata->type == CAST_SETTING_BOOL) {
+        value = !strcmp(value, "true") || !strcmp(value, "on") || !strcmp(value, "1")
+                    ? "true" : "false";
+    }
+    snprintf(entry->value, sizeof entry->value, "%s", value);
+    if (index == config->extension_setting_count) {
+        config->extension_setting_count++;
+    }
+    return 0;
+}
 int config_set_value(Config *config, const char *name, const char *value, char *error, size_t size)
 {
     if (!config || !name || !value) {
@@ -407,7 +450,32 @@ int config_set_value(Config *config, const char *name, const char *value, char *
             return 0;
         }
     }
+    Config candidate = *config;
+    int result = extension_assign(&candidate, section, key, value, error, size);
+    if (!result) {
+        *config = candidate;
+        return 0;
+    }
+    if (result < 0) {
+        return -1;
+    }
     return fail(error, size, "unknown setting %s", name);
+}
+const char *config_extension_value(const Config *config, const char *section, const char *key)
+{
+    if (!section || !key) {
+        return "";
+    }
+    if (config && config->extension_setting_count <= CAST_MAX_EXTENSION_SETTINGS) {
+        for (unsigned i = 0; i < config->extension_setting_count; ++i) {
+            const ConfigExtensionValue *entry = &config->extension_settings[i];
+            if (!strcmp(section, entry->section) && !strcmp(key, entry->key)) {
+                return entry->value;
+            }
+        }
+    }
+    const CastExtensionSetting *setting = cast_extension_setting_find(section, key);
+    return setting && setting->default_value ? setting->default_value : "";
 }
 void config_defaults(Config *c)
 {
@@ -415,6 +483,14 @@ void config_defaults(Config *c)
     char e[128];
     for (size_t i = 0; i < NSET; i++) {
         assign(c, &settings[i], settings[i].def, e, sizeof e);
+    }
+    size_t extension_count;
+    const CastExtensionSetting *schema = cast_shared_extension_schema(&extension_count);
+    for (size_t i = 0; i < extension_count; ++i) {
+        if (schema[i].default_value) {
+            extension_assign(c, schema[i].section, schema[i].key, schema[i].default_value,
+                             e, sizeof e);
+        }
     }
     c->preset_count = 3;
     Preset *p = &c->presets[0];
@@ -558,8 +634,48 @@ int config_validate(const Config *c, char *err, size_t n)
             }
         }
     }
+    if (c->extension_setting_count > CAST_MAX_EXTENSION_SETTINGS) {
+        return fail(err, n, "too many extension settings");
+    }
+    for (unsigned i = 0; i < c->extension_setting_count; ++i) {
+        const ConfigExtensionValue *entry = &c->extension_settings[i];
+        if (!memchr(entry->section, 0, sizeof entry->section) ||
+            !memchr(entry->key, 0, sizeof entry->key) ||
+            !memchr(entry->value, 0, sizeof entry->value) ||
+            cast_edition_validate_setting(entry->section, entry->key, entry->value, err, n)) {
+            return fail(err, n, "invalid or unregistered extension setting");
+        }
+        for (unsigned j = 0; j < i; ++j) {
+            if (!strcmp(entry->section, c->extension_settings[j].section) &&
+                !strcmp(entry->key, c->extension_settings[j].key)) {
+                return fail(err, n, "duplicate extension setting");
+            }
+        }
+    }
+    const CastProExtension *extension = cast_edition_extensions();
+    if (extension && extension->validate_config && extension->validate_config(c, err, n)) {
+        return -1;
+    }
     if (stream_config_validate(&c->stream, err, n)) {
         return -1;
+    }
+    if (c->licensing_upgrade_url[0]) {
+        const char *url = c->licensing_upgrade_url;
+        if (strncmp(url, "https://", 8) || !url[8] || strchr("/?#:", url[8])) {
+            return fail(err, n, "licensing.upgrade_url must be an HTTPS URL with a host");
+        }
+        if (url[8] == '[') {
+            const char *end = strchr(url + 9, ']');
+            if (!end || end == url + 9 || strcspn(url + 9, "/?#") < (size_t)(end - url - 9) ||
+                (end[1] && !strchr(":/?#", end[1]))) {
+                return fail(err, n, "licensing.upgrade_url has an invalid bracketed host");
+            }
+        }
+        for (const unsigned char *p = (const unsigned char *)url; *p; ++p) {
+            if (*p <= 32 || *p >= 127 || *p == '\\' || *p == '@') {
+                return fail(err, n, "licensing.upgrade_url contains unsafe characters");
+            }
+        }
     }
     /* Keep configured queues within the worker's 512 MiB shared allocation
      * bound, reserving 1 MiB for configuration, audio and synchronization. */
@@ -738,6 +854,7 @@ static int handler(void *u, const char *section, const char *key, const char *va
             }
         }
     }
+    known = known || cast_extension_section_known(section);
     if (!known) {
         fail(p->err, p->n, "%s:%d: unknown or invalid section [%s]", p->path, line, section);
         return 0;
@@ -784,6 +901,9 @@ static int handler(void *u, const char *section, const char *key, const char *va
                 break;
             }
         }
+    }
+    if (rc && !preset && !e[0]) {
+        rc = extension_assign(p->c, section, key, value, e, sizeof e);
     }
     if (rc) {
         fail(p->err, p->n, "%s:%d: %s", p->path, line, e[0] ? e : "unknown setting");
@@ -891,7 +1011,20 @@ void config_print_defaults(void)
             section = settings[i].section;
             printf("\n[%s]\n", section);
         }
-        printf("%s = %s\n", settings[i].key, settings[i].def);
+        printf("%s =%s%s\n", settings[i].key, settings[i].def[0] ? " " : "", settings[i].def);
+    }
+    size_t extension_count;
+    const CastExtensionSetting *schema = cast_shared_extension_schema(&extension_count);
+    for (size_t i = 0; i < extension_count; ++i) {
+        if (!schema[i].default_value) {
+            continue;
+        }
+        if (strcmp(section, schema[i].section)) {
+            section = schema[i].section;
+            printf("\n[%s]\n", section);
+        }
+        printf("%s =%s%s\n", schema[i].key, schema[i].default_value[0] ? " " : "",
+               schema[i].default_value);
     }
     puts("\n[preset.coding]\nlayout = screen\n\n[preset.demo]\nlayout = overlay\ncamera_shape = "
          "circle\ncamera_width_percent = 18\n\n[preset.conversation]\nlayout = camera");

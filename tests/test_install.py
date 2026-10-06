@@ -78,8 +78,8 @@ class InstallerTests(unittest.TestCase):
                             '.section .note.GNU-stack,""\n')
         cls.updater = directory / 'cast-updater'
         subprocess.run(['cc', '-D_GNU_SOURCE', '-std=gnu11', '-Wall', '-Wextra', '-Werror',
-                        '-I', str(ROOT / 'src'), str(ROOT / 'src/update.c'), str(harness),
-                        str(assembly), '-o', str(cls.updater)], check=True)
+                        '-I', str(ROOT / 'src'), str(ROOT / 'src/update.c'), str(ROOT / 'src/edition.c'), str(ROOT / 'src/license_store.c'), str(ROOT / 'src/edition_extensions.c'), str(ROOT / 'src/workflow_schema.c'), str(harness),
+                        str(assembly), '-lm', '-o', str(cls.updater)], check=True)
 
     @classmethod
     def tearDownClass(cls):

@@ -1,23 +1,30 @@
 #ifndef PANEL_TRANSPORT_H
 #define PANEL_TRANSPORT_H
 #include "cast.h"
+#include "edition.h"
 #include "stream.h"
+#include "pro_runtime.h"
 #include <sys/types.h>
 
 /* Private protocol: both ends must come from the same build and struct layout. */
-#define PANEL_PROTOCOL_VERSION 1u
+#define PANEL_PROTOCOL_VERSION 3u
 #define PANEL_PREVIEW_WIDTH 640
 #define PANEL_PREVIEW_HEIGHT 360
 typedef struct {
     Config config;
     State state;
     StreamSnapshot stream;
+    CastEditionSnapshot edition;
+    CastWorkflowStatus workflow;
+    CastMotionSnapshot motion;
+    bool cinematic_active;
     Capabilities capabilities;
     bool connected, countdown, finalizing, command_failed;
     /* Generation changes for a new daemon or a replacement attachment. */
     uint64_t daemon_generation, frame_sequence, privacy_epoch;
     uint64_t duration_ns, countdown_remaining_ns, command_queued, command_completed;
     char current_preset[64];
+    char record_encoder[64], record_encoder_detail[256];
     char audio_status[4096], exclusion[256], error[CAST_ERR], last_reply[CAST_ERR];
 } PanelSnapshot;
 typedef struct PanelClient PanelClient;

@@ -16,15 +16,17 @@ case "$x11:$wayland" in 0:0|0:1|1:0|1:1) ;; *) fail 'X11 and WAYLAND must be 0 o
 case "$panel" in 0|1) ;; *) fail 'PANEL must be 0 or 1' ;; esac
 tag=${6:-v$version}
 git check-ref-format "refs/tags/$tag" >/dev/null || fail 'invalid RELEASE_TAG'
-for command in git gh make tar sha256sum mktemp; do
+for command in python3 git gh make tar sha256sum mktemp; do
     command -v "$command" >/dev/null || fail "required command missing: $command"
 done
 root=$(git rev-parse --show-toplevel)
 cd "$root"
+python3 packaging/public-boundary.py
 [ -n "$notes" ] && [ -f "$notes" ] && [ -s "$notes" ] || fail 'set RELEASE_NOTES to a nonempty release notes file'
 case "$notes" in /*) ;; *) notes=$root/$notes ;; esac
 
 check_release() {
+    [ -z "$(git ls-files -- '*-prompt.md' 'prompt.md')" ] || fail 'untrack local prompt files before publishing; keep originals locally'
     [ -z "$(git status --porcelain)" ] || fail 'commit or remove all tracked and untracked changes first'
     header_version=$(sed -n 's/^#define CAST_VERSION "\([^"]*\)"/\1/p' src/cast.h)
     [ "$version" = "$header_version" ] || fail 'VERSION must match CAST_VERSION in src/cast.h'
@@ -76,7 +78,7 @@ git archive --format=tar.gz --prefix="cast-$version/" "$commit" > "$work/$source
 tar -xzf "$work/$source_name" -C "$work"
 cp "$notes" "$work/release-notes.md"
 # This fresh tree cannot reuse objects or binaries from the developer checkout.
-make -C "$work/cast-$version" X11="$x11" WAYLAND="$wayland" PANEL="$panel" VERSION="$version" SOURCE_COMMIT="$commit" package
+make -C "$work/cast-$version" X11="$x11" WAYLAND="$wayland" PANEL="$panel" VERSION="$version" SOURCE_COMMIT="$commit" OFFICIAL_RELEASE=1 RELEASE_TIMESTAMP="$(git show -s --format=%ct "$commit")" package
 mkdir "$work/assets"
 sh "$work/cast-$version/packaging/dependency-sources.sh" "$work/assets" "$version"
 mv "$work/cast-$version/dist/$binary_name" "$work/assets/$binary_name"

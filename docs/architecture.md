@@ -118,3 +118,32 @@ validated atomic settings batch. Acknowledgements advance only the matching draf
 revision, so newer edits survive an older reply. Header, tabs, exclusion and feedback
 remain pinned while the body scrolls. Native preview target and state controls use
 cached bundled Inter geometry outside the outgoing composition.
+
+## Private workflow integration
+
+The API2 static provider contract supplies typed setting metadata, commands,
+read-only status and bounded runtime callbacks. Community links no provider or
+inference code. Shared schema values are declarative; algorithms remain in the
+private `cast-pro/pro` desktop tree. The future Go server is only a placeholder.
+
+Licensing refresh/mutations and workflow preparation use separate bounded workers.
+A model/font/document candidate is prepared outside capture, then its atomic session
+transaction is acknowledged by the daemon. A configuration revision rejects an older
+prepared candidate after a newer change. Stop/close/cancel commands retire consent
+and caches before acknowledgement without waiting behind a model load.
+
+One source timestamp advances cinematic motion once. Every lane renders the same
+immutable viewport/cursor snapshot. Its persistent bounded renderer pool retains no
+borrowed frame after render returns. Legacy remains the default.
+
+A shared local speech service has four independently consented consumers: virtual
+camera, recording, streaming and speaker notes. Each carries permission, audio epoch,
+model epoch and originating interval. Privacy/source/audio/manual-anchor boundaries
+retire pending work and displayed captions. Notes uses only the already-enabled mic;
+it does not inherit a mixed transcription source. Recognition runs in an optional
+structured helper process; C++ stays out of the capture application.
+
+Recorded subtitle jobs decode the completed privacy-filtered audio, rather than
+reading a new microphone. Completion uses restrictive, non-overwriting sidecars.
+Ordinary status contains no recognized words or script text. Notes document chunks
+use a separate explicit bounded native-client transport.

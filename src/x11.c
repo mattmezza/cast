@@ -54,10 +54,12 @@ typedef struct {
 } WindowRect;
 typedef struct {
     Display *d;
-    Window root, selected, preview, selection, panel, countdown;
+    Window root, selected, preview, selection, panel, countdown, notes;
     GC countdown_gc;
     Pixmap countdown_buffer;
     WindowRect countdown_retired;
+    WindowRect notes_rect, notes_retired;
+    bool notes_retired_first;
     bool countdown_retired_first;
     bool countdown_cancelled, countdown_dirty;
     uint64_t countdown_painted;
@@ -65,7 +67,8 @@ typedef struct {
     Frame countdown_frame, countdown_canvas;
     PreviewText *countdown_text;
     XImage *countdown_image;
-    int panel_pid;
+    int panel_pid, notes_pid;
+    bool notes_exclude;
     Atom wm_delete, wm_state, active_window;
     int screen, xi_opcode, randr_base, xkb_base;
     int preview_target_pending, preview_chrome_height;
@@ -348,7 +351,7 @@ static bool related_window(Xorg *p, Window candidate, Window owned)
 static bool local_window(Xorg *p, Window candidate)
 {
     return related_window(p, candidate, p->panel) || related_window(p, candidate, p->preview) ||
-           related_window(p, candidate, p->countdown);
+           related_window(p, candidate, p->countdown) || related_window(p, candidate, p->notes);
 }
 
 static Window find_client(Xorg *p, Window win, int depth, int *remaining)
@@ -833,7 +836,7 @@ static bool window_rect(Xorg *p, Window window, bool include_frame, WindowRect *
     return true;
 }
 
-static bool panel_identity(Xorg *p, Window window, int peer_pid)
+static bool control_identity(Xorg *p, Window window, int peer_pid, const char *class_name)
 {
     XWindowAttributes attr;
     XClassHint hint = {0};
@@ -848,8 +851,9 @@ static bool panel_identity(Xorg *p, Window window, int peer_pid)
     begin(p);
     Status exists = XGetWindowAttributes(p->d, window, &attr);
     bool normal = exists && attr.class == InputOutput && !attr.override_redirect;
-    bool class_ok = XGetClassHint(p->d, window, &hint) && hint.res_class &&
-                    !strcmp(hint.res_class, "CastPanel");
+    bool class_ok =
+        XGetClassHint(p->d, window, &hint) && hint.res_class &&
+        !strcmp(hint.res_class, class_name);
     if (hint.res_name) {
         XFree(hint.res_name);
     }
@@ -883,12 +887,51 @@ static bool panel_identity(Xorg *p, Window window, int peer_pid)
     return end(p) && normal && class_ok && pid_ok;
 }
 
+/* One bounded footprint survives client destruction until the WM-owned outer
+ * window is hidden or gone. Never discard still-visible decorations on a timer. */
+static void notes_retire(Xorg *p)
+{
+    if (p->notes && p->notes_exclude) {
+        WindowRect live = {0}, outer = {0};
+        if (window_rect(p, p->notes, true, &live) && window_rect(p, live.outer, false, &outer) &&
+            outer.visible) {
+            p->notes_rect = outer;
+        }
+        if (p->notes_rect.visible) {
+            p->notes_retired = p->notes_rect;
+            p->notes_retired_first = true;
+        }
+    }
+    p->notes = None;
+    p->notes_pid = 0;
+    memset(&p->notes_rect, 0, sizeof p->notes_rect);
+}
+static bool notes_retired_rect(Xorg *p, WindowRect *rect)
+{
+    memset(rect, 0, sizeof *rect);
+    if (!p->notes_retired.visible) {
+        return false;
+    }
+    if (window_rect(p, p->notes_retired.outer, false, rect) && rect->visible) {
+        p->notes_retired = *rect;
+        return true;
+    }
+    if (p->notes_retired_first) {
+        *rect = p->notes_retired;
+        return true;
+    }
+    memset(&p->notes_retired, 0, sizeof p->notes_retired);
+    return false;
+}
+
 int x11_panel_register(Platform *platform, uint64_t window, int peer_pid, char *e, size_t n)
 {
     Xorg *p = (Xorg *)platform;
     if (!window || window > UINT32_MAX || peer_pid <= 0 || window == p->root ||
         window == p->selected || window == p->preview || window == p->selection ||
-        !panel_identity(p, (Window)window, peer_pid)) {
+        !control_identity(p, (Window)window, peer_pid,
+                          !strcmp(CAST_APPLICATION_NAME, "cast-pro") ? "CastProPanel"
+                                                                     : "CastPanel")) {
         return fail(e, n,
                     "panel window must be a normal or utility CastPanel window owned by the "
                     "authenticated peer PID");
@@ -1004,7 +1047,19 @@ int x11_capture(Platform *platform, Frame *out, Cursor *cursor, char *e, size_t 
         return fail(e, n, "cannot allocate Xorg capture frame");
     }
     bool outline = p->selecting && p->dragging && p->selection;
-    WindowRect preview = {0}, panel = {0}, countdown = {0}, retired = {0};
+    WindowRect preview = {0}, panel = {0}, countdown = {0}, retired = {0}, notes = {0},
+               notes_retired = {0}, notes_previous = {0};
+    /* Notes geometry and root readback must observe the same server state.
+     * A before/after rectangle union misses intermediate window positions.
+     * Hold only through server readback, never pixel conversion or encoding. */
+    bool notes_grab =
+        drawable == p->root && ((p->notes && p->notes_exclude) || p->notes_retired.visible);
+    if (notes_grab) {
+        /* Allocate/attach capture storage before stopping other X clients. */
+        image_prepare(p, visual, depth, p->sw, p->sh);
+        XGrabServer(p->d);
+        XSync(p->d, False);
+    }
     if (drawable == p->root) {
         if (p->preview && !p->preview_disabled) {
             window_rect(p, p->preview, true, &preview);
@@ -1022,6 +1077,19 @@ int x11_capture(Platform *platform, Frame *out, Cursor *cursor, char *e, size_t 
                 memset(&p->countdown_retired, 0, sizeof p->countdown_retired);
             }
         }
+        if (p->notes && p->notes_exclude) {
+            if (window_rect(p, p->notes, true, &notes)) {
+                if (notes.visible) {
+                    p->notes_rect = notes;
+                }
+            } else {
+                notes_retire(p);
+            }
+        }
+        if (p->notes_retired_first) {
+            notes_previous = p->notes_retired;
+        }
+        notes_retired_rect(p, &notes_retired);
         if (p->panel && !window_rect(p, p->panel, true, &panel)) {
             x11_panel_unregister(platform);
         }
@@ -1032,7 +1100,9 @@ int x11_capture(Platform *platform, Frame *out, Cursor *cursor, char *e, size_t 
     if (outline) {
         XSync(p->d, False);
     }
-    image_prepare(p, visual, depth, p->sw, p->sh);
+    if (!notes_grab) {
+        image_prepare(p, visual, depth, p->sw, p->sh);
+    }
     int x = drawable == p->root ? p->sx : 0, y = drawable == p->root ? p->sy : 0;
     XImage *image = p->image;
     begin(p);
@@ -1045,6 +1115,10 @@ int x11_capture(Platform *platform, Frame *out, Cursor *cursor, char *e, size_t 
         ok = image != NULL;
     }
     ok = end(p) && ok;
+    if (notes_grab) {
+        XUngrabServer(p->d);
+        XSync(p->d, False);
+    }
     if (outline) {
         XMapRaised(p->d, p->selection);
     }
@@ -1063,6 +1137,10 @@ int x11_capture(Platform *platform, Frame *out, Cursor *cursor, char *e, size_t 
     if (drawable == p->root) {
         mask_window_rect(p, out, &preview);
         mask_window_rect(p, out, &panel);
+        mask_window_rect(p, out, &notes);
+        mask_window_rect(p, out, &notes_retired);
+        mask_window_rect(p, out, &notes_previous);
+        p->notes_retired_first = false;
         mask_window_rect(p, out, &countdown);
         mask_window_rect(p, out, &retired);
         p->countdown_retired_first = false;
@@ -1533,8 +1611,14 @@ void x11_events(Platform *platform, Compositor *comp, const Config *cfg, bool pr
             XRRUpdateConfiguration(&ev);
             continue;
         }
+        if ((ev.type == DestroyNotify && ev.xdestroywindow.window == p->notes) ||
+            (ev.type == PropertyNotify && ev.xproperty.window == p->notes &&
+             !control_identity(p, p->notes, p->notes_pid, "org.cast.Pro.Notes"))) {
+            notes_retire(p);
+        }
         if (ev.type == PropertyNotify && ev.xproperty.window == p->panel &&
-            !panel_identity(p, p->panel, p->panel_pid)) {
+            !control_identity(p, p->panel, p->panel_pid,
+                              !strcmp(CAST_APPLICATION_NAME, "cast-pro") ? "CastProPanel" : "CastPanel")) {
             x11_panel_unregister(platform);
         }
         if (ev.type == DestroyNotify && ev.xdestroywindow.window == p->panel) {
@@ -1677,8 +1761,13 @@ static void preview_create(Xorg *p, const Config *cfg)
     p->preview_h = h;
     p->preview_border = 0;
     p->preview_dragging = false;
-    XStoreName(p->d, p->preview, "cast output preview");
-    XClassHint hint = {.res_name = "cast-preview", .res_class = "CastPreview"};
+    XStoreName(p->d, p->preview,
+               !strcmp(CAST_APPLICATION_NAME, "cast-pro") ? "Cast Pro output preview"
+                                                          : "cast output preview");
+    XClassHint hint = {.res_name = !strcmp(CAST_APPLICATION_NAME, "cast-pro") ? "cast-pro-preview"
+                                                                              : "cast-preview",
+                       .res_class = !strcmp(CAST_APPLICATION_NAME, "cast-pro") ? "CastProPreview"
+                                                                               : "CastPreview"};
     XSetClassHint(p->d, p->preview, &hint);
     Atom type = XInternAtom(p->d, "_NET_WM_WINDOW_TYPE", False);
     Atom utility = XInternAtom(p->d, "_NET_WM_WINDOW_TYPE_UTILITY", False);
@@ -2456,4 +2545,81 @@ void x11_doctor(const Config *cfg, char *e, size_t n)
              xi ? "available" : "missing: keys/clicks unsupported",
              comp ? "available" : "missing: window capture unsupported");
     XCloseDisplay(d);
+}
+
+int x11_notes_register(Platform *platform, uint64_t window, int peer_pid, bool exclude, char *error,
+                       size_t size)
+{
+    Xorg *p = (Xorg *)platform;
+    if (!window) {
+        if (p->notes_pid && p->notes_pid != peer_pid) {
+            return fail(error, size, "notes peer does not own registration");
+        }
+        notes_retire(p);
+        snprintf(error, size, "notes window unregistered");
+        return 0;
+    }
+    if (window > UINT32_MAX || peer_pid <= 0 || window == p->root || window == p->selected ||
+        window == p->panel || window == p->preview || window == p->countdown ||
+        !control_identity(p, (Window)window, peer_pid, "org.cast.Pro.Notes")) {
+        return fail(error, size,
+                    "notes window must be an owned normal/utility Cast Pro Notes window");
+    }
+    WindowRect rect;
+    if (exclude && p->notes != (Window)window && p->notes_retired.visible &&
+        window_rect(p, p->notes_retired.outer, false, &rect) && rect.visible) {
+        return fail(error, size,
+                    "previous notes window frame is still visible; registration deferred");
+    }
+    if (p->notes && p->notes != (Window)window) {
+        return fail(error, size, "another notes window is still registered");
+    }
+    if (!window_rect(p, (Window)window, true, &rect)) {
+        return fail(error, size, "notes window geometry unavailable");
+    }
+    begin(p);
+    XSelectInput(p->d, (Window)window, StructureNotifyMask | PropertyChangeMask);
+    if (!end(p)) {
+        return fail(error, size, "notes window disappeared during registration");
+    }
+    p->notes = (Window)window;
+    p->notes_pid = peer_pid;
+    p->notes_exclude = exclude;
+    if (rect.visible) {
+        p->notes_rect = rect;
+    }
+    if (!exclude) {
+        x11_notes_exclusion(platform, false);
+    }
+    snprintf(error, size,
+             exclude ? "notes registered: Xorg neutral masking enabled"
+                     : "notes registered: capture exclusion disabled");
+    return 0;
+}
+void x11_notes_exclusion(Platform *platform, bool exclude)
+{
+    Xorg *p = (Xorg *)platform;
+    p->notes_exclude = exclude;
+    if (!exclude) {
+        memset(&p->notes_rect, 0, sizeof p->notes_rect);
+        memset(&p->notes_retired, 0, sizeof p->notes_retired);
+        p->notes_retired_first = false;
+    }
+}
+bool x11_notes_registered(Platform *platform)
+{
+    Xorg *p = (Xorg *)platform;
+    WindowRect rect;
+    if (p->notes) {
+        if (!window_rect(p, p->notes, true, &rect)) {
+            notes_retire(p);
+        } else if (rect.visible) {
+            p->notes_rect = rect;
+        }
+    }
+    return p->notes != None;
+}
+bool x11_notes_excluded(Platform *platform)
+{
+    return x11_notes_registered(platform) && ((Xorg *)platform)->notes_exclude;
 }

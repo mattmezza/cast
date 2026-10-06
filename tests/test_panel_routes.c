@@ -26,7 +26,13 @@ static int route_command(PanelClient *client, int argc, const char *const *args,
         argv[i] = (char *)args[i];
     }
     char response[CAST_ERR];
-    int result = app_command((App *)client, argc, argv, response, sizeof response);
+    int result;
+    if (argc > 0 && !strcmp(args[0], "license")) {
+        result = cast_edition_command(argc, argv, ((App *)client)->config.licensing_file, true,
+                                      response, sizeof response, error, size);
+    } else {
+        result = app_command((App *)client, argc, argv, response, sizeof response);
+    }
     snprintf(error, size, "%s", result ? response : "");
     return result;
 }
@@ -96,14 +102,171 @@ static void check_text_contrast(void)
         }
     }
 }
+static void check_license_layout(void)
+{
+    /* An SDL software surface exercises real Clay layout/fonts without X11,
+     * sockets, capture or a running daemon. Mutations use the explicit mock
+     * controller above and a temporary private store. */
+    assert(SDL_SetEnvironmentVariable(SDL_GetEnvironment(), "SDL_VIDEODRIVER", "dummy", true));
+    assert(SDL_Init(SDL_INIT_VIDEO));
+    assert(TTF_Init());
+    Panel *panel = calloc(1, sizeof *panel);
+    App *app = calloc(1, sizeof *app);
+    assert(panel && app);
+    config_defaults(&app->config);
+    app->state.virtual_paused = true;
+    app->state.stream_paused = true;
+    char directory[] = "/tmp/cast-license-layout-XXXXXX";
+    assert(mkdtemp(directory));
+    snprintf(app->config.licensing_file, sizeof app->config.licensing_file, "%s/license.json",
+             directory);
+    panel->snapshot.config = app->config;
+    panel->snapshot.state = app->state;
+    panel->snapshot.connected = true;
+    snprintf(panel->snapshot.exclusion, sizeof panel->snapshot.exclusion,
+             "Private synthetic fixture: capture exclusion is not required.");
+    panel->client = (PanelClient *)app;
+    panel->density = panel->input_scale = 1;
+    panel->width = 520;
+    panel->height = 760;
+    panel->view = VIEW_OPERATE;
+    panel->open_section = panel->open_lane = -1;
+    panel->window =
+        SDL_CreateWindow("private synthetic License layout", 520, 760, SDL_WINDOW_HIDDEN);
+    assert(panel->window);
+    SDL_Surface *surface_image = SDL_CreateSurface(520, 760, SDL_PIXELFORMAT_RGBA32);
+    assert(surface_image);
+    panel->renderer = SDL_CreateSoftwareRenderer(surface_image);
+    assert(panel->renderer);
+    assert(SDL_SetRenderDrawBlendMode(panel->renderer, SDL_BLENDMODE_BLEND));
+    size_t font_length = (size_t)(cast_panel_font_end - cast_panel_font_data);
+    for (unsigned i = 0; i < 5; i++) {
+        SDL_IOStream *stream = SDL_IOFromConstMem(cast_panel_font_data, font_length);
+        panel->font[i] = TTF_OpenFontIO(stream, true, (float)font_sizes[i]);
+        stream = SDL_IOFromConstMem(cast_panel_font_data, font_length);
+        panel->raster_font[i] = TTF_OpenFontIO(stream, true, (float)font_sizes[i]);
+        assert(panel->font[i] && panel->raster_font[i]);
+    }
+    uint32_t memory_size = Clay_MinMemorySize();
+    void *arena = malloc(memory_size);
+    assert(arena);
+    Clay_Initialize(Clay_CreateArenaWithCapacityAndMemory(memory_size, arena),
+                    (Clay_Dimensions){520, 760},
+                    (Clay_ErrorHandler){.errorHandlerFunction = clay_error, .userData = panel});
+    Clay_SetMeasureTextFunction(measure, panel);
+    char error[CAST_ERR];
+    assert(!cast_edition_snapshot(app->config.licensing_file, 100, &panel->snapshot.edition, error,
+                                  sizeof error));
+    unsigned calls_before = route_calls;
+    Widget open = {.id = 9200, .enabled = true, .action = A_LICENSE};
+    activate(panel, &open);
+    assert(panel->view == VIEW_LICENSE && route_calls == calls_before);
+    for (unsigned width = 360; width <= 520; width += 160) {
+        panel->width = (float)width;
+        Clay_SetLayoutDimensions((Clay_Dimensions){panel->width, panel->height});
+        Clay_RenderCommandArray commands = layout(panel);
+        render(panel, commands);
+        assert(SDL_FlushRenderer(panel->renderer));
+        assert(!panel->error[0]);
+        Widget *badge = find_widget(panel, 9200);
+        assert(badge && badge->enabled && badge->box.x >= 0 &&
+               badge->box.x + badge->box.width <= width + 1);
+        assert(!widget_in_scroll(panel, badge));
+        Widget *scratch = find_widget(panel, 1000 + (uint32_t)FIELD_COUNT * 3);
+        assert(scratch && scratch->enabled && scratch->index == (int)FIELD_COUNT);
+        assert(!find_widget(panel, 9201)->enabled && !find_widget(panel, 9207));
+        for (int i = 0; i < panel->widget_count; i++) {
+            const Widget *w = &panel->widgets[i];
+            assert(w->box.x >= 0 && w->box.x + w->box.width <= width + 1);
+        }
+        const char *evidence = getenv("CAST_LICENSE_LAYOUT_EVIDENCE");
+        if (evidence) {
+            char path[4096];
+            snprintf(path, sizeof path, "%s/license-%u.bmp", evidence, width);
+            assert(SDL_SaveBMP(surface_image, path));
+        }
+    }
+    panel->width = 520;
+    Clay_SetLayoutDimensions((Clay_Dimensions){520, 760});
+    layout(panel);
+    set_focus(panel, find_widget(panel, 1000 + (uint32_t)FIELD_COUNT * 3));
+    insert_text(panel, "/tmp/explicit-license-file.json");
+    assert(!strcmp(panel->edit[FIELD_COUNT].value, "/tmp/explicit-license-file.json"));
+    SDL_KeyboardEvent enter = {.key = SDLK_RETURN};
+    key_event(panel, &enter);
+    assert(route_calls == calls_before && !panel->active_text); /* Enter never imports. */
+    layout(panel);
+    assert(find_widget(panel, 9201)->enabled);
+    activate(panel, find_widget(panel, 9206));
+    char *clipboard = SDL_GetClipboardText();
+    assert(clipboard && strstr(clipboard, "cinematic_zoom=") &&
+           strstr(clipboard, "speech_teleprompter=") && !strstr(clipboard, "payload") &&
+           !strstr(clipboard, "planned/"));
+    SDL_free(clipboard);
+    State state_before = app->state;
+    Config config_before = app->config;
+    activate(panel, find_widget(panel, 9203));
+    assert(panel->license_remove_confirmation && route_calls == calls_before);
+    layout(panel);
+    activate(panel, find_widget(panel, 9204));
+    assert(!panel->license_remove_confirmation && route_calls == calls_before);
+    activate(panel, find_widget(panel, 9203));
+    layout(panel);
+    activate(panel, find_widget(panel, 9205));
+    assert(route_calls == calls_before + 1);
+    assert(!memcmp(&state_before, &app->state, sizeof state_before));
+    assert(!memcmp(&config_before, &app->config, sizeof config_before));
+    route_acknowledge(panel, app);
+    layout(panel);
+    SDL_KeyboardEvent escape = {.key = SDLK_ESCAPE};
+    key_event(panel, &escape);
+    assert(panel->view == VIEW_OPERATE);
+    Widget setup = {.enabled = true, .action = A_SETUP, .index = 1};
+    activate(panel, &setup);
+    assert(panel->view == VIEW_SETUP);
+    activate(panel, &open);
+    assert(panel->view == VIEW_LICENSE);
+    key_event(panel, &escape);
+    assert(panel->view == VIEW_SETUP);
+    key_event(panel, &escape);
+    assert(panel->view == VIEW_OPERATE);
+    char lock_path[4096];
+    snprintf(lock_path, sizeof lock_path, "%s/.license.json.lock", directory);
+    unlink(lock_path);
+    snprintf(lock_path, sizeof lock_path, "%s/.license.json.session", directory);
+    unlink(lock_path);
+    assert(!rmdir(directory));
+    /* Cleanup owns fonts/render surfaces; no worker client exists in this mock. */
+    for (unsigned i = 0; i < TEXT_CACHE_MAX; i++) {
+        SDL_DestroyTexture(panel->cache[i].texture);
+        free(panel->cache[i].text);
+    }
+    for (unsigned i = 0; i < 5; i++) {
+        TTF_CloseFont(panel->font[i]);
+        TTF_CloseFont(panel->raster_font[i]);
+    }
+    SDL_DestroyRenderer(panel->renderer);
+    SDL_DestroySurface(surface_image);
+    SDL_DestroyWindow(panel->window);
+    free(arena);
+    free(panel);
+    free(app);
+    TTF_Quit();
+    SDL_Quit();
+    puts("SDL dummy License/About layout 360/520, keyboard scratch, safe clipboard, confirmed "
+         "removal, privacy and navigation tests passed");
+}
+
 int main(void)
 {
+    initialize_fields();
     check_text_contrast();
+    check_license_layout();
     /* A control has one home: connection fields never leak into Compose, and
      * the camera size draft cannot be stranded behind a duplicate field slot. */
     assert(sizeof section_names / sizeof *section_names == 6);
     for (size_t i = 0; i < FIELD_COUNT; i++) {
-        assert(field_section(&fields[i]) >= 0 && field_section(&fields[i]) <= 8);
+        assert(field_section(&fields[i]) >= 0 && field_section(&fields[i]) <= 10);
         for (size_t j = i + 1; j < FIELD_COUNT; j++) {
             assert(strcmp(fields[i].key, fields[j].key));
         }
@@ -112,6 +275,13 @@ int main(void)
     assert(field_section(&fields[find_field("audio.mic_source")]) == 6);
     assert(field_section(&fields[find_field("stream.key_file")]) == 7);
     assert(field_section(&fields[find_field("record.countdown")]) == 8);
+    assert(field_section(&fields[find_field("licensing.file")]) == 9);
+    assert(find_field("record.rate_control") >= 0);
+    assert(find_field("record.bitrate_kbps") >= 0);
+    assert(find_field("stream.video_encoder") >= 0);
+    assert(!license_url_valid("http://example.invalid"));
+    assert(!license_url_valid("https://example.invalid\n--command"));
+    assert(license_url_valid("https://example.invalid/info"));
     assert(field_section(&fields[find_field("output.pause_text")]) == 5);
     SDL_MouseWheelEvent wheel = {.y = .25f, .direction = SDL_MOUSEWHEEL_NORMAL};
     assert(wheel_delta(&wheel) == 1.5f);

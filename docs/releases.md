@@ -9,13 +9,13 @@ unit, IPC, mock portal, Xorg and native panel checks must pass before asset uplo
 Only the publishing job gets release write permission. External actions are pinned
 to commits, and the installed Arch package versions are recorded in the build manifest.
 
-For v0.9 (executable/package version 0.9.0):
+For v0.10 (executable/package version 0.10.0):
 
 ```sh
 git push origin main
-git tag -a v0.9 -m 'cast v0.9'
-git push origin refs/tags/v0.9
-make release-ci RELEASE_TAG=v0.9 RELEASE_NOTES=docs/release-notes/0.9.0.md
+git tag -a v0.10 -m 'cast v0.10'
+git push origin refs/tags/v0.10
+make release-ci RELEASE_TAG=v0.10 RELEASE_NOTES=docs/release-notes/0.10.0.md
 gh run list --workflow release-arch.yml
 ```
 
@@ -50,7 +50,7 @@ gh workflow run release-arch.yml --ref main
 
 An empty `release_tag` input tests the selected commit and preserves downloadable
 Actions artifacts for 14 days. To attach missing assets after a build/upload failure,
-dispatch with `-f release_tag=v0.9`; this verifies the existing release and exact
+dispatch with `-f release_tag=v0.10`; this verifies the existing release and exact
 tag before building. Any already-uploaded asset name causes publication to stop;
 inspect partial uploads rather than silently replacing them.
 
@@ -129,3 +129,66 @@ and binary refer to a clean, tagged revision.
 Set `PANEL=1` on package/release targets to include the optional Clay/SDL3 panel.
 The selected value is propagated into the isolated release build; that environment
 needs SDL3 and SDL3_ttf development packages. Published v0.1 assets remain unchanged.
+
+## Separate Pro staging and offline updates
+
+The public Arch/AUR recipes and workflow remain Community-only; they never check
+out private code or access issuer keys. Public archival scans run before release
+archives. `make package EDITION=community` creates the existing Community aliases
+plus an edition/media-qualified Linux archive, an explicit public-source archive and
+checksums. Neither local package target publishes. Public source roots are an
+allowlist in `packaging/public-boundary.py`; forbidden private directories, key
+material and private provider files fail the scan even when ignored by Git.
+
+Pro staging uses `make package EDITION=pro MEDIA_PROFILE=lgpl
+PRO_ROOT=/absolute/path/cast-pro`. Artifacts are named
+`cast-pro-VERSION-linux-ARCH-lgpl.tar.gz`, with separate package/application IDs,
+application-local shared media, notices, machine-readable dependency inventory and
+integration manifest. Private application source/issuer keys never enter those
+archives. Local stages are visibly nonproduction. The private source tree has its
+own explicit source/artifact manifest and must be preserved through a private channel.
+The matching `cast-pro-VERSION-linux-ARCH-lgpl-dependency-sources.tar.gz` contains
+controlled dependency source/build materials and is included in package checksums.
+
+Official Pro additionally requires compiled production trust keys and authenticated
+release identity, a private `release/production.json` matching version, core/private
+revision, UTC release timestamp, platform and media profile, its trusted-header hash,
+legal and patent/SDK review references, and clean-runtime acceptance. Exact controlled
+dependency sources/build materials and every runtime chosen-license review are required.
+Test keys, candidate SDKs, missing metadata and unresolved dynamic loads fail closed.
+`OFFICIAL_RELEASE=1` is an input, never an exemption. Production key generation and
+signing happen outside public CI/repositories. Private CI must receive read-only
+private source and separately protected signing inputs; no private CI is fabricated
+in this public repository. Existing published releases stay immutable.
+
+No hosted Pro channel/storefront has been configured. `cast-pro update` reports that
+status honestly and never falls back to GitHub Community assets. The working local
+channel consumes a directory containing `manifest.json` and `cast-pro`. The manifest
+uses the private issuer's update domain and separate update trust keys. Its exact
+signed payload binds product/edition, version, platform, LGPL profile, extension API,
+release timestamp, core/private revisions and SHA-256 of the artifact.
+
+```sh
+cast-pro update --bundle /absolute/path/bundle
+cast-pro update --bundle /absolute/path/bundle --download-only /absolute/private/download-directory
+cast-pro update --bundle /absolute/path/bundle --install /absolute/path/cast-pro
+cast-pro update --bundle /absolute/path/older-bundle --install /absolute/path/cast-pro --rollback
+```
+
+The first command verifies without installation. Download-only may save a signed
+ineligible release with a clear warning; implicit install cannot replace an eligible
+installation with an ineligible release. Paths are caller-chosen, never manifest
+commands. Bounded regular-file snapshots are copied before authentication, preventing
+artifact mutation between hash checking and install. Installation requires an owned
+non-writable-by-others parent, stops at the daemon session lock if running, preserves
+config/license/media, stages/fsyncs and atomically renames. Existing binaries are
+retained as `cast-pro.rollback`; preserve/remove an old backup deliberately before
+another update. Downgrades require explicit `--rollback` and still require signed
+identity and license eligibility. No capture starts during updates.
+
+Offline bundles currently replace only the native executable; compatible reviewed
+shared-media libraries must already be installed. A media ABI/profile change needs
+an independently staged complete edition package and clean runtime validation.
+Newest-eligible hosted release discovery and owner endpoints remain production
+inputs, not successful simulated network operations. Archive checksums provide
+integrity; only the signed Pro manifest authenticates Pro release provenance.

@@ -29,11 +29,11 @@ def wait_until(predicate, description, timeout=10):
     raise AssertionError(description)
 
 
-def exercise(focused_setup_parent=False, focused_exclusion=False, focused_lifecycle=False):
+def exercise(focused_setup_parent=False, focused_exclusion=False, focused_lifecycle=False, focused_license=False):
     with tempfile.TemporaryDirectory(prefix="cast-panel-redesign-") as directory:
         root = Path(directory)
         environment = os.environ.copy()
-        environment.update(XDG_RUNTIME_DIR=directory, SDL_VIDEODRIVER="x11",
+        environment.update(XDG_RUNTIME_DIR=directory, XDG_DATA_HOME=str(root / "data"), SDL_VIDEODRIVER="x11",
                            CAST_PANEL_UI_STATE=str(root / "ui.json"))
         scale = float(environment.get("SDL_VIDEO_X11_SCALING_FACTOR", "1"))
         config = root / "cast.conf"
@@ -124,7 +124,7 @@ def exercise(focused_setup_parent=False, focused_exclusion=False, focused_lifecy
                 item = fresh
                 x, y, width, height = item["box"]
                 area = ui()["scroll"]
-                pinned = (item["id"] in (5, 6, 7, 8, 9, 10, 11, 12, 22, 99, 9100, 9101)
+                pinned = (item["id"] in (5, 6, 7, 8, 9, 10, 11, 12, 22, 99, 9100, 9101, 9200)
                           or 160 <= item["id"] <= 166
                           or 400 <= item["id"] < 500 or 700 <= item["id"] <= 717
                           or 6000 <= item["id"] <= 6501
@@ -365,6 +365,61 @@ def exercise(focused_setup_parent=False, focused_exclusion=False, focused_lifecy
             pinned_accessible()
             assert widget(30) and widget(32) and widget(150), "start actions are hidden"
             capture("operate-task-cards")
+            if focused_license:
+                before = state()
+                click_widget(9200)
+                wait_until(lambda: ui()["view"] == 4 and widget("license.import_path"), "License/About did not open")
+                assert ui()["premium_implemented"] is False
+                assert not widget(9201)["enabled"] and not widget(9207), "empty import/storefront controls misleading"
+                for width in (360, 520):
+                    xdo("windowsize", window, round(width*scale), round(760*scale))
+                    time.sleep(.2)
+                    pinned_accessible()
+                    capture(f"license-about-{width}")
+                click_widget(9206)
+                summary = subprocess.check_output(["xclip", "-selection", "clipboard", "-o"], env=environment, text=True)
+                assert "Community" in summary or "community" in summary
+                assert "planned/not_implemented" in summary
+                assert "signature" not in summary and "payload" not in summary
+                imported = root / "data" / "cast" / "license.json"
+                imported.parent.mkdir(parents=True, exist_ok=True)
+                imported.write_text("UNVERIFIED private invalid fixture")
+                imported.chmod(0o600)
+                click_widget(9203)
+                wait_until(lambda: ui()["license_remove_confirmation"], "Remove had no confirmation")
+                assert imported.exists(), "opening confirmation removed file"
+                click_widget(9204)
+                wait_until(lambda: not ui()["license_remove_confirmation"], "removal Cancel failed")
+                assert imported.exists(), "Cancel removed imported file"
+                click_widget(9203)
+                click_widget(9205)
+                acknowledge()
+                wait_until(lambda: not imported.exists(), "authenticated removal was not acknowledged")
+                invalid = root / "invalid-license.json"
+                invalid.write_text('{"schema":1,"not":"a license"}')
+                edit("license.import_path", str(invalid))
+                before = state()
+                click_widget(9201)
+                acknowledge()
+                assert not imported.exists(), "Community imported unverified token"
+                after = state()
+                assert after["virtual"] == before["virtual"] and after["record"] == before["record"] and after["stream"]["state"] == before["stream"]["state"], "license mutation changed output state"
+                assert config.read_bytes() == original_config, "License page rewrote INI"
+                xdo("key", "--clearmodifiers", "Escape")
+                wait_until(lambda: ui()["view"] == 0, "License Back lost Operate parent")
+                click_widget(150)
+                wait_until(lambda: ui()["stream_setup"], "Streaming setup did not open")
+                click_widget(9200)
+                wait_until(lambda: ui()["view"] == 4, "About from setup failed")
+                xdo("key", "--clearmodifiers", "Escape")
+                wait_until(lambda: ui()["stream_setup"], "About lost streaming setup parent")
+                xdo("key", "--clearmodifiers", "Escape")
+                wait_until(lambda: ui()["view"] == 0, "About overwrote streaming setup parent")
+                click_widget(7)
+                assert panel.wait(timeout=8) == 0
+                cli("quit")
+                daemon.wait(timeout=8)
+                return
             if focused_exclusion:
                 # Revert must discard unfinished ordinary text before focus can auto-commit it.
                 navigate(5)
@@ -885,8 +940,11 @@ if __name__ == "__main__":
     focused = "--setup-parent-only" in sys.argv
     exclusion = "--exclusion-only" in sys.argv
     lifecycle = "--lifecycle-only" in sys.argv
-    exercise(focused_setup_parent=focused, focused_exclusion=exclusion, focused_lifecycle=lifecycle)
-    if lifecycle:
+    license_only = "--license-only" in sys.argv
+    exercise(focused_setup_parent=focused, focused_exclusion=exclusion, focused_lifecycle=lifecycle, focused_license=license_only)
+    if license_only:
+        print("native License/About: planned features, masked diagnostics, acknowledged import/remove, UI confirmation, privacy and parent navigation passed")
+    elif lifecycle:
         print("native application: automatic panel + daemon, retained outputs on Close, daemon stop/restart, saved recording and confirmed Quit passed")
     elif focused:
         print("native panel: streaming setup parent/view/reopen passed")

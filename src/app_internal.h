@@ -1,8 +1,11 @@
 #ifndef APP_INTERNAL_H
 #define APP_INTERNAL_H
 #include "cast.h"
+#include "edition_service.h"
 #include "panel_transport.h"
+#include "pro_runtime.h"
 #include "stream.h"
+typedef struct AppRuntime AppRuntime;
 
 /* Daemon session storage stays stable while asynchronous selection references it. */
 typedef struct {
@@ -37,6 +40,9 @@ typedef struct App {
     char countdown_path[PATH_MAX];
     bool record_finalizing;
     PanelTransport *panel;
+    EditionService *edition;
+    AppRuntime *runtime;
+    bool runtime_prepared;
 } App;
 int app_error(char *, size_t, const char *, ...) __attribute__((format(printf, 3, 4)));
 int app_copy_string(char *, size_t, const char *, char *, size_t);
@@ -53,4 +59,20 @@ int app_output_frames(App *, char *, size_t);
 int app_freeze_frame(App *, int lane, Frame *, char *, size_t);
 void app_sync_source(App *);
 int app_shutdown_privacy(App *, char *, size_t);
+int app_runtime_open(App *, char *, size_t);
+void app_runtime_sync(App *);
+void app_runtime_drain(App *);
+void app_runtime_startup_motion(App *);
+void app_runtime_internal_reply(App *, int, const char *);
+void app_runtime_barrier(App *, CastRuntimeBarrier, unsigned mask);
+void app_runtime_captions(App *, int lane, Frame *);
+void app_runtime_recording_finished(App *);
+void app_runtime_stop(App *);
+void app_runtime_close(App *);
+void app_runtime_commit(App *);
+int app_runtime_client(const Config *, int, const char *const *, char *, size_t);
+int app_ipc_connect(const char *, int timeout_ms, char *, size_t);
+int app_runtime_notes_register(App *, int argc, char **, int peer_pid, char *, size_t);
+int app_apply_candidate(App *, Config *, char *, size_t);
+int app_runtime_safety(App *, int, char **, char *, size_t);
 #endif

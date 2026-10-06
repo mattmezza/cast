@@ -18,5 +18,9 @@ void x11_doctor(const Config *, char *, size_t);
 int x11_panel_register(Platform *, uint64_t, int, char *, size_t);
 void x11_panel_unregister(Platform *);
 void x11_panel_status(Platform *, char *, size_t);
+int x11_notes_register(Platform *, uint64_t, int, bool, char *, size_t);
+void x11_notes_exclusion(Platform *, bool);
+bool x11_notes_registered(Platform *);
+bool x11_notes_excluded(Platform *);
 #endif
 #endif

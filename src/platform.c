@@ -77,6 +77,7 @@ void platform_close(Platform *p)
 }
 Capabilities platform_capabilities(Platform *p)
 {
+    (void)p;
 #ifdef WITH_X11
     if (p->backend == XORG) {
         return x11_capabilities(p->impl);
@@ -94,6 +95,7 @@ Capabilities platform_capabilities(Platform *p)
 }
 uint64_t platform_source_generation(Platform *p)
 {
+    (void)p;
 #ifdef WITH_X11
     if (p->backend == XORG) {
         return x11_source_generation(p->impl);
@@ -191,6 +193,8 @@ int platform_command(Platform *p, Config *cfg, int argc, char **argv, char *e, s
 }
 int platform_reconfigure(Platform *p, const Config *cfg, char *e, size_t n)
 {
+    (void)e;
+    (void)n;
 #ifdef WITH_X11
     if (p->backend == XORG) {
         return x11_reconfigure(p->impl, cfg, e, n);
@@ -339,4 +343,40 @@ void platform_panel_status(Platform *p, char *e, size_t n)
     (void)p;
 #endif
     snprintf(e, n, "unsupported: this backend cannot exclude the panel from captured pixels");
+}
+
+int platform_notes_register(Platform *p,uint64_t window,int pid,bool exclude,char *error,size_t size)
+{
+#ifdef WITH_X11
+    if (p && p->backend == XORG) return x11_notes_register(p->impl,window,pid,exclude,error,size);
+#else
+    (void)p; (void)window; (void)pid; (void)exclude;
+#endif
+    snprintf(error,size,"notes attached; this backend cannot exclude local control windows"); return 0;
+}
+void platform_notes_exclusion(Platform *p,bool exclude)
+{
+#ifdef WITH_X11
+    if (p && p->backend == XORG) x11_notes_exclusion(p->impl,exclude);
+#else
+    (void)p; (void)exclude;
+#endif
+}
+bool platform_notes_registered(Platform *p)
+{
+#ifdef WITH_X11
+    if (p && p->backend == XORG) return x11_notes_registered(p->impl);
+#else
+    (void)p;
+#endif
+    return false;
+}
+bool platform_notes_excluded(Platform *p)
+{
+#ifdef WITH_X11
+    if (p && p->backend == XORG) return x11_notes_excluded(p->impl);
+#else
+    (void)p;
+#endif
+    return false;
 }

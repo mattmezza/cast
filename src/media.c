@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #endif
 #include "media_internal.h"
+#include "media_codec.h"
 #include "stream.h"
 #include <errno.h>
 #include <libavcodec/avcodec.h>
@@ -23,6 +24,11 @@ struct Media {
 };
 Media *media_open(const Config *cfg, char *e, size_t n)
 {
+#ifdef CAST_EDITION_PRO
+    if (media_profile_validate(true, e, n)) {
+        return NULL;
+    }
+#endif
     Media *m = calloc(1, sizeof(*m));
     if (!m) {
         snprintf(e, n, "media allocation failed");
@@ -155,9 +161,9 @@ void media_stream_status(Media *m, StreamSnapshot *status)
 }
 int media_record_start(Media *m, const Config *cfg, const char *path, char *e, size_t n)
 {
-    audio_record_privacy(m->audio);
     int rc = recorder_start(m->recorder, cfg, path, e, n);
     if (!rc) {
+        audio_record_privacy(m->audio);
         m->record_cut = m->record_silent = false;
     }
     return rc;
@@ -238,7 +244,9 @@ static bool encoding_changed(const Config *a, const Config *b)
     return strcmp(a->video_codec, b->video_codec) || strcmp(a->audio_codec, b->audio_codec) ||
            strcmp(a->record_container, b->record_container) ||
            strcmp(a->record_preset, b->record_preset) || a->record_crf != b->record_crf ||
-           a->record_queue != b->record_queue;
+           a->record_queue != b->record_queue ||
+           a->record_bitrate_kbps != b->record_bitrate_kbps ||
+           strcmp(a->record_rate_control, b->record_rate_control);
 }
 int media_reconfigure(Media *m, const Config *cfg, bool recording, char *e, size_t n)
 {
@@ -400,6 +408,10 @@ bool media_record_finalizing(Media *m)
 {
     return recorder_finalizing(m->recorder);
 }
+void media_record_encoder(Media *m, char *name, size_t name_size, char *detail, size_t detail_size)
+{
+    recorder_encoder(m->recorder, name, name_size, detail, detail_size);
+}
 uint64_t media_record_duration(Media *m)
 {
     return recorder_duration(m->recorder);
@@ -412,15 +424,27 @@ void media_audio_status(Media *m, char *out, size_t n)
 {
     audio_status(m->audio, out, n);
 }
+int media_audio_selection(Media *m, int source, uint64_t ns, float *samples,
+                          unsigned frames, char *error, size_t size)
+{
+    if (!m || !m->audio) {
+        snprintf(error, size, "audio capture unavailable");
+        return -1;
+    }
+    return audio_read_selection(m->audio, source, ns, samples, frames, error, size);
+}
 void media_doctor(const Config *cfg, char *out, size_t n)
 {
     camera_doctor(cfg, out, n);
+    media_profile_report(out, n);
+    char readiness[CAST_ERR];
+    int ready = media_codec_check(cfg, false, readiness, sizeof(readiness));
     size_t used = strlen(out);
-    snprintf(
-        out + used, n - used,
-        "Encoders: video %s=%s, audio %s=%s (software libx264/aac baseline).\n", cfg->video_codec,
-        avcodec_find_encoder_by_name(cfg->video_codec) ? "available" : "MISSING", cfg->audio_codec,
-        avcodec_find_encoder_by_name(cfg->audio_codec) ? "available" : "MISSING");
+    if (used < n) {
+        snprintf(out + used, n - used, "Recording encoder: %s%s; audio %s=%s.\n",
+                 ready ? "unavailable: " : "", readiness, cfg->audio_codec,
+                 avcodec_find_encoder_by_name(cfg->audio_codec) ? "available" : "MISSING");
+    }
     used = strlen(out);
     struct statvfs fs;
     if (statvfs(cfg->record_dir, &fs) < 0 || access(cfg->record_dir, W_OK | X_OK) < 0) {

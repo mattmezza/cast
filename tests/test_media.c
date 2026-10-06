@@ -3,6 +3,9 @@
 #endif
 #include "cast.h"
 #include "media_internal.h"
+#include "media_codec.h"
+#include "stream.h"
+#include "composition_assets.h"
 #include <assert.h>
 #include <errno.h>
 #include <libavcodec/avcodec.h>
@@ -998,6 +1001,242 @@ static void webcam_probe(void)
     frame_free(&frame);
     camera_close(camera);
 }
+static void codec_selection_test(void)
+{
+    Config cfg;
+    config_defaults(&cfg);
+    cfg.width = 160;
+    cfg.height = 90;
+    char error[CAST_ERR];
+    AVCodecContext *context = NULL;
+    MediaCodecSelection selection;
+    assert(media_video_open(&cfg, false, true, &context, &selection, error, sizeof(error)) == 0);
+    assert(context && selection.encoder[0] && selection.detail[0]);
+    printf("recording codec probe: %s; %s\n", selection.encoder, selection.detail);
+    avcodec_free_context(&context);
+    snprintf(cfg.video_codec, sizeof(cfg.video_codec), "cast_missing_encoder_fixture");
+    assert(media_video_open(&cfg, false, true, &context, &selection, error, sizeof(error)) < 0);
+    assert(context == NULL && strstr(error, "cast_missing_encoder_fixture"));
+    snprintf(cfg.stream.video_encoder, sizeof(cfg.stream.video_encoder), "auto");
+    assert(!media_video_open(&cfg, true, true, &context, &selection, error, sizeof(error)));
+    assert(context->codec_id == AV_CODEC_ID_H264);
+    assert(context->bit_rate == (int64_t)cfg.stream.video_bitrate_kbps * 1000);
+    avcodec_free_context(&context);
+    snprintf(cfg.stream.video_encoder, sizeof(cfg.stream.video_encoder), "mpeg4");
+    assert(media_video_open(&cfg, true, true, &context, &selection, error, sizeof(error)) < 0);
+    assert(context == NULL && strstr(error, "H.264"));
+    if (avcodec_find_encoder_by_name("libopenh264")) {
+        snprintf(cfg.video_codec, sizeof(cfg.video_codec), "libopenh264");
+        snprintf(cfg.record_rate_control, sizeof(cfg.record_rate_control), "crf");
+        assert(media_video_open(&cfg, false, true, &context, &selection, error, sizeof(error)) < 0);
+        assert(context == NULL && strstr(error, "not translated"));
+        snprintf(cfg.record_rate_control, sizeof(cfg.record_rate_control), "bitrate");
+        assert(media_video_open(&cfg, false, true, &context, &selection, error, sizeof(error)) == 0);
+        assert(!strcmp(selection.encoder, "libopenh264") && strstr(selection.detail, "inactive"));
+        assert(context->bit_rate == (int64_t)cfg.record_bitrate_kbps * 1000);
+        avcodec_free_context(&context);
+    }
+    const char *license = avcodec_license();
+    int validation = media_profile_validate(true, error, sizeof(error));
+    assert((strncmp(license, "LGPL", 4) != 0) ? validation < 0 : validation == 0);
+    char report[8192] = "";
+    media_profile_report(report, sizeof(report));
+    assert(strstr(report, "FFmpeg avcodec:") && strstr(report, "FFmpeg configuration:"));
+}
+static void flv_codec_test(const char *directory)
+{
+    Config cfg;
+    config_defaults(&cfg);
+    cfg.width = 160;
+    cfg.height = 90;
+    cfg.fps = 30;
+    cfg.pause_color = 0x0000ff;
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/stream-codecs.flv", directory);
+    assert(stream_test_file(&cfg, path) == 0);
+    struct Inspection decoded = inspect(path);
+    assert(decoded.video_frames == 30 && decoded.red == 15 && decoded.blue == 15);
+    assert(decoded.video_last > 0.95 && decoded.video_last < 1.05);
+    struct Inspection audible = inspect_between(path, 0.1, 0.4);
+    struct Inspection silent = inspect_between(path, 0.7, 0.9);
+    assert(audible.window_samples > 0 && audible.window_power / audible.window_samples > 0.01);
+    assert(silent.window_samples > 0 && silent.window_power / silent.window_samples < 0.000001);
+    printf("production streaming codecs: H.264/AAC FLV file, 30 decoded frames, "
+           "continuous timestamps and privacy epoch keyframe passed (network untested)\n");
+}
+static void container_codec_test(const char *directory, const char *container,
+                                 const char *video, const char *sound)
+{
+    Config cfg;
+    config_defaults(&cfg);
+    cfg.width = 160;
+    cfg.height = 90;
+    snprintf(cfg.record_container, sizeof(cfg.record_container), "%s", container);
+    snprintf(cfg.video_codec, sizeof(cfg.video_codec), "%s", video);
+    snprintf(cfg.audio_codec, sizeof(cfg.audio_codec), "%s", sound);
+    CastAudio *audio = audio_test_open(&cfg);
+    CastRecorder *recorder = recorder_open(audio);
+    assert(audio && recorder);
+    char path[PATH_MAX], error[CAST_ERR], selected[64], detail[CAST_ERR];
+    snprintf(path, sizeof(path), "%s/%s-%s.media", directory, container, video);
+    assert(!recorder_start(recorder, &cfg, path, error, sizeof(error)));
+    recorder_encoder(recorder, selected, sizeof(selected), detail, sizeof(detail));
+    assert(selected[0] && detail[0]);
+    if (strcmp(video, "auto")) {
+        assert(!strcmp(selected, video));
+    }
+    Frame frame = {0};
+    assert(!frame_alloc(&frame, cfg.width, cfg.height));
+    paint(&frame, 0);
+    for (unsigned i = 0; i < 8; i++) {
+        frame.ts_ns = cast_now_ns();
+        assert(recorder_frame(recorder, &frame, error, sizeof(error)) >= 0);
+        delay_ms(33);
+    }
+    assert(!recorder_stop(recorder, error, sizeof(error)));
+    while (recorder_finalizing(recorder)) {
+        delay_ms(10);
+    }
+    bool active, paused;
+    uint64_t drops;
+    recorder_status(recorder, &active, &paused, &drops, error, sizeof(error));
+    assert(!active && !error[0]);
+    struct Inspection result = inspect(path);
+    assert(result.video_frames >= 6 && result.audio_frames > 0 && result.red >= 6);
+    printf("container roundtrip: %s %s/%s, %d decoded video frames; %s\n",
+           container, selected, sound, result.video_frames, detail);
+    frame_free(&frame);
+    recorder_close(recorder);
+    audio_close(audio);
+}
+static void image_decode_test(const char *directory)
+{
+    /* Original solid-red format fixtures; no external images or camera access. */
+    static const uint8_t webp[] = {
+        0x52, 0x49, 0x46, 0x46, 0x1c, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
+        0x56, 0x50, 0x38, 0x4c, 0x0f, 0x00, 0x00, 0x00, 0x2f, 0x01, 0x40, 0x00,
+        0x00, 0x07, 0x10, 0xf5, 0x8f, 0xfe, 0x07, 0x22, 0xa2, 0xff, 0x01, 0x00
+    };
+    static const uint8_t bmp[] = {
+        0x42, 0x4d, 0x46, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x36, 0x00,
+        0x00, 0x00, 0x28, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x00,
+        0x00, 0x00, 0x01, 0x00, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfd, 0x00, 0x00, 0xfd,
+        0x00, 0x00, 0x00, 0x00, 0xfd, 0x00, 0x00, 0xfd, 0x00, 0x00
+    };
+    const uint8_t *bytes[] = {webp, bmp};
+    const size_t lengths[] = {sizeof(webp), sizeof(bmp)};
+    const char *names[] = {"webp", "bmp"};
+    char path[PATH_MAX], error[CAST_ERR];
+    for (unsigned i = 0; i < 2; i++) {
+        snprintf(path, sizeof(path), "%s/logo.%s", directory, names[i]);
+        FILE *file = fopen(path, "wb");
+        assert(file && fwrite(bytes[i], 1, lengths[i], file) == lengths[i]);
+        assert(!fclose(file));
+        Frame decoded = {0};
+        assert(!composition_logo_load(path, &decoded, error, sizeof(error)));
+        assert(decoded.width == 2 && decoded.height == 2 && decoded.data[0] > 200);
+        frame_free(&decoded);
+    }
+    const AVCodec *jpeg = avcodec_find_encoder_by_name("mjpeg");
+    AVCodecContext *encoder = avcodec_alloc_context3(jpeg);
+    AVFrame *frame = av_frame_alloc();
+    AVPacket *packet = av_packet_alloc();
+    assert(jpeg && encoder && frame && packet);
+    encoder->width = encoder->height = 16;
+    encoder->pix_fmt = AV_PIX_FMT_YUVJ420P;
+    encoder->time_base = (AVRational){1, 30};
+    assert(!avcodec_open2(encoder, jpeg, NULL));
+    frame->width = frame->height = 16;
+    frame->format = encoder->pix_fmt;
+    assert(!av_frame_get_buffer(frame, 32));
+    for (unsigned plane = 0; plane < 3; plane++) {
+        int height = plane ? 8 : 16;
+        memset(frame->data[plane], plane == 0 ? 76 : plane == 1 ? 85 : 255,
+               (size_t)height * frame->linesize[plane]);
+    }
+    assert(!avcodec_send_frame(encoder, frame));
+    assert(!avcodec_receive_packet(encoder, packet));
+    snprintf(path, sizeof(path), "%s/logo.jpg", directory);
+    FILE *file = fopen(path, "wb");
+    assert(file && fwrite(packet->data, 1, (size_t)packet->size, file) == (size_t)packet->size);
+    assert(!fclose(file));
+    Frame decoded = {0};
+    assert(!composition_logo_load(path, &decoded, error, sizeof(error)));
+    assert(decoded.width == 16 && decoded.height == 16 && decoded.data[0] > 200);
+    frame_free(&decoded);
+    av_packet_free(&packet);
+    av_frame_free(&frame);
+    avcodec_free_context(&encoder);
+    printf("configured images: real JPEG/MJPEG, lossless WebP and BMP decode to owned RGBA passed\n");
+}
+static void video_conversion_test(void)
+{
+    MediaVideoConverter *conversion = NULL;
+    uint32_t random = 0x53731;
+    /* Reuse/reconfigure one converter across padded inputs, changing source
+     * dimensions and both original color matrices. Compare every valid output
+     * sample against the pre-optimization single-thread scaler, including the
+     * worker slice boundaries and nonuniform chroma detail. */
+    for (unsigned shape = 0; shape < 3; shape++) {
+        Frame source = {.width = shape == 1 ? 640 : 1280,
+                        .height = shape == 1 ? 360 : shape == 2 ? 722 : 720};
+        source.stride = source.width * 4 + 128;
+        source.data = malloc((size_t)source.stride * source.height);
+        assert(source.data);
+        AVFrame *actual = av_frame_alloc(), *reference = av_frame_alloc();
+        assert(actual && reference);
+        actual->width = reference->width = 1280;
+        actual->height = reference->height = shape == 2 ? 722 : 720;
+        actual->format = reference->format = AV_PIX_FMT_YUV420P;
+        assert(!av_frame_get_buffer(actual, 32) && !av_frame_get_buffer(reference, 32));
+        for (unsigned matrix = 0; matrix < 2; matrix++) {
+            struct SwsContext *old = sws_getContext(
+                source.width, source.height, AV_PIX_FMT_RGBA, actual->width, actual->height,
+                actual->format, SWS_FAST_BILINEAR, NULL, NULL, NULL);
+            assert(old);
+            if (matrix) {
+                const int *colors = sws_getCoefficients(SWS_CS_ITU709);
+                assert(!sws_setColorspaceDetails(old, colors, 1, colors, 0,
+                                                0, 1 << 16, 1 << 16));
+            }
+            for (unsigned frame = 0; frame < 3; frame++) {
+                for (int y = 0; y < source.height; y++) {
+                    uint8_t *row = source.data + (size_t)y * source.stride;
+                    for (int x = 0; x < source.width * 4; x++) {
+                        random = random * 1664525U + 1013904223U;
+                        row[x] = (uint8_t)(random >> 24);
+                    }
+                }
+                assert(!av_frame_make_writable(actual));
+                assert(!media_video_convert(&conversion, &source, actual, matrix != 0));
+                const uint8_t *pixels[4] = {source.data};
+                int strides[4] = {source.stride};
+                assert(sws_scale(old, pixels, strides, 0, source.height, reference->data,
+                                 reference->linesize) == reference->height);
+                for (unsigned plane = 0; plane < 3; plane++) {
+                    int width = plane ? actual->width / 2 : actual->width;
+                    int height = plane ? actual->height / 2 : actual->height;
+                    for (int y = 0; y < height; y++) {
+                        assert(!memcmp(actual->data[plane] + (size_t)y * actual->linesize[plane],
+                                       reference->data[plane] + (size_t)y * reference->linesize[plane],
+                                       (size_t)width));
+                    }
+                }
+                assert(av_buffer_get_ref_count(actual->buf[0]) == 1);
+            }
+            sws_freeContext(old);
+        }
+        frame_free(&source);
+        av_frame_free(&actual);
+        av_frame_free(&reference);
+    }
+    media_video_converter_free(&conversion);
+    assert(!conversion);
+    printf("video conversion: padded/resized RGBA and both color matrices match legacy YUV exactly; no retained destination refs\n");
+}
+
 int main(int argc, char **argv)
 {
     av_log_set_level(AV_LOG_ERROR);
@@ -1005,8 +1244,14 @@ int main(int argc, char **argv)
         camera_worker_test();
         return 0;
     }
+    codec_selection_test();
+    video_conversion_test();
     char directory[] = "/tmp/cast-media-test-XXXXXX";
     assert(mkdtemp(directory));
+    image_decode_test(directory);
+    flv_codec_test(directory);
+    container_codec_test(directory, "mp4", "auto", "aac");
+    container_codec_test(directory, "matroska", "ffv1", "flac");
     timeline_test(directory, true);
     timeline_test(directory, false);
     privacy_test(directory);

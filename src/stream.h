@@ -18,6 +18,7 @@ typedef struct StreamSnapshot {
     double outgoing_bitrate_kbps;
     uint64_t next_retry_ns;
     char error[CAST_ERR];
+    char video_encoder[64], video_encoder_detail[256];
 } StreamSnapshot;
 typedef struct CastStream CastStream;
 typedef struct CastAudio CastAudio;
@@ -37,6 +38,7 @@ int stream_worker_main(int fd);
 /* Read-only validation never opens a network connection. No secret appears in diagnostics. */
 int stream_key_validate(const char *, char *, size_t);
 #ifdef CAST_TEST
+int stream_test_file(const Config *, const char *);
 void stream_test_hold(CastStream *, int);
 void stream_test_stage(CastStream *, int);
 bool stream_test_blocked(CastStream *);

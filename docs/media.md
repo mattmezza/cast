@@ -76,9 +76,20 @@ control or select cast's virtual source.
 ## Recording state and queues
 
 One recording uses the configured container/video/audio encoders. Defaults are Matroska,
-software libx264 with CRF 23/veryfast, and stereo AAC at 128 kbit/s. Encoders initialize
-when starting a file; unavailable codecs or incompatible codec/container combinations
-return errors. Hardware encoding is not required.
+`record.video_codec=auto` and stereo AAC at 128 kbit/s. Auto initializes a reviewed
+CPU H.264 encoder: system Community prefers x264, then OpenH264; the LGPL profile
+uses OpenH264. Explicit encoder names never substitute another encoder. Legacy
+CRF 23/veryfast remains active with x264; OpenH264 uses the neutral bitrate default
+6000 kbit/s and reports CRF/preset as inactive. `record.rate_control=crf` explicitly
+fails on encoders without that mode. Encoders initialize when starting a file;
+unavailable codecs or incompatible codec/container combinations return errors.
+Hardware encoding is not required. See the [controlled media profile](media-profile.md)
+for exact dependencies, LGPL replacement rights and executed acceptance results.
+
+LGPL recording and streaming canvases of at least 1280x720 use four bounded
+libswscale conversion threads. They retain the original filter, color matrix,
+chroma and dimensions, and finish conversion before existing privacy epoch checks.
+System Community conversion behavior stays unchanged.
 
 A separate recording worker owns encoder and muxer resources. The video queue owns
 copies of composed frames and defaults to eight frames; configuration permits 1..120.
@@ -153,6 +164,21 @@ completed in 0.41 ms. These are small 160x90 synthetic acceptance results, not 1
 performance or a physical latency measurement. Address/undefined sanitizer verification
 of the media suite also passed; the complete record is in [verification.md](verification.md).
 
+On 2026-10-05, the nonrelease LGPL candidate completed the unchanged 60-second
+1920x1080@30 moving-gradient recording test with 1800 submitted frames, 1800 H.264
+packets, zero drops and 60.021-second duration at a 6000 kbit/s bitrate target plus
+AAC audio. Four conversion threads reduced average RGBA-to-YUV time to 13.331 ms;
+encode/mux averaged 9.856 ms. The original single-thread converter had failed at
+1435 packets and 365 drops. The prior 1280x720@30 run passed with 1799 packets and
+one drop from 1800 submissions. The acceptance threshold remains at least 1750
+packets and at most 50 drops. Exact conversion comparisons preserved every output
+Y/U/V byte across padded/resized inputs and both color matrices. This measures CPU
+worker throughput, with no GPU device access, capture-device or transport claim;
+see [the candidate limits and artifacts](media-profile.md#local-verification-on-2026-10-05).
+An independent full-resolution Pro fixture also preserved fine text/stripe detail:
+90/90 decoded frames, no drops, minimum luma PSNR 37.408 dB and 96.17% fine-stripe
+contrast. A 720p source enlarged to 1080p failed those unchanged quality checks.
+
 Post-reboot checks exercised the physical webcam, loopback consumer and PipeWire
 mic/virtual-source readiness and privacy silence. The optional physical camera test
 is `CAST_TEST_CAMERA=/dev/video0 build/x1-w0/test_media`: it requests 1920x1080,
@@ -188,3 +214,18 @@ capture, controls and the other outputs responsive. See [architecture](architect
 for the bounded handoff and privacy boundary, [streaming setup](streaming.md) for
 credentials and service presets, and [verification](verification.md) for measured
 protocol behavior. Actual Twitch/YouTube account acceptance remains a manual test.
+
+## Pro transcription and subtitle time
+
+Live captions are causal and delayed by inference; toggling captions never starts
+an output or audio source. Virtual-camera, recording and streaming consumers have
+independent privacy epochs. Solid pause/freeze/blur clear that lane's captions and
+silence audio; cut removes file time. A resumed lane cannot publish results from
+its retired epoch. Local notes listening is separate and mic-only. Global privacy
+retires notes listening; output resume does not restart it.
+
+Automatic final transcription reads completed recorded audio after a durable
+trailer, with the accepted model/settings snapshot. Pause silence remains in the
+timeline; cut audio is absent. Final SRT/VTT does not rewrite already burned live
+caption pixels. Standalone transcription opens no capture device and waits for
+completion. Missing audio or an unavailable helper/model reports a reason.

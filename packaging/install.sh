@@ -1,4 +1,5 @@
 #!/bin/sh
+# Community only: never install/upgrade Cast Pro from this channel.
 # Install the official Arch Linux release package; also embedded in `cast update`.
 set -eu
 umask 077

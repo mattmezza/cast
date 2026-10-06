@@ -26,6 +26,7 @@ void audio_record_privacy(CastAudio *);
 void audio_stream_privacy(CastAudio *);
 void audio_stream_read(CastAudio *, uint64_t, float *, int);
 void audio_read(CastAudio *, uint64_t, float *, int);
+int audio_read_selection(CastAudio *, int source, uint64_t, float *, unsigned, char *, size_t);
 void audio_list(CastAudio *, char *, size_t);
 void audio_status(CastAudio *, char *, size_t);
 void audio_error(CastAudio *, char *, size_t);
@@ -40,6 +41,7 @@ int recorder_frame(CastRecorder *, const Frame *, char *, size_t);
 void recorder_barrier(CastRecorder *);
 void recorder_status(CastRecorder *, bool *, bool *, uint64_t *, char *, size_t);
 uint64_t recorder_duration(CastRecorder *);
+void recorder_encoder(CastRecorder *, char *, size_t, char *, size_t);
 void recorder_path(CastRecorder *, char *, size_t);
 /* Deterministic synthetic integration tests; no CLI/runtime input injection. */
 #ifdef CAST_TEST
@@ -64,6 +66,7 @@ CastAudio *audio_test_open(const Config *);
 void audio_test_virtual_read(CastAudio *, uint64_t, float *, int);
 CastAudio *media_test_audio(Media *);
 void recorder_test_slow(CastRecorder *, int);
+void recorder_test_timings(CastRecorder *, uint64_t *, uint64_t *, uint64_t *);
 void recorder_test_hold(CastRecorder *, int);
 bool recorder_test_codec_busy(CastRecorder *);
 void recorder_test_failure(CastRecorder *, int);

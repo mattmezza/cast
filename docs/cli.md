@@ -277,3 +277,45 @@ This release intentionally replaces every virtual-camera `live` spelling:
 Status replaces the `live` object with `virtual`; no duplicate legacy field remains.
 Obsolete commands/config values fail with migration guidance without executing an
 operation. Historical release notes retain their original names.
+
+## Community/Pro edition and offline licensing
+
+`cast edition [--json]` identifies the native edition, version, public/private
+revisions, extension API, media profile, platform, official/nonproduction status,
+release timestamp and build identity. `cast-pro` accepts the same grammar.
+`cast features [--json]` separates implemented/compiled/platform/dependency readiness
+from entitlement and active state. The four reserved workflows are planned and
+unimplemented; a license never adds their code to Community or to the current Pro
+scaffold. No shipping Community command is commercially gated.
+
+`license status [--json]` reports missing/invalid/ineligible state successfully.
+`license inspect FILE [--json]` verifies without capture, a daemon or network.
+`license import FILE` verifies and atomically copies the snapshot to the selected
+store; invalid replacement leaves the accepted file intact. `license reload`
+rechecks it. `license remove` removes only the selected imported license and needs
+no additional CLI confirmation. It never removes recordings, settings or models.
+Community verification delegates to an installed compatible Pro tool, or reports
+that verification is unavailable; it never imports an unverified file as valid.
+
+Mutations go through authenticated IPC when this edition's daemon holds its session
+lock. If absent, the CLI holds that same exclusive lock through the local operation,
+in addition to the license-store lock. A disconnected-but-running daemon never
+triggers a local write. Pass its matching `--socket` when using a custom socket.
+License I/O/verification runs on a bounded daemon worker outside capture/audio/UI
+threads; acknowledged state is published in panel snapshots. It never starts,
+resumes or exposes output lanes. JSON schema version is 1; exit statuses are `0`
+success/read-only status, `2` malformed input/config, `3` invalid license, `4` valid
+but ineligible, and `5` unavailable verifier/I/O/readiness. Ordinary diagnostics
+include only masked identifiers, never payloads, signatures or customer details.
+
+Default sockets are `$XDG_RUNTIME_DIR/cast.sock` and
+`$XDG_RUNTIME_DIR/cast-pro.sock`. Internal CLI protocol 2 and panel protocol 2 require
+matching edition/build identity and layout; an explicit socket cannot bypass that
+check. The user configuration can be shared with explicit `--config`; neither
+edition rewrites it. `doctor` includes actual loaded media libraries/configuration
+and encoder-selection readiness. Pro rejects GPL/nonfree media before capture.
+
+Additional encoder startup flags are `--record-bitrate KBPS`,
+`--record-rate-control auto|bitrate|crf`, and `--stream-video-encoder NAME`.
+`config check [PATH] --availability` and the explicit dry-run `config migrate`
+are described in [configuration.md](configuration.md).

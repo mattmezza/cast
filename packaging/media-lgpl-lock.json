@@ -1,0 +1,91 @@
+{
+  "schema": 1,
+  "profile": "lgpl",
+  "patches": [],
+  "hardware_integrations": [],
+  "sources": [
+    {
+      "name": "ffmpeg",
+      "version": "9.0.2",
+      "archive": "ffmpeg-9.0.2.tar.xz",
+      "url": "https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz",
+      "sha256": "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e",
+      "license": "LGPL-3.0-or-later",
+      "license_files": [
+        "LICENSE.md",
+        "COPYING.LGPLv3",
+        "COPYING.LGPLv2.1"
+      ],
+      "hash_evidence": "SHA256 of cached original upstream source archive, locally verified 2026-10-05"
+    },
+    {
+      "name": "openh264",
+      "version": "2.6.0",
+      "archive": "openh264-2.6.0.tar.gz",
+      "url": "https://codeload.github.com/cisco/openh264/tar.gz/refs/tags/v2.6.0",
+      "sha256": "558544ad358283a7ab2930d69a9ceddf913f4a51ee9bf1bfb9e377322af81a69",
+      "license": "BSD-2-Clause",
+      "license_files": [
+        "LICENSE"
+      ],
+      "hash_evidence": "https://lists.buildroot.org/pipermail/buildroot/2025-October/788645.html"
+    },
+    {
+      "name": "openssl",
+      "version": "3.5.4",
+      "archive": "openssl-3.5.4.tar.gz",
+      "url": "https://github.com/openssl/openssl/releases/download/openssl-3.5.4/openssl-3.5.4.tar.gz",
+      "sha256": "967311f84955316969bdb1d8d4b983718ef42338639c621ec4c34fddef355e99",
+      "license": "Apache-2.0",
+      "license_files": [
+        "LICENSE.txt"
+      ],
+      "hash_evidence": "https://github.com/openssl/openssl/releases/download/openssl-3.5.4/openssl-3.5.4.tar.gz.sha256"
+    },
+    {
+      "name": "zlib",
+      "version": "1.3.1",
+      "archive": "zlib-1.3.1.tar.gz",
+      "url": "https://zlib.net/fossils/zlib-1.3.1.tar.gz",
+      "sha256": "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23",
+      "license": "Zlib",
+      "license_files": [
+        "LICENSE"
+      ],
+      "hash_evidence": "https://github.com/facebook/folly/blob/v2025.06.16.00/build/fbcode_builder/manifests/zlib"
+    }
+  ],
+  "ffmpeg_flags": [
+    "--enable-shared",
+    "--disable-static",
+    "--disable-gpl",
+    "--disable-nonfree",
+    "--enable-version3",
+    "--disable-autodetect",
+    "--disable-everything",
+    "--disable-doc",
+    "--disable-programs",
+    "--disable-avfilter",
+    "--disable-avdevice",
+    "--enable-libopenh264",
+    "--enable-openssl",
+    "--enable-zlib",
+    "--enable-encoder=libopenh264,aac,pcm_s16le,flac,ffv1,rawvideo,png,mjpeg",
+    "--enable-decoder=h264,aac,mjpeg,png,webp,bmp,pcm_s16le,flac,ffv1,rawvideo,vp8,vp9,vorbis,opus",
+    "--enable-muxer=matroska,mp4,flv,webm,wav",
+    "--enable-demuxer=matroska,mov,flv,image2,image2pipe,wav",
+    "--enable-parser=h264,aac,mjpeg,png,webp,vp8,vp9,opus,vorbis",
+    "--enable-protocol=file,pipe,tcp,tls,rtmp,rtmps",
+    "--enable-bsf=h264_mp4toannexb,aac_adtstoasc"
+  ],
+  "build_tools": [
+    {
+      "name": "nasm",
+      "scope": "build-only",
+      "license": "BSD-2-Clause",
+      "upstream": "https://www.nasm.us/",
+      "distributed": false,
+      "purpose": "optimized x86 FFmpeg/OpenH264 assembly; exact installed version recorded in build materials"
+    }
+  ]
+}

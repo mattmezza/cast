@@ -56,7 +56,7 @@ not be promised without compositor support.
 
 ## Evidence
 
-The build brief is `cast-build-prompt.md`; current implementation and verification
+The original build brief is retained locally; current implementation and verification
 are documented under `docs/`. The user initially approved an ASCII panel sketch,
 then rejected the implemented all-at-once layout after using it. Their current
 direction is mobile-style focused navigation with crisp typography, direct output
@@ -73,3 +73,15 @@ controls on Home and an independent floating preview.
 
 Provide visible keyboard focus and keyboard operation for panel controls. Custom
 drawn controls do not yet promise screen-reader integration.
+
+## Editions
+
+Cast Community remains the MIT product with all currently shipping functionality,
+commercial use, forks and unrestricted media access. Cast Pro is a separately built
+proprietary extension with offline signed licenses; an unlicensed Pro binary retains
+Community functionality. Editable projects, cinematic zoom, local transcription/
+subtitles and speech teleprompter are reserved capabilities currently not implemented.
+Basic existing zoom/follow stays free. No planned workflow is sold as usable.
+Licensing belongs in the header/About sheet; Operate keeps its four cards and Compose
+its six pages. License/update changes never start capture or resume outputs.
+See [edition contract](docs/editions.md) and [license policy](docs/licensing.md).

@@ -1,4 +1,5 @@
 /* Shared RGBA composition. Original bitmap glyphs below are part of cast's license. */
+#include "compositor.h"
 #include "cast.h"
 #include "composition_assets.h"
 #include "presentation_text.h"
@@ -45,6 +46,12 @@ struct Compositor {
     Backdrop camera_backdrop, screen_backdrop;
     Frame logo, logo_scaled;
     char logo_path[PATH_MAX];
+    const CastRuntimeHooks *motion_hooks;
+    void *motion;
+    CastMotionSnapshot motion_snapshot;
+    Capabilities capabilities;
+    uint64_t source_generation, motion_timestamp;
+    bool motion_active, motion_snapshot_valid, source_reset;
 };
 typedef struct {
     double sx, sy, sw, sh, dx, dy, dw, dh;
@@ -115,6 +122,9 @@ Compositor *compositor_create(void)
 void compositor_destroy(Compositor *c)
 {
     if (c) {
+        if (c->motion && c->motion_hooks && c->motion_hooks->motion_destroy) {
+            c->motion_hooks->motion_destroy(c->motion);
+        }
         presentation_text_destroy(c->presentation);
         frame_free(&c->camera_backdrop.pixels);
         frame_free(&c->screen_backdrop.pixels);
@@ -126,6 +136,10 @@ void compositor_destroy(Compositor *c)
 void compositor_clear(Compositor *c)
 {
     if (c) {
+        if (c->motion && c->motion_hooks && c->motion_hooks->motion_barrier) {
+            c->motion_hooks->motion_barrier(c->motion, CAST_BARRIER_GLOBAL_PRIVACY, cast_now_ns());
+        }
+        c->motion_snapshot_valid = false;
         memset(c->clicks, 0, sizeof(c->clicks));
         c->next = 0;
         memset(c->keys, 0, sizeof(c->keys));
@@ -139,6 +153,18 @@ void compositor_click(Compositor *c, int x, int y, int button, uint64_t at)
 {
     if (c && button >= 1 && button <= 3) {
         c->clicks[c->next++ % CLICK_MAX] = (Click){x, y, button, at};
+        if (c->motion && c->motion_hooks && c->motion_hooks->motion_event && c->sw > 0 &&
+            c->sh > 0) {
+            CastMotionEvent event = {.kind = CAST_MOTION_CLICK,
+                                     .timestamp_ns = at,
+                                     .source_generation = c->source_generation,
+                                     .x = (double)x / c->sw,
+                                     .y = (double)y / c->sh,
+                                     .button = button};
+            if (x >= 0 && y >= 0 && x < c->sw && y < c->sh) {
+                (void)c->motion_hooks->motion_event(c->motion, &event, NULL, 0);
+            }
+        }
     }
 }
 static void keys_expire(Compositor *c, uint64_t now, int timeout_ms)
@@ -738,7 +764,8 @@ static void border_span(Frame *out, int y, int left, int right, uint32_t color)
         memcpy(dest, rgba, 4);
     }
 }
-static Clip screen_layer_draw(Frame *out, const Frame *source, const Config *cfg, Transform t)
+static Clip screen_layer_draw(Frame *out, const Frame *source, const Config *cfg, Transform t,
+                              bool draw_pixels)
 {
     double radius = clampd(cfg->screen_radius, 0, fmin(t.dw, t.dh) / 2);
     int border = (int)clampd(cfg->screen_border_width, 0, fmax(0, (fmin(t.dw, t.dh) - 1) / 2));
@@ -746,7 +773,9 @@ static Clip screen_layer_draw(Frame *out, const Frame *source, const Config *cfg
     Mask inner = {radius > 0, t.dw - 2 * border, t.dh - 2 * border, fmax(0, radius - border)};
     Clip clip = {inner, t.dx + border, t.dy + border};
     if (!radius && !border) {
-        screen_blit(out, source, t);
+        if (draw_pixels) {
+            screen_blit(out, source, t);
+        }
         return clip;
     }
     int left = (int)fmax(0, ceil(t.dx)), right = (int)fmin(out->width, ceil(t.dx + t.dw));
@@ -768,6 +797,9 @@ static Clip screen_layer_draw(Frame *out, const Frame *source, const Config *cfg
         }
         border_span(out, y, outer_left, inner_left, cfg->screen_border_color);
         border_span(out, y, inner_right, outer_right, cfg->screen_border_color);
+        if (!draw_pixels) {
+            continue;
+        }
         int row = (int)clampd(floor(t.sy + (y + .5 - t.dy) * t.sh / t.dh), 0, source->height - 1);
         uint8_t *dest = out->data + (size_t)y * out->stride + inner_left * 4;
         const uint8_t *source_row = source->data + (size_t)row * source->stride;
@@ -959,7 +991,7 @@ static int background_draw(Backdrop *cache, const Config *cfg, const Frame *sour
     screen_blit(out, &cache->pixels, enlarged);
     return 0;
 }
-static bool transform_point(Transform t, int x, int y, double *ox, double *oy)
+static bool transform_point(Transform t, double x, double y, double *ox, double *oy)
 {
     if (x < t.sx || y < t.sy || x >= t.sx + t.sw || y >= t.sy + t.sh) {
         return false;
@@ -985,7 +1017,8 @@ static void ring(Frame *f, double x, double y, double r, double thickness, uint3
         }
     }
 }
-static void cursor_draw(Frame *f, double x, double y, int size, uint32_t color, const Clip *clip)
+static void cursor_draw(Frame *f, double x, double y, int size, uint32_t color, const Clip *clip,
+                        double opacity)
 {
     if (size < 4) {
         size = 4;
@@ -996,9 +1029,118 @@ static void cursor_draw(Frame *f, double x, double y, int size, uint32_t color, 
             bool stem = j >= size / 2 && j < size && i >= size / 4 && i <= size / 4 + size / 6;
             if (tip || stem) {
                 clipped_pixel(f, clip, (int)x + i, (int)y + j,
-                              (i == 0 || i == j / 2) ? 0x111111 : color, 1);
+                              (i == 0 || i == j / 2) ? 0x111111 : color, opacity);
             }
         }
+    }
+}
+void compositor_runtime_context(Compositor *c, const Capabilities *capabilities,
+                                uint64_t generation)
+{
+    if (!c) {
+        return;
+    }
+    if (c->source_generation && generation != c->source_generation) {
+        compositor_clear(c);
+        if (c->motion && c->motion_hooks && c->motion_hooks->motion_barrier) {
+            c->motion_hooks->motion_barrier(c->motion, CAST_BARRIER_SOURCE, cast_now_ns());
+        }
+        c->motion_active = c->motion_snapshot_valid = false;
+        c->source_reset = true;
+        c->zoom = c->from = c->target = 1;
+        c->centered = false;
+        c->transition = c->last = c->motion_timestamp = 0;
+    }
+    c->source_generation = generation;
+    c->capabilities = capabilities ? *capabilities : (Capabilities){0};
+}
+bool compositor_motion_ready(const Compositor *c)
+{
+    return c && c->motion && c->motion_hooks;
+}
+int compositor_motion_adopt(Compositor *c, void *prepared, char *error, size_t size)
+{
+    if (!c || !prepared) {
+        return fail(error, size, "prepared motion context is required");
+    }
+    const CastRuntimeHooks *hooks = cast_runtime_hooks();
+    if (!hooks || !hooks->motion_destroy || !hooks->motion_advance || !hooks->motion_render) {
+        return fail(error, size, "cinematic motion is not compiled");
+    }
+    if (c->motion) {
+        return fail(error, size, "motion context is already initialized");
+    }
+    c->motion_hooks = hooks;
+    c->motion = prepared;
+    return 0;
+}
+int compositor_motion_prepare(Compositor *c, char *error, size_t size)
+{
+    return compositor_motion_ready(c)
+               ? 0
+               : fail(error, size, "cinematic resources require authorized worker preparation");
+}
+int compositor_motion_event_validate(Compositor *c, const CastMotionEvent *event, char *error,
+                                     size_t size)
+{
+    if (!event || compositor_motion_prepare(c, error, size)) {
+        return -1;
+    }
+    return c->motion_hooks->motion_event_validate
+               ? c->motion_hooks->motion_event_validate(c->motion, event, error, size)
+               : fail(error, size, "motion event validation unavailable");
+}
+int compositor_motion_event(Compositor *c, const CastMotionEvent *event, char *error, size_t size)
+{
+    if (!event || compositor_motion_prepare(c, error, size)) {
+        return -1;
+    }
+    if (!c->motion_hooks->motion_event) {
+        return fail(error, size, "motion commands are unavailable");
+    }
+    int result = c->motion_hooks->motion_event(c->motion, event, error, size);
+    if (!result) {
+        c->motion_snapshot_valid = false;
+    }
+    return result;
+}
+bool compositor_motion_snapshot(const Compositor *c, CastMotionSnapshot *out)
+{
+    if (!c || !out || !c->motion_active || !c->motion_snapshot_valid) {
+        return false;
+    }
+    *out = c->motion_snapshot;
+    return true;
+}
+void compositor_motion_status(Compositor *c, char *out, size_t size, bool json)
+{
+    if (!out || !size) {
+        return;
+    }
+    if (c && c->motion_active && c->motion && c->motion_hooks && c->motion_hooks->motion_status) {
+        c->motion_hooks->motion_status(c->motion, out, size, json);
+    } else {
+        snprintf(out, size,
+                 json ? "{\"motion\":\"legacy\",\"factor\":%.17g}" : "motion=legacy factor=%.4f",
+                 c ? c->zoom : 1);
+    }
+}
+static void motion_handoff(Compositor *c, const Config *cfg, const Frame *source, uint64_t now)
+{
+    if (!c->motion_active) {
+        return;
+    }
+    CastMotionSnapshot *s = &c->motion_snapshot;
+    c->zoom = c->from = s->factor;
+    c->cx = (s->viewport_x + s->viewport_width / 2) * source->width;
+    c->cy = (s->viewport_y + s->viewport_height / 2) * source->height;
+    c->target = clampd(cfg->zoom_factor, 1, cfg->zoom_max);
+    c->transition = c->last = now;
+    c->centered = true;
+    c->motion_active = false;
+    c->motion_snapshot_valid = false;
+    if (c->motion && c->motion_hooks && c->motion_hooks->motion_barrier) {
+        c->motion_hooks->motion_barrier(c->motion, CAST_BARRIER_CONFIG, now);
     }
 }
 static Transform screen_transform(Compositor *c, const Config *cfg, const Frame *s,
@@ -1215,15 +1357,100 @@ int compositor_render(Compositor *c, const Config *cfg, const Frame *screen, con
         c->screen_backdrop.type = 0;
     }
     if (show_screen && screen && screen->data && screen->width > 0 && screen->height > 0) {
-        t = screen_transform(c, cfg, screen, cursor, now, sx, sy, sw, sh);
-        Clip clip = screen_layer_draw(out, screen, cfg, t);
+        const char *motion_mode = config_extension_value(cfg, "zoom", "motion");
+        bool cinematic = motion_mode && !strcmp(motion_mode, "cinematic");
+        bool use_motion = false;
+        if (cinematic && compositor_motion_ready(c)) {
+            if (!c->motion_snapshot_valid || c->motion_timestamp != now) {
+                CastMotionInput input = {
+                    .timestamp_ns = now,
+                    .source_generation = c->source_generation,
+                    .source_width = screen->width,
+                    .source_height = screen->height,
+                    .cursor = cursor ? *cursor : (Cursor){0},
+                    .capabilities = c->capabilities,
+                    .screen = {sx, sy, sw, sh},
+                    .legacy_factor = c->zoom,
+                    .legacy_center_x = c->centered ? c->cx : screen->width / 2.0,
+                    .legacy_center_y = c->centered ? c->cy : screen->height / 2.0,
+                    .legacy_pose_valid = !c->source_reset && !c->motion_active};
+                if (show_camera && camera && camera->data &&
+                    (!strcmp(cfg->layout, "overlay") || stage)) {
+                    if (!stage && compositor_geometry(cfg, camera->width, camera->height, &cx, &cy,
+                                                      &cw, &ch, err, n)) {
+                        return -1;
+                    }
+                    input.camera = (CastRuntimeRect){cx, cy, cw, ch};
+                    input.camera_visible = true;
+                }
+                int result = c->motion_hooks->motion_advance(c->motion, cfg, &input,
+                                                             &c->motion_snapshot, err, n);
+                if (!result) {
+                    c->motion_snapshot_valid = true;
+                    c->motion_timestamp = now;
+                } else {
+                    c->motion_snapshot_valid = false;
+                }
+            }
+            use_motion = c->motion_snapshot_valid;
+        }
+        if (use_motion) {
+            CastMotionSnapshot *snapshot = &c->motion_snapshot;
+            t = fit(snapshot->viewport_x * screen->width, snapshot->viewport_y * screen->height,
+                    snapshot->viewport_width * screen->width,
+                    snapshot->viewport_height * screen->height, sx, sy, sw, sh,
+                    !strcmp(cfg->fit, "cover"));
+            c->motion_active = true;
+            c->source_reset = false;
+            c->sw = screen->width;
+            c->sh = screen->height;
+        } else {
+            motion_handoff(c, cfg, screen, now);
+            t = screen_transform(c, cfg, screen, cursor, now, sx, sy, sw, sh);
+        }
+        Clip clip = screen_layer_draw(out, screen, cfg, t, !use_motion);
+        if (use_motion && c->motion_hooks->motion_render(
+                              c->motion, out, screen, &c->motion_snapshot,
+                              (CastRuntimeRect){sx, sy, sw, sh}, cfg->screen_radius, err, n)) {
+            return -1;
+        }
         double x, y;
-        if (cursor && cursor->valid && transform_point(t, cursor->x, cursor->y, &x, &y)) {
+        bool pointer_visible = cursor && cursor->valid && !c->capabilities.embedded_cursor;
+        double pointer_x = cursor ? cursor->x : 0, pointer_y = cursor ? cursor->y : 0;
+        if (use_motion) {
+            pointer_visible = c->motion_snapshot.cursor_visible;
+            pointer_x = c->motion_snapshot.cursor_x * screen->width;
+            pointer_y = c->motion_snapshot.cursor_y * screen->height;
+        }
+        if (pointer_visible && transform_point(t, pointer_x, pointer_y, &x, &y)) {
             if (cfg->cursor_highlight) {
                 ring(out, x, y, cfg->cursor_size, 3, cfg->cursor_color, .65, &clip);
             }
             if (cfg->cursor) {
-                cursor_draw(out, x, y, cfg->cursor_size, cfg->cursor_color, &clip);
+                unsigned samples = use_motion ? c->motion_snapshot.samples : 1;
+                if (samples < 1 || samples > 8 ||
+                    (use_motion && c->motion_snapshot.cursor_click_snap)) {
+                    samples = 1;
+                }
+                for (unsigned sample = 0; sample < samples; ++sample) {
+                    double px = x, py = y;
+                    if (use_motion && samples > 1) {
+                        CastRuntimeRect viewport = c->motion_snapshot.shutter[sample];
+                        Transform shutter =
+                            fit(viewport.x * screen->width, viewport.y * screen->height,
+                                viewport.width * screen->width, viewport.height * screen->height,
+                                sx, sy, sw, sh, !strcmp(cfg->fit, "cover"));
+                        if (!transform_point(
+                                shutter,
+                                c->motion_snapshot.shutter_cursor_x[sample] * screen->width,
+                                c->motion_snapshot.shutter_cursor_y[sample] * screen->height, &px,
+                                &py)) {
+                            continue;
+                        }
+                    }
+                    cursor_draw(out, px, py, cfg->cursor_size, cfg->cursor_color, &clip,
+                                1.0 / samples);
+                }
             }
         }
         if (show_clicks && cfg->clicks) {

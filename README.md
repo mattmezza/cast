@@ -43,7 +43,12 @@ daemon before updating, then restart it. Other distributions can build from sour
 
 ## Project status
 
-cast is open source under the MIT license. This is a personal project; contributions
+Cast Community is open source under the MIT license. Every shipping feature stays
+free, including commercial use, recording, streaming and existing zoom. Cast Pro is
+a separate proprietary edition requiring private modules and an offline commercial
+license. Pro implements cinematic zoom, local transcription/subtitles and timed or
+speech-following speaker notes. Editable recording projects remain planned. See
+[editions](docs/editions.md) and [licensing](docs/licensing.md). This is a personal project; contributions
 and pull requests are not currently accepted. Issues may be used to report bugs,
 with no response-time commitment.
 
@@ -258,3 +263,10 @@ Project source is [MIT licensed](LICENSE); the original bundled bitmap font shar
 license. inih is BSD-3-Clause. FFmpeg licensing depends on its build; this machine uses
 GPL-enabled FFmpeg, so binary redistribution must meet the applicable GPL obligations.
 See [dependency and license rationale](docs/dependencies.md) and packaged notices.
+
+The next Community release is [0.10.0](docs/release-notes/0.10.0.md). Local prompt
+briefs stay on the developer's laptop and are excluded from public source archives.
+The separate private Pro monorepo contains desktop code in `pro/` and only a future
+Go service placeholder in `server/`. [Single-binary delivery feasibility](docs/static-delivery.md)
+records the remaining static-library and runtime requirements; current native packages
+are dynamically linked.

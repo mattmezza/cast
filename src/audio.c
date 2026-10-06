@@ -812,6 +812,46 @@ void audio_stream_read(CastAudio *a, uint64_t ns, float *dst, int count)
         pw_thread_loop_unlock(a->loop);
     }
 }
+int audio_read_selection(CastAudio *a, int source, uint64_t ns, float *dst,
+                         unsigned count, char *error, size_t size)
+{
+    if (!a || !dst || !count || count > 4800 || source < 0 || source > 2) {
+        snprintf(error, size, "invalid bounded speech audio request");
+        return -1;
+    }
+    memset(dst, 0, count * 2 * sizeof *dst);
+    if (a->started) pw_thread_loop_lock(a->loop);
+    bool enabled = false, dead = a->server_dead;
+    for (unsigned k = 0; k < 2; ++k) {
+        if (source != 2 && source != (int)k) continue;
+        bool on = k ? a->cfg.desktop : a->cfg.mic;
+        enabled |= on;
+        dead |= on && a->lane[k].dead;
+    }
+    if (!enabled || dead) {
+        if (a->started) pw_thread_loop_unlock(a->loop);
+        snprintf(error, size, "%s audio source is %s; no source fallback",
+                 source == 0 ? "microphone" : source == 1 ? "desktop" : "mixed",
+                 dead ? "unavailable" : "disabled");
+        return -1;
+    }
+    uint64_t start = sample_time(ns);
+    for (unsigned k = 0; k < 2; ++k) {
+        if ((source != 2 && source != (int)k) || !(k ? a->cfg.desktop : a->cfg.mic)) continue;
+        struct AudioLane *lane = &a->lane[k];
+        float gain = (float)(k ? a->cfg.desktop_gain : a->cfg.mic_gain);
+        for (unsigned i = 0; i < count; ++i) {
+            uint64_t p = start + i;
+            if (p < lane->begin || p >= lane->end || p < a->accept_after) continue;
+            size_t q = (size_t)(p % AUDIO_RING) * 2;
+            dst[i * 2] += lane->samples[q] * gain;
+            dst[i * 2 + 1] += lane->samples[q + 1] * gain;
+        }
+    }
+    for (unsigned i = 0; i < count * 2; ++i) dst[i] = fmaxf(-1.f, fminf(1.f, dst[i]));
+    if (a->started) pw_thread_loop_unlock(a->loop);
+    return 0;
+}
 void audio_list(CastAudio *a, char *out, size_t n)
 {
     if (a->started) {

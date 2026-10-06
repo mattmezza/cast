@@ -4,7 +4,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#define CAST_VERSION "0.9.0"
+#define CAST_VERSION "0.10.0"
+#ifndef CAST_APPLICATION_NAME
+#define CAST_APPLICATION_NAME "cast"
+#endif
 #define CAST_TEXT 256
 #define CAST_ERR 1024
 #define CAST_MAX_PRESETS 24
@@ -24,11 +27,15 @@ typedef struct {
 } Preset;
 typedef struct {
     char service[16], server_url[1024], key_file[PATH_MAX], tls_ca_file[PATH_MAX],
-        encoder_preset[24];
+        encoder_preset[24], video_encoder[64];
     int video_bitrate_kbps, audio_bitrate_kbps, queue_frames, lag_ms;
     int connect_timeout_ms, write_timeout_ms;
     int reconnect_attempts, reconnect_initial_ms, reconnect_max_ms;
 } StreamConfig;
+#define CAST_MAX_EXTENSION_SETTINGS 128
+typedef struct {
+    char section[50], key[64], value[1024];
+} ConfigExtensionValue;
 typedef struct {
     char backend[16], socket_path[PATH_MAX], output_device[PATH_MAX], camera_device[PATH_MAX];
     int width, height, fps;
@@ -84,7 +91,8 @@ typedef struct {
     char mic_source[256], desktop_source[256], virtual_name[128];
     double mic_gain, desktop_gain;
     char record_dir[PATH_MAX], record_container[24], video_codec[64], audio_codec[64];
-    int record_crf, record_countdown, record_queue;
+    int record_crf, record_countdown, record_queue, record_bitrate_kbps;
+    char record_rate_control[16];
     char record_preset[32];
     StreamConfig stream;
     bool preview;
@@ -99,6 +107,9 @@ typedef struct {
     int blur_radius, blur_title_size, blur_subtitle_size, blur_footer_size, blur_text_gap;
     double blur_opacity;
     int ipc_timeout_ms;
+    char licensing_file[PATH_MAX], licensing_upgrade_url[1024];
+    ConfigExtensionValue extension_settings[CAST_MAX_EXTENSION_SETTINGS];
+    unsigned extension_setting_count;
     Preset presets[CAST_MAX_PRESETS];
     int preset_count;
 } Config;
@@ -137,6 +148,9 @@ void config_print_defaults(void);
 int config_validate(const Config *, char *, size_t);
 /* Assign one schema value to a candidate; validate the complete batch before applying it. */
 int config_set_value(Config *, const char *, const char *, char *, size_t);
+/* Registered extension values are ordinary owned config data. Read-only lookup
+ * returns the schema default when an older config omits a newly added field. */
+const char *config_extension_value(const Config *, const char *section, const char *key);
 /* Platform modules keep X11/DBus types private. Platform routines run on daemon thread. */
 Platform *platform_open(const Config *, char *, size_t);
 void platform_close(Platform *);
@@ -158,6 +172,10 @@ void platform_doctor(const Config *, char *, size_t);
 int platform_panel_register(Platform *, uint64_t window, int peer_pid, char *, size_t);
 void platform_panel_unregister(Platform *);
 void platform_panel_status(Platform *, char *, size_t);
+int platform_notes_register(Platform *, uint64_t, int, bool, char *, size_t);
+void platform_notes_exclusion(Platform *, bool);
+bool platform_notes_registered(Platform *);
+bool platform_notes_excluded(Platform *);
 /* Optional portal backend selected by the platform factory. */
 Platform *wayland_open(const Config *, char *, size_t);
 void wayland_close(Platform *);
@@ -204,7 +222,9 @@ int media_audio_command(Media *, Config *, int, char **, char *, size_t);
 void media_status(Media *, bool *, bool *, uint64_t *, char *, size_t);
 uint64_t media_record_duration(Media *);
 void media_record_path(Media *, char *, size_t);
+void media_record_encoder(Media *, char *, size_t, char *, size_t);
 void media_audio_status(Media *, char *, size_t);
+int media_audio_selection(Media *, int, uint64_t, float *, unsigned, char *, size_t);
 void media_doctor(const Config *, char *, size_t);
 typedef struct StreamSnapshot StreamSnapshot;
 int media_stream_start(Media *, const Config *, char *, size_t);

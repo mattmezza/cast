@@ -190,3 +190,61 @@ text font configuration is independent of the panel typeface.
 Panel-owned shared memory stores only navigation, per-page disclosure state and scroll
 for the current daemon session; no drafts, secrets, output state or config are persisted.
 No configuration keys or IPC commands are added by this redesign.
+
+## License/About
+
+A compact pinned Community/Pro badge opens License/About, separate from the four
+Operate cards and six Compose pages. Back/Escape returns to the previous view.
+The page shows the daemon-acknowledged edition/license state, perpetual or
+subscription policy, masked ID, update cutoff/release eligibility, pending downgrade
+and availability reasons. Planned workflows are labelled not implemented; purchase
+cannot make missing code usable. Disconnected state never grants active capabilities.
+
+The import source-path entry is panel-only scratch data, not an INI key. Import,
+Reload and confirmed Remove use the authenticated command queue. Invalid replacement
+preserves the previous file. Copy diagnostics excludes payloads/signatures and a full
+license ID. The optional purchase/info action appears only for a configured HTTPS
+URL and opens the system browser on an explicit click without adding identifiers.
+Licensing does not start/resume lanes and adds no account login or startup dialog.
+`licensing.file` and `licensing.upgrade_url` are session settings; configuring them
+never automatically saves the INI.
+
+Recording's overflow exposes encoder-neutral bitrate/rate-control alongside the
+existing codec/container/legacy quality fields. Streaming setup exposes its video
+encoder and the existing bitrate. Sliders keep exact inputs. Encoder-specific legacy
+CRF/preset values are labelled inactive on OpenH264. Actual initialized encoder
+choices and their selection/inactive-setting details are reported from cached worker
+state rather than inferred from `auto`.
+
+Pro uses separate `CastProPanel` and `CastProPreview` native Xorg classes and
+application/package identity. A custom window manager can add these class names to
+its utility/floating rules. Community retains `CastPanel` and `CastPreview`.
+
+## Pro workflows
+
+Pro keeps the same four output/audio cards and six live Compose pages. Source &
+layout adds a Zoom group with legacy/cinematic mode, factor, follow and optional
+click auto-zoom. Advanced geometry, timing, framing/filter/blur controls remain under
+All settings. Annotations & pointer contains synthetic-cursor smoothing and captions.
+
+Audio options shows shared model/language essentials and an All speech settings
+disclosure for the advanced engine/VAD controls. Its compact status reports actual
+model readiness, inference/queue time and errors. Browsing a model picker never
+downloads one or enables audio. The selected source applies to captions; notes
+always use the explicitly permitted microphone.
+Recording options shows the last transcription job's state, progress and sidecar
+paths, then exposes sidecar format and automatic final transcription. A
+separate Speaker notes strip opens/closes the native notes window and its options
+view with Start/Pause/Close and Essentials/All settings; notes mode, speed,
+appearance and matching settings are session edits. Compact Close and Pause remain
+available for an existing Notes window after entitlement loss.
+Notes options links to the same transcription engine surface and displays the
+actual loaded document path separately from the configured default file. Explicit
+load/open replaces the readable snapshot without rewriting that default.
+
+Typed independent choices commit on selection or slider release; a precise text
+input commits on completion. Coupled engine/window/threshold edits use the existing
+pinned Apply/Revert transaction. Every workflow field is reachable through its
+metadata-defined group. Unavailable builds/licenses/capabilities show an explanation
+and retain safety stop/close operations. Panel navigation never starts listening,
+recording or speech following. Closing the panel leaves the notes window alone.

@@ -62,10 +62,91 @@ layout library (vendored v0.14, MIT), SDL3 and SDL3_ttf (zlib licenses). The bun
 Inter UI font is SIL OFL 1.1. Xorg preview also uses the embedded Inter font
 through the existing FreeType dependency, including with `PANEL=0`. Its unmodified
 license is installed whenever the panel or Xorg preview is built. The panel is C and does not introduce a browser runtime.
-The development machine uses a locally built static SDL3_ttf 3.2.2 SDK because
-the system package is absent; system SDL3, FreeType and HarfBuzz remain dynamic.
-Standard builds use the distribution's SDL3_ttf package.
+The current development environment provides SDL3 3.4.16 and SDL3_ttf 3.2.2
+through pkg-config; normal builds use the distribution packages. An earlier local
+static SDL3_ttf SDK remains an explicit development option.
 
 Streaming reuses FFmpeg H.264/AAC/FLV and RTMP/RTMPS support; it adds no runtime
 library. Test-only local TLS fixtures require the `openssl` command, and native
 panel integration uses Xvfb, xdotool and xclip. No such test tools are needed to run Cast.
+
+## Edition profiles and complete artifact accounting
+
+Public Cast code remains MIT. Community `MEDIA_PROFILE=system` can link a
+GPL-enabled distribution FFmpeg; redistributing that combination carries its GPL
+obligations. Pro requires the separately built controlled shared LGPL media tree.
+Disabling x264 in application settings does not change a GPL FFmpeg's license.
+FFmpeg offers no proprietary commercial buyout; see its
+[primary licensing guidance](https://ffmpeg.org/legal.html).
+
+The controlled build pins FFmpeg 9.0.2, OpenH264 2.6.0, OpenSSL 3.5.4 and zlib 1.3.1
+with upstream URLs and verified SHA-256 in `packaging/media-lgpl-lock.json`.
+`tools/deps-lgpl.sh` is explicit opt-in downloading/building; `--offline` accepts
+only complete verified caches. It preserves configuration/patch/license/build
+materials and library hashes. Autodetection, GPL/nonfree and unused external codec
+families are excluded. The required MP4/MKV, FLV, H.264/AAC, MJPEG, configured local
+logo formats, conversion/resampling and RTMP/RTMPS/TLS are retained. OpenH264 is the
+software baseline candidate; actual encoder initialization and sustained recording/
+streaming checks, including decode verification, determine technical readiness.
+
+A local candidate profile may validate engineering behavior with installed libraries
+when exact source caches are unavailable. Candidate builds have nonproduction
+identity and are ineligible for official release. Missing pinned source, unknown
+transitive licenses or absent clean-runtime acceptance remain unresolved production
+inputs; they are never treated as clearance by a successful compiler invocation.
+
+OpenH264 source has BSD copyright terms. A self-built/bundled codec does **not**
+inherit Cisco-provided binary patent coverage: that coverage has specific separate
+binary delivery/use conditions. This project neither downloads Cisco binaries nor
+buys a commercial x264 license. H.264/AAC and optional SDK patent/distribution
+terms require review for the exact commercial offering. See
+[Cisco's binary conditions](https://www.openh264.org/BINARY_LICENSE.txt).
+
+Pro-only license/update verification uses libsodium 1.0.22 under ISC. Community
+has no direct crypto/model dependency. The actual system shared package version
+is recorded by the artifact audit; production must supply pinned crypto source/build
+provenance, rather than pretend an arbitrary installed library is the pinned release.
+
+`packaging/audit.py inventory` walks the resolved ELF dependency closure and records
+library paths/hashes, package/version/evidence, chosen library-level license,
+static/shared linkage, distributed status, source/build references and full available
+license texts. `make check-licenses` writes `inventory.json`,
+`THIRD-PARTY-NOTICES.txt` and `license-texts/` under the selected build directory.
+The native text closure includes Graphite2; its installed COPYING explicitly offers
+LGPL-2.1-or-later, selected here with its SIL notice and full LGPL text. HarfBuzz
+remains MIT. Package lists provide evidence; unresolved library choices are `NOASSERTION` and
+fail strict Pro checking. FreeType deliberately selects FTL; Fontconfig retains its
+HPND/Unicode notices; glibc shared runtime is LGPL and GCC shared runtime selects the
+GCC exception rather than blanket-rejecting GPL package tools. Clay/inih and embedded
+Inter are separately accounted; no installed Noto/system fonts are copied.
+
+`packaging/runtime-dynamic.json` identifies dependencies outside ldd, including
+PipeWire plugins, SDL backend loaders, graphics drivers and font selection.
+Those modules require a clean-runtime load audit before production. The optional
+private speech helper uses the explicit CPU SDK profile in [speech-profile.md](speech-profile.md);
+models are installed separately. WebRTC and additional hardware encoder SDK modules
+are not distributed today. Independently inventory code/model provenance and exact licenses; do not
+assume whisper.cpp/ggml, Whisper models, ONNX/Silero, CUDA or other SDKs have one license.
+System v4l2loopback stays independently installed and unbundled. Compiler, Python,
+Xvfb, curl, NASM and TLS fixture tools are build/test inputs, not application assets.
+
+For distributed controlled media libraries, include the matching dependency source
+archive and build/patch materials beside the artifact. Pro packages put only reviewed
+controlled shared media in `usr/lib/cast-pro/media`; they never overwrite system
+FFmpeg, depend on Arch's GPL FFmpeg or bundle every library on the developer machine.
+LGPL libraries remain ABI-replaceable without hash restrictions at runtime; original
+private application source is not claimed to be LGPL corresponding source. The EULA
+permits library replacement and debugging reverse engineering required by LGPL.
+
+The previous Arch FFmpeg/GLib collector is a historical scoped Community helper. It
+does not cover controlled Pro sources or the complete transitive system closure.
+Exact relied-on system package sources/notices/build materials, MPL file-level changes
+when selected and optional SDK terms require their own matching evidence. Official
+Pro packaging fails closed on unreviewed/disallowed runtime entries, incomplete
+corresponding sources, missing production keys/metadata or dynamic-runtime reviews.
+Automated classification is engineering evidence, not legal sign-off.
+
+See [single-binary delivery feasibility](static-delivery.md) for the current static
+dependency audit and Pro LGPL relinking/source-material requirements. Run
+`make check-static-deps` with the selected edition/backend/media variables to repeat
+the read-only archive inventory; it does not download or build dependencies.

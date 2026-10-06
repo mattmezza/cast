@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "libraries": [],
+  "required_review": [
+    "PipeWire SPA plugins: installed independently; runtime-selected by PipeWire, not bundled",
+    "SDL video/audio backend dynamically loaded system libraries and graphics drivers: clean-runtime acceptance required before official Pro release",
+    "Fontconfig-selected system fonts: no system font files bundled",
+    "No optional hardware encoder SDK or speech runtime enabled in controlled media profile"
+  ]
+}

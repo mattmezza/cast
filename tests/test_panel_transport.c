@@ -31,6 +31,7 @@ typedef struct {
     char magic[8];
     uint32_t version, snapshot_size;
     uint64_t window;
+    CastEditionIdentity identity;
 } TestAttach;
 typedef struct {
     char magic[8];
@@ -65,7 +66,7 @@ static pid_t start_daemon(Config config, Startup startup)
     char error[CAST_ERR];
     int fd;
     do {
-        fd = connect_socket(config.socket_path, 100, error, sizeof error);
+        fd = app_ipc_connect(config.socket_path, 100, error, sizeof error);
         if (fd >= 0) {
             close(fd);
             return pid;
@@ -78,7 +79,7 @@ static pid_t start_daemon(Config config, Startup startup)
 static int send_command(const Config *config, uint64_t generation, int argc, const char **argv)
 {
     char error[CAST_ERR], packet[CAST_IPC_MAX];
-    int fd = connect_socket(config->socket_path, 1000, error, sizeof error);
+    int fd = app_ipc_connect(config->socket_path, 1000, error, sizeof error);
     assert(fd >= 0);
     size_t size = 0;
     if (generation) {
@@ -86,8 +87,7 @@ static int send_command(const Config *config, uint64_t generation, int argc, con
         memcpy(packet + 8, &generation, sizeof generation);
         size = 16;
     }
-    memcpy(packet + size, "CAST1\0", 6);
-    size += 6;
+    size += cast_command_header_write(packet + size);
     for (int i = 0; i < argc; i++) {
         size_t bytes = strlen(argv[i]) + 1;
         assert(size + bytes <= sizeof packet);
@@ -110,11 +110,12 @@ static int send_command(const Config *config, uint64_t generation, int argc, con
 static int attach(const Config *config, int *descriptor, TestReply *reply)
 {
     char error[CAST_ERR];
-    int fd = connect_socket(config->socket_path, 1000, error, sizeof error);
+    int fd = app_ipc_connect(config->socket_path, 1000, error, sizeof error);
     assert(fd >= 0);
-    TestAttach request = {.magic = "CASTP1",
+    TestAttach request = {.magic = "CASTP2",
                           .version = PANEL_PROTOCOL_VERSION,
                           .snapshot_size = sizeof(PanelSnapshot)};
+    request.identity = *cast_edition_identity();
     assert(send(fd, &request, sizeof request, MSG_NOSIGNAL) == sizeof request);
     struct pollfd p = {fd, POLLIN, 0};
     assert(poll(&p, 1, 2000) > 0);
@@ -144,10 +145,11 @@ static void reject_attach(const Config *config, uint32_t version, uint32_t snaps
                           uint64_t window)
 {
     char error[CAST_ERR];
-    int fd = connect_socket(config->socket_path, 1000, error, sizeof error);
+    int fd = app_ipc_connect(config->socket_path, 1000, error, sizeof error);
     assert(fd >= 0);
     TestAttach request = {
-        .magic = "CASTP1", .version = version, .snapshot_size = snapshot_size, .window = window};
+        .magic = "CASTP2", .version = version, .snapshot_size = snapshot_size, .window = window};
+    request.identity = *cast_edition_identity();
     assert(send(fd, &request, sizeof request, MSG_NOSIGNAL) == sizeof request);
     struct pollfd p = {fd, POLLIN, 0};
     assert(poll(&p, 1, 2000) > 0);
@@ -563,7 +565,7 @@ int main(int argc, char **argv)
     int pair[2];
     assert(!socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair));
     PanelTransport *transport = panel_transport_create();
-    TestAttach request = {.magic = "CASTP1",
+    TestAttach request = {.magic = "CASTP2",
                           .version = PANEL_PROTOCOL_VERSION,
                           .snapshot_size = sizeof(PanelSnapshot)};
     assert(panel_transport_request(transport, NULL, pair[0], &request, sizeof request, getuid() + 1,

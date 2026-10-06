@@ -1,6 +1,6 @@
 # Requirements traceability
 
-This maps `cast-build-prompt.md` and subsequent user requests to implementation and verification.
+This maps the original locally retained build brief and subsequent user requests to implementation and verification. Prompt files are excluded from public source archives and version control.
 The v0.4 request explicitly changes recording pause to append solid video/silence;
 the original same-file timeline pause is retained as recording cut/resume. Checked items
 mean implementation with independent automated evidence. They do not establish
