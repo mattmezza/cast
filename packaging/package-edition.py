@@ -75,6 +75,20 @@ def main():
         f'STT_PROFILE={a.stt_profile}', f'STT_ENGINEERING={a.stt_engineering}',
         f'OFFICIAL_RELEASE={a.official}', f'DESTDIR={stage}', 'PREFIX=/usr', 'install')
     doc = stage / f'usr/share/doc/{a.binary}'
+    if a.edition == 'pro':
+        # Validate and complete the staged closure before ldd or execution can
+        # follow a loader path. Audit the actual $ORIGIN media, not an SDK override.
+        lib = stage / 'usr/lib/cast-pro/media'
+        lib.mkdir(parents=True, exist_ok=True)
+        for source in (pathlib.Path(a.lgpl_root) / 'prefix/lib').glob('*.so*'):
+            if source.is_symlink():
+                target = source.readlink()
+                if target.is_absolute() or '..' in target.parts:
+                    raise ValueError('controlled library symlink escapes package directory')
+                if not (lib / source.name).is_symlink():
+                    (lib / source.name).symlink_to(target)
+            elif source.is_file():
+                shutil.copy2(source, lib / source.name)
     audit_args = ['python3', 'packaging/audit.py', 'inventory', '--edition', a.edition, '--media-profile', a.media_profile,
                   '--pro-root', a.pro_root,
                   '--binary', str(stage / f'usr/bin/{a.binary}'), '--official', str(a.official), '--lgpl-root', a.lgpl_root, '--output', str(doc / 'dependencies')]
@@ -112,17 +126,6 @@ def main():
             raise ValueError('official speech package requires matching controlled speech sources')
 
     if a.edition == 'pro':
-        lib = stage / 'usr/lib/cast-pro/media'
-        lib.mkdir(parents=True, exist_ok=True)
-        for source in (pathlib.Path(a.lgpl_root) / 'prefix/lib').glob('*.so*'):
-            if source.is_symlink():
-                target = source.readlink()
-                if target.is_absolute() or '..' in target.parts:
-                    raise ValueError('controlled library symlink escapes package directory')
-                if not (lib / source.name).is_symlink():
-                    (lib / source.name).symlink_to(target)
-            elif source.is_file():
-                shutil.copy2(source, lib / source.name)
         private = private_module
         for filename in ('LICENSE', 'EULA-DRAFT.md'):
             if not (private / filename).is_file():
