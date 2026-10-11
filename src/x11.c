@@ -1378,7 +1378,7 @@ static void selection_outline(Xorg *p, int x, int y)
         p->selection = XCreateWindow(p->d, p->root, left, top, (unsigned)w, (unsigned)h, 0,
                                      CopyFromParent, InputOutput, CopyFromParent,
                                      CWOverrideRedirect | CWBackPixel | CWSaveUnder, &a);
-        XStoreName(p->d, p->selection, "cast region selection");
+        XStoreName(p->d, p->selection, CAST_DISPLAY_NAME " region selection");
     }
     XMoveResizeWindow(p->d, p->selection, left, top, (unsigned)w, (unsigned)h);
     XRectangle rects[4] = {{0, 0, (unsigned short)w, 2},
@@ -1762,8 +1762,8 @@ static void preview_create(Xorg *p, const Config *cfg)
     p->preview_border = 0;
     p->preview_dragging = false;
     XStoreName(p->d, p->preview,
-               !strcmp(CAST_APPLICATION_NAME, "cast-pro") ? "Cast Pro output preview"
-                                                          : "cast output preview");
+               !strcmp(CAST_APPLICATION_NAME, "cast-pro") ? CAST_PRO_DISPLAY_NAME " output preview"
+                                                          : CAST_DISPLAY_NAME " output preview");
     XClassHint hint = {.res_name = !strcmp(CAST_APPLICATION_NAME, "cast-pro") ? "cast-pro-preview"
                                                                               : "cast-preview",
                        .res_class = !strcmp(CAST_APPLICATION_NAME, "cast-pro") ? "CastProPreview"
@@ -2484,7 +2484,10 @@ int x11_countdown(Platform *platform, uint64_t remaining_ns, char *error, size_t
         p->preview_epoch++;
         p->preview_enabled = false;
         p->preview_disabled = false;
-        XStoreName(p->d, p->countdown, "cast output preview");
+        XStoreName(p->d, p->countdown,
+                   !strcmp(CAST_APPLICATION_NAME, "cast-pro")
+                       ? CAST_PRO_DISPLAY_NAME " output preview"
+                       : CAST_DISPLAY_NAME " output preview");
         XSizeHints size = {.flags = PMinSize | PMaxSize,
                            .min_width = p->preview_w,
                            .min_height = p->preview_h,

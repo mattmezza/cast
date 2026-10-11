@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
-Name=Cast
+Name=SuperScreencast Community
 GenericName=Presentation Camera
 Comment=Share your screen and camera, record, and stream
 Exec=cast-app
 Icon=cast
 Terminal=false
 Categories=AudioVideo;Video;Recorder;
-Keywords=screen;camera;record;stream;presentation;
+Keywords=screen;camera;record;stream;presentation;cast;superscreencast;
 StartupWMClass=CastPanel

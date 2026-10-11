@@ -143,7 +143,7 @@ static Window wait_preview(Display *d, Platform *p, Config *cfg, Compositor *c, 
         pump(d, p, cfg, c, true);
         assert(platform_preview(p, frame, state, cfg, error, sizeof(error)) == 0);
         XSync(d, false);
-        Window win = named_window(d, "cast output preview");
+        Window win = named_window(d, CAST_DISPLAY_NAME " output preview");
         XWindowAttributes attr;
         if (win && XGetWindowAttributes(d, win, &attr) && attr.map_state == IsViewable) {
             return win;
@@ -536,10 +536,10 @@ static void countdown_tests(Display *d, Platform *p, Config *cfg, Compositor *co
     char error[CAST_ERR];
     Frame capture = {0};
     Cursor cursor;
-    Window existing_preview = named_window(d, "cast output preview");
+    Window existing_preview = named_window(d, CAST_DISPLAY_NAME " output preview");
     assert(platform_countdown(p, 3000000000ULL, error, sizeof error) == 0);
     XSync(d, false);
-    Window window = named_window(d, "cast output preview");
+    Window window = named_window(d, CAST_DISPLAY_NAME " output preview");
     XWindowAttributes attr;
     assert(window && XGetWindowAttributes(d, window, &attr) && attr.map_state == IsViewable);
     assert(!attr.override_redirect && attr.width == 640 && attr.height > 300);
@@ -604,7 +604,7 @@ static void countdown_tests(Display *d, Platform *p, Config *cfg, Compositor *co
     XDestroyWindow(d, frame);
     XSync(d, false);
     assert(platform_countdown(p, 0, error, sizeof error) == 0);
-    assert(!named_window(d, "cast output preview"));
+    assert(!named_window(d, CAST_DISPLAY_NAME " output preview"));
     assert(platform_capture(p, &capture, &cursor, error, sizeof error) == 0);
     for (int y = 0; y < capture.height; y++) {
         for (int x = 0; x < capture.width; x++) {
@@ -613,7 +613,7 @@ static void countdown_tests(Display *d, Platform *p, Config *cfg, Compositor *co
     }
     assert(platform_countdown(p, 1000000000ULL, error, sizeof error) == 0);
     XSync(d, false);
-    window = named_window(d, "cast output preview");
+    window = named_window(d, CAST_DISPLAY_NAME " output preview");
     /* X clients may override fixed size hints. Repaint both smaller and larger
      * guides before cancellation to exercise image and pixmap reallocation. */
     const int sizes[][2] = {{400, 289}, {720, 480}};
@@ -638,7 +638,7 @@ static void countdown_tests(Display *d, Platform *p, Config *cfg, Compositor *co
     /* The visible Cancel control also wins at the final deadline poll. */
     assert(platform_countdown(p, 1000000000ULL, error, sizeof error) == 0);
     XSync(d, false);
-    window = named_window(d, "cast output preview");
+    window = named_window(d, CAST_DISPLAY_NAME " output preview");
     assert(XGetWindowAttributes(d, window, &attr));
     memset(&cancel, 0, sizeof cancel);
     cancel.xbutton.type = ButtonPress;
@@ -656,7 +656,7 @@ static void countdown_tests(Display *d, Platform *p, Config *cfg, Compositor *co
     /* A panel attachment hides directly: queued cancellation must still win. */
     assert(platform_countdown(p, 1000000000ULL, error, sizeof error) == 0);
     XSync(d, false);
-    window = named_window(d, "cast output preview");
+    window = named_window(d, CAST_DISPLAY_NAME " output preview");
     cancel.xkey.window = window;
     XSendEvent(d, window, false, KeyPressMask, &cancel);
     XSync(d, false);

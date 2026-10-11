@@ -1,5 +1,6 @@
 #ifndef CAST_H
 #define CAST_H
+#include "branding.h"
 #include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>

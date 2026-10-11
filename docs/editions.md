@@ -1,13 +1,13 @@
-# Cast Community and Cast Pro
+# SuperScreencast Community and SuperScreencast Pro
 
-Cast Community is the public MIT product. Every currently shipping capture,
+SuperScreencast Community is the public MIT product. Every currently shipping capture,
 webcam/composition, virtual-camera, ordinary recording, single-destination RTMP/
 RTMPS, manual zoom/follow, overlay, annotation, preset, audio, panel, CLI,
 configuration, privacy and reliability feature remains available without payment.
 Community has no watermark, duration/resolution restriction or commercial-use ban.
 MIT permits commercial use and forks. Dependency obligations still apply to binaries.
 
-Cast Pro is a distinct proprietary binary linked with a separately licensed private
+SuperScreencast Pro is a distinct proprietary binary linked with a separately licensed private
 provider. An unlicensed Pro installation retains Community functionality. A signed
 license can enable only implemented, compiled, supported, dependency-ready modules.
 The private provider implements three workflows. Editable recording projects remain
@@ -45,11 +45,10 @@ it cannot satisfy official release provenance checks.
 
 `PRO_ROOT` defaults to the sibling `../cast-pro`; an explicit override must be
 absolute and outside this worktree. The private monorepo has the desktop provider,
-verifier, issuer and tests in `pro/`, with a `server/README.md` placeholder for future
-Go licensing/payment/site work. No server is implemented. The earlier bare provider
-layout remains accepted for compatibility. The sandbox cannot write the sibling:
-the prepared checkout is `/tmp/cast-pro`, selected explicitly. Preserve it in a
-permanent private checkout before removing `/tmp`. The private provider, verifier, issuer, trusted key headers, draft
+verifier, issuer and tests in `pro/`, the Go checkout/license-email service in
+`pay/`, and the public website in `www/`. Hosting and production commerce setup
+are separate from the offline desktop license verifier. The earlier bare provider
+layout remains accepted for compatibility. The private provider, verifier, issuer, trusted key headers, draft
 EULA and premium modules must stay outside public archives and CI artifacts.
 Generated test key files remain outside Git. The private publishing handoff verifies
 GitHub ownership and the repository's private flag before sending any source.

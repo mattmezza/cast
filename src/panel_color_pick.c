@@ -1,4 +1,5 @@
 #include "panel_color_pick.h"
+#include "branding.h"
 
 #include <math.h>
 #include <stdbool.h>
@@ -247,7 +248,7 @@ static void x11_create_swatch(PanelColorPick *pick)
         SWATCH_SIZE, SWATCH_SIZE, 0, CopyFromParent, InputOutput, CopyFromParent,
         CWOverrideRedirect | CWSaveUnder | CWBackPixel, &attributes);
     pick->swatch_gc = XCreateGC(display, pick->swatch, 0, NULL);
-    XStoreName(display, pick->swatch, "cast screen color");
+    XStoreName(display, pick->swatch, CAST_DISPLAY_NAME " screen color");
     XClassHint class_hint = {.res_name = "cast-color-picker", .res_class = "CastColorPicker"};
     XSetClassHint(display, pick->swatch, &class_hint);
     XWMHints hints = {.flags = InputHint, .input = False};

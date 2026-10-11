@@ -1,6 +1,6 @@
 # Native control panel
 
-Build with `PANEL=1` and launch `cast` (or **Cast** from the application menu).
+Build with `PANEL=1` and launch `cast` (or **SuperScreencast** from the application menu).
 Ordinary startup opens the panel and starts a daemon unless one is already running.
 `cast --headless` runs only the foreground daemon; `cast panel` attaches a panel
 without starting capture automatically. Navigating, resizing or reconnecting never
@@ -100,7 +100,7 @@ capture backends without panel exclusion. Selected application capture naturally
 excludes both separate windows. For unobstructed monitor/region capture, keep the
 controls outside the captured area.
 
-The experimental transparent mode has been removed: it only revealed Cast's
+The experimental transparent mode has been removed: it only revealed SuperScreencast's
 background, rather than the desktop hidden behind the control windows. Remove
 `[capture] exclusion` from configurations that used that unreleased setting.
 

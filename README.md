@@ -1,8 +1,8 @@
-# cast
+# SuperScreencast
 
-![cast — Your screen. Your camera. Your call.](assets/readme-cover.png)
+![SuperScreencast — Your screen. Your camera. Your call.](assets/readme-cover.png)
 
-Your screen, your camera, your call. `cast` is a Linux utility written in C
+Your screen, your camera, your call. **SuperScreencast** is a Linux utility written in C
 that composes screen capture and a webcam into an existing virtual camera, with optional
 presentation annotations, PipeWire audio, independent local recording and RTMP/RTMPS
 streaming. Runtime configuration and one CLI replace a scene editor or heavyweight GUI.
@@ -12,6 +12,12 @@ PipeWire; selection, input and preview capabilities differ by backend. A confere
 receives the composition as a webcam. Each participant can use their own camera tile;
 cast does not change call layouts, resolution limits or compression. Text readability
 depends on the conferencing app and viewers enlarging/pinning the tile.
+
+Website: [superscreencast.com](https://superscreencast.com) (deployment pending).
+
+The product is branded **SuperScreencast Community** and **SuperScreencast Pro**.
+The terminal commands remain `cast` and `cast-pro`; existing scripts, config paths,
+package IDs and window-manager classes remain compatible. See [branding](docs/branding.md).
 
 ## Install on Arch Linux
 
@@ -43,8 +49,8 @@ daemon before updating, then restart it. Other distributions can build from sour
 
 ## Project status
 
-Cast Community is open source under the MIT license. Every shipping feature stays
-free, including commercial use, recording, streaming and existing zoom. Cast Pro is
+SuperScreencast Community is open source under the MIT license. Every shipping feature stays
+free, including commercial use, recording, streaming and existing zoom. SuperScreencast Pro is
 a separate proprietary edition requiring private modules and an offline commercial
 license. Pro implements cinematic zoom, local transcription/subtitles and timed or
 speech-following speaker notes. Editable recording projects remain planned. See
@@ -67,7 +73,7 @@ make -j
 ./cast doctor
 ```
 
-`make X11=1 WAYLAND=1` enables both backends. `make X11=0 WAYLAND=1` removes Cast’s direct Xorg build dependencies. `make check`, `make sanitize` and `make package` run verification,
+`make X11=1 WAYLAND=1` enables both backends. `make X11=0 WAYLAND=1` removes SuperScreencast’s direct Xorg build dependencies. `make check`, `make sanitize` and `make package` run verification,
 sanitizers and binary/source packaging respectively. `make check-unit` runs independent
 tests without needing socket bind/display permissions; `make check-xorg` runs the
 isolated Xvfb smoke, and `make benchmark` measures composition alone. Test dependencies (Python, Xvfb,
@@ -81,11 +87,11 @@ them with `sudo pacman -S --needed sdl3 sdl3_ttf`, build with
 `./cast` to open the app and start or attach to its daemon. `./cast panel` opens
 an attach-only panel, with Start available when stopped. Closing the panel leaves
 capture running; Quit confirms before stopping every output and saving a recording.
-After `make install PANEL=1`, launch **Cast** from the application menu, or run
+After `make install PANEL=1`, launch **SuperScreencast Community** from the application menu, or run
 `cast-app` from dmenu. Use `./cast --headless` for a terminal or service daemon.
 See [panel controls and capture visibility](docs/control-panel.md).
 
-![Cast control panel with output task cards and Operate and Compose tabs](assets/control-panel.png)
+![SuperScreencast control panel with output task cards and Operate and Compose tabs](assets/control-panel.png)
 
 *Private synthetic fixture; capture capabilities depend on the selected backend.*
 

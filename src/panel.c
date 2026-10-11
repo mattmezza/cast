@@ -2365,7 +2365,8 @@ static void lane_menu_body(Panel *p, int lane)
             button(p, 9400, p->speech_all_settings ? "Essentials" : "All speech settings", true,
                    false, A_SPEECH_ADVANCED, 0);
         }
-        text_wrapped("Disappeared sources never fall back to a broad capture. Cast cannot mute a "
+        text_wrapped("Disappeared sources never fall back to a broad capture. " CAST_DISPLAY_NAME
+                     " cannot mute a "
                      "microphone the conferencing app selected — use the app's own mute.",
                      muted);
     }
@@ -2921,8 +2922,9 @@ static void license_body(Panel *p)
                      .padding = {16, 16, 16, 20},
                      .childGap = 10}})
     {
-        label(format(p, "Cast %s · %s", identity->pro ? "Pro" : "Community", identity->version), 3,
-              foreground);
+        label(CAST_DISPLAY_NAME, 3, foreground);
+        label(format(p, "%s · %s", identity->pro ? "Pro" : "Community", identity->version), 1,
+              secondary);
         text_wrapped(identity->official ? "Official release" : "Development build · nonproduction",
                      secondary);
         if (!p->snapshot.connected) {
@@ -3612,11 +3614,12 @@ static void quit_confirmation_layout(Panel *p)
               .backgroundColor = surface,
               .border = {.color = line, .width = outline_width}})
         {
-            label("Quit Cast?", 3, foreground);
+            label("Quit " CAST_DISPLAY_NAME "?", 3, foreground);
             text_wrapped("This stops the virtual camera and streaming, finishes and saves any "
                          "recording, and closes the daemon, preview and panel.",
                          foreground);
-            text_wrapped("Close panel keeps Cast running in the background.", secondary);
+            text_wrapped("Close panel keeps " CAST_DISPLAY_NAME " running in the background.",
+                         secondary);
             if (p->error[0]) {
                 text_wrapped(p->error, danger);
             }
@@ -4867,7 +4870,7 @@ static void activate(Panel *p, Widget *w)
         char diagnostic[1024];
         snprintf(
             diagnostic, sizeof diagnostic,
-            "Cast %s %s; license=%s; kind=%s; ID=%s; release=%lld; updates_until=%lld; "
+            CAST_DISPLAY_NAME " %s %s; license=%s; kind=%s; ID=%s; release=%lld; updates_until=%lld; "
             "pending_downgrade=%s; platform=%s; media=%s; API=%u; "
             "status=%s",
             identity->edition, identity->version, cast_license_state_name(edition->license.state),
@@ -6056,7 +6059,8 @@ int panel_run_application(const Config *config, int startup_argc, const char *co
         }
     }
     p->window = SDL_CreateWindow(
-        cast_edition_identity()->pro ? "Cast Pro control panel" : "cast control panel",
+        cast_edition_identity()->pro ? CAST_PRO_DISPLAY_NAME " control panel"
+                                     : CAST_DISPLAY_NAME " Community control panel",
         (int)roundf(480 * initial_scale), (int)roundf(760 * initial_scale),
         SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN);
     if (!p->window) {
