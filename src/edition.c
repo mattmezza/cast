@@ -709,7 +709,7 @@ static int edition_command(CastLicenseSession *session, int argc, char **argv, c
         return result == -2 ? 2 : result == -3 ? 5 : 3;
     }
     snprintf(out, on, "License %s acknowledged. %s\n", verb,
-             identity.pro ? "All premium workflows are currently planned/unimplemented."
+             identity.pro ? "Check license status and features for current availability."
                           : "Community remains Community; importing cannot add absent Pro code.");
     return 0;
 }
