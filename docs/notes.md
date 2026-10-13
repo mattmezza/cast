@@ -175,24 +175,34 @@ after the bounded selection shows an explicit glyph-count warning; installing a
 font does not imply every script has supported shaping. The headless shared
 path-only font contract still selects a single face for its separate consumers.
 
-Weighted semi-global edit alignment accepts skips, repeats and insertions. Common
-words have less weight. Local alignment is bounded by `follow_window_words`; wider
-reacquisition scans a bounded document and aligns at most 48 nearby candidates.
-Partial results tint a tentative line lightly without committing a cursor. Final
-results commit only after thresholds/ambiguity checks. Distant reacquisition needs
-at least the configured phrase length and two independent non-overlapping audio
-confirmations; opt-in backward reacquisition requires three and a stronger score.
-Recent forward matches estimate local visual-line pace from their observed token
-positions and audio endpoints. Between reliable updates, that estimate smooths only
-the visible offset, capped at half a wrapped line and 500 ms of lookahead; it never
-predicts a committed token. Weak partial/final speech and silence clear that estimate
-and hold the view. A distant independently confirmed passage more than eight wrapped
-lines away holds briefly, then recenters after 100 ms instead of scrolling through
-hundreds of intervening lines. Pause/manual/document barriers cancel that reposition.
-Repeated ambiguous phrases hold position and expose up to four distinct passage
-lines for explicit navigation. Silence, tangent/weak speech and stale
-results never drive predictive timed advance. Scores are algorithm similarities,
-not calibrated speech-recognition probabilities.
+Weighted semi-global edit alignment tolerates skipped and mispronounced words.
+Automatic matching stays within `follow_window_words` of the current cursor
+(default 60 words ahead). It never scans the whole script to reacquire. A short,
+distinctive nearby phrase can recover a skipped sentence immediately; a reliable
+suffix can recover after an earlier mismatch. For a deliberately distant section,
+use Prev/Next, a body anchor or `goto --line`, then Play.
+
+Exact repeated phrases choose the nearest forward occurrence. Similar nonexact
+matches still need adequate score and separation from alternative matches. Short
+common-word fragments and unrelated speech hold the position. Backward recovery
+remains an explicit option with three independent confirmations, within the same
+nearby word bound.
+
+Confident partial results highlight individual spoken words and move the visible
+reading position without waiting for a silence-final result. Tentative progress
+may be corrected by later recognition; final results commit the authoritative
+cursor. Speech highlighting follows UTF-8 token spans across wrapped, bold and
+italic text. Unread words retain the foreground color. Timed mode keeps its line
+highlight. The CPU model still introduces inference latency; this is recognition
+feedback rather than sample-accurate karaoke timing.
+
+Notes inference retains at most three seconds of rolling audio context; captions
+keep their configured context. Quiet speech can pass the energy detector at its
+default threshold while low-level room noise remains suppressed. Recent forward
+final matches estimate local visual-line pace, capped at half a wrapped line and
+500 ms of lookahead. Weak speech and silence clear that estimate and hold the
+view. Pause/manual/document/privacy barriers cancel tentative progress and pending
+repositioning.
 
 ## Configuration
 
@@ -222,8 +232,8 @@ start again. A window must be closed/opened to use new initial dimensions.
 | speech_max_lines_per_second | 6 | 0.5–30 |
 | follow_threshold / reacquire_threshold | 0.75 / 0.85 | 0–1, reacquire ≥ follow |
 | ambiguity_margin | 0.12 | 0–1 |
-| reacquire_min_words | 5 | 2–30 |
-| follow_window_words | 120 | 20–2000 |
+| reacquire_min_words | 3 | 2–30 |
+| follow_window_words | 60 | 20–2000 |
 | off_script_grace_ms | 1200 | 0–5000 |
 | silence_hold_ms | 800 | 100–5000 |
 | allow_backward_reacquire | false | stronger score + three confirmations |

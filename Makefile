@@ -14,6 +14,7 @@ STT_CPU_BACKEND =
 STT_HELPER_PATH = $(PREFIX)/libexec/cast-pro-stt-helper
 STT_PROFILE = $(CURDIR)/build/deps-stt/profile.json
 STT_ENGINEERING = 0
+STT_GPU_ENGINEERING = 0
 VERSION = 0.10.0
 SOURCE_COMMIT = working-tree
 RELEASE_NOTES =
@@ -41,8 +42,13 @@ endif
 ifeq ($(filter $(MEDIA_PROFILE),system lgpl),)
 $(error MEDIA_PROFILE must be system or lgpl)
 endif
-ifneq ($(filter-out 0 1,$(X11) $(WAYLAND) $(PANEL) $(STT) $(STT_ENGINEERING)),)
-$(error X11 WAYLAND PANEL STT STT_ENGINEERING must be 0 or 1)
+ifneq ($(filter-out 0 1,$(X11) $(WAYLAND) $(PANEL) $(STT) $(STT_ENGINEERING) $(STT_GPU_ENGINEERING)),)
+$(error X11 WAYLAND PANEL STT STT_ENGINEERING STT_GPU_ENGINEERING must be 0 or 1)
+endif
+ifeq ($(STT_GPU_ENGINEERING),1)
+ifneq ($(EDITION):$(STT):$(STT_ENGINEERING):$(OFFICIAL_RELEASE),pro:1:1:0)
+$(error GPU engineering requires a nonofficial Pro STT engineering build)
+endif
 endif
 BINARY = cast
 ifeq ($(EDITION),pro)
@@ -95,7 +101,7 @@ ifneq ($(filter 1,$(X11) $(PANEL)),)
 FONT_OBJECT = $(BUILD)/src/panel_font.o
 endif
 # Hash every provider/trust identity as well as backend/media options into object paths.
-STT_IDENTITY = $(if $(filter pro:1,$(EDITION):$(STT)),$(STT_CFLAGS):$(STT_LIBS):$(STT_CPU_BACKEND):$(STT_HELPER_PATH):$(STT_PROFILE):$(STT_ENGINEERING):$(shell test ! -f '$(STT_PROFILE)' || sha256sum '$(STT_PROFILE)'),disabled)
+STT_IDENTITY = $(if $(filter pro:1,$(EDITION):$(STT)),$(STT_CFLAGS):$(STT_LIBS):$(STT_CPU_BACKEND):$(STT_HELPER_PATH):$(STT_PROFILE):$(STT_ENGINEERING):$(STT_GPU_ENGINEERING):$(shell test ! -f '$(STT_PROFILE)' || sha256sum '$(STT_PROFILE)'),disabled)
 INTEGRATION_ID := $(shell { printf "%s" "$(EDITION):$(X11):$(WAYLAND):$(PANEL):$(STT):$(STT_IDENTITY):$(MEDIA_PROFILE):$(LGPL_ROOT):$(PRO_ROOT):$(CORE_REVISION):$(PRIVATE_REVISION):$(OFFICIAL_RELEASE):$(RELEASE_TIMESTAMP):$(CC):$(CFLAGS):$(LDFLAGS):$(PANEL_CFLAGS):$(PANEL_LIBS)"; cat $(wildcard src/*.c src/*.h src/*.S vendor/inih/*.c vendor/inih/*.h vendor/clay/*.h completions/* assets/fonts/* packaging/install.sh) $(if $(filter pro,$(EDITION)),$(wildcard $(PRO_DIR)/src/*.c $(PRO_DIR)/src/*.h $(PRO_DIR)/src/*/*.c $(PRO_DIR)/src/*/*.h $(PRO_DIR)/src/*/*.cpp $(PRO_TRUST_HEADER))) 2>/dev/null; } | sha256sum | cut -c1-32)
 CPPFLAGS += -DCAST_BUILD_ID='"$(INTEGRATION_ID)"'
 SOURCES += $(PRO_SOURCES)
@@ -424,7 +430,7 @@ $(BUILD)/helper/%.o: %.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) -Werror -ffunction-sections -fdata-sections -std=gnu11 -c $< -o $@
 $(BUILD)/helper/whisper_helper.o: $(PRO_DIR)/src/speech/whisper_helper.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) $(CPPFLAGS) $(STT_CFLAGS) -DCAST_SPEECH_HELPER_EXECUTABLE $(if $(STT_CPU_BACKEND),-DCAST_GGML_CPU_BACKEND_PATH='"$(STT_CPU_BACKEND)"') $(CFLAGS) -Wall -Wextra -Werror -std=c++17 -ffunction-sections -fdata-sections -c $< -o $@
+	$(CXX) $(CPPFLAGS) $(STT_CFLAGS) -DCAST_SPEECH_HELPER_EXECUTABLE $(if $(filter 1,$(STT_GPU_ENGINEERING)),-DCAST_SPEECH_VULKAN_DEV=1) $(if $(STT_CPU_BACKEND),-DCAST_GGML_CPU_BACKEND_PATH='"$(STT_CPU_BACKEND)"') $(CFLAGS) -Wall -Wextra -Werror -std=c++17 -ffunction-sections -fdata-sections -c $< -o $@
 $(STT_HELPER): $(BUILD)/helper/whisper_helper.o $(STT_IDENTITY_OBJECTS)
 	$(CXX) $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../lib/cast-pro/speech' -Wl,--gc-sections -o $@ $^ $(STT_LIBS) $(shell pkg-config --libs libsodium) -lpthread -lm
 endif

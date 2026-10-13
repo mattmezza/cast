@@ -274,8 +274,8 @@ inference independently of the user's VAD threshold.
 | `follow_threshold` | `0.75` | 0–1 |
 | `reacquire_threshold` | `0.85` | 0–1 |
 | `ambiguity_margin` | `0.12` | 0–1 |
-| `reacquire_min_words` | `5` | 2–30 |
-| `follow_window_words` | `120` | 20–2000 |
+| `reacquire_min_words` | `3` | 2–30 |
+| `follow_window_words` | `60` | 20–2000 |
 | `off_script_grace_ms` | `1200` | 0–5000 |
 | `silence_hold_ms` | `800` | 100–5000 |
 | `allow_backward_reacquire` | `false` | true, false |
