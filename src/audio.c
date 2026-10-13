@@ -838,6 +838,15 @@ int audio_read_selection(CastAudio *a, int source, uint64_t ns, float *dst,
     uint64_t start = sample_time(ns);
     for (unsigned k = 0; k < 2; ++k) {
         if ((source != 2 && source != (int)k) || !(k ? a->cfg.desktop : a->cfg.mic)) continue;
+        if (a->lane[k].end < start + count) {
+            if (a->started) pw_thread_loop_unlock(a->loop);
+            snprintf(error, size, "waiting for captured %s audio",
+                     k ? "desktop" : "microphone");
+            return 1;
+        }
+    }
+    for (unsigned k = 0; k < 2; ++k) {
+        if ((source != 2 && source != (int)k) || !(k ? a->cfg.desktop : a->cfg.mic)) continue;
         struct AudioLane *lane = &a->lane[k];
         float gain = (float)(k ? a->cfg.desktop_gain : a->cfg.mic_gain);
         for (unsigned i = 0; i < count; ++i) {

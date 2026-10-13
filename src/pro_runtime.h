@@ -40,7 +40,8 @@ typedef struct {
     int (*settings)(void *, unsigned pairs, const char *const *keys, const char *const *values,
                     char *, size_t);
     /* Worker-only bounded PCM read from already enabled capture nodes. Samples
-     * are 48kHz stereo floats; no device acquisition, consent or source fallback. */
+     * are 48kHz stereo floats; no device acquisition, consent or source fallback.
+     * Returns 0 for a captured window, positive while waiting, negative on error. */
     int (*audio_read)(void *, CastRuntimeConsumer, CastRuntimeAudioSource, uint64_t timestamp_ns,
                       float *, unsigned frames, uint64_t expected_epoch, char *, size_t);
     /* Native-client-only identity-checked ordinary IPC. Document chunks are

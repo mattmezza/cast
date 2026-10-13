@@ -508,6 +508,29 @@ static void disk_failure_test(const char *directory)
     media_close(m);
     puts("ENOSPC write failure: partial file retained, virtual continues, next recording decodes");
 }
+static void speech_audio_wait_test(void)
+{
+    Config cfg;
+    Media *m = new_media(&cfg);
+    CastAudio *audio = media_test_audio(m);
+    float samples[960], out[960];
+    for (unsigned i = 0; i < 960; ++i) samples[i] = .25f;
+    uint64_t start = cast_now_ns();
+    char error[256];
+    audio_test_push(audio, 0, start, samples, 480);
+    uint64_t pending = start + UINT64_C(10000000);
+    assert(audio_read_selection(audio, 0, pending, out, 480, error, sizeof error) == 1);
+    for (unsigned i = 0; i < 960; ++i) assert(out[i] == 0);
+    audio_test_push(audio, 0, pending, samples, 480);
+    assert(!audio_read_selection(audio, 0, pending, out, 480, error, sizeof error));
+    for (unsigned i = 0; i < 960; ++i) assert(out[i] == .25f);
+    memset(samples, 0, sizeof samples);
+    audio_test_push(audio, 0, pending + UINT64_C(10000000), samples, 480);
+    assert(!audio_read_selection(audio, 0, pending + UINT64_C(10000000), out, 480,
+                                 error, sizeof error));
+    media_close(m);
+    puts("speech audio: pending capture is retried; real silence remains a successful read");
+}
 static void audio_lanes_test(void)
 {
     Config cfg;
@@ -1244,6 +1267,11 @@ int main(int argc, char **argv)
         camera_worker_test();
         return 0;
     }
+    if (argc == 2 && !strcmp(argv[1], "--audio-only")) {
+        speech_audio_wait_test();
+        audio_lanes_test();
+        return 0;
+    }
     codec_selection_test();
     video_conversion_test();
     char directory[] = "/tmp/cast-media-test-XXXXXX";
@@ -1260,6 +1288,7 @@ int main(int argc, char **argv)
     responsiveness_test(directory);
     disk_failure_test(directory);
     audio_lanes_test();
+    speech_audio_wait_test();
     output_negotiation_test();
     camera_color_test();
     camera_worker_test();
