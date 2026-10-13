@@ -29,7 +29,7 @@ def wait_until(predicate, description, timeout=10):
     raise AssertionError(description)
 
 
-def exercise(focused_setup_parent=False, focused_exclusion=False, focused_lifecycle=False, focused_license=False):
+def exercise(focused_setup_parent=False, focused_exclusion=False, focused_lifecycle=False, focused_license=False, focused_notes=False):
     with tempfile.TemporaryDirectory(prefix="cast-panel-redesign-") as directory:
         root = Path(directory)
         environment = os.environ.copy()
@@ -81,7 +81,7 @@ def exercise(focused_setup_parent=False, focused_exclusion=False, focused_lifecy
                           "synthetic", "--output-device", "none", "--width", "320",
                           "--height", "240", "--fps", "20")
             wait_until(lambda: ui()["frame"] and ui()["connected"], "application did not start panel + daemon")
-            window = xdo("search", "--onlyvisible", "--pid", child.pid, "--class", "CastPanel").splitlines()[0]
+            window = xdo("search", "--onlyvisible", "--pid", child.pid, "--class", "CastProPanel" if focused_notes else "CastPanel").splitlines()[0]
             xdo("windowfocus", "--sync", window)
             xdo("windowmove", window, 0, 0)
             return child
@@ -92,7 +92,7 @@ def exercise(focused_setup_parent=False, focused_exclusion=False, focused_lifecy
             last_ui = {"frame": 0, "connected": False, "widgets": []}
             child = spawn(BINARY, *common, "panel")
             wait_until(lambda: ui()["frame"] and ui()["connected"], "native renderer did not initialize")
-            window = xdo("search", "--onlyvisible", "--pid", child.pid, "--class", "CastPanel").splitlines()[0]
+            window = xdo("search", "--onlyvisible", "--pid", child.pid, "--class", "CastProPanel" if focused_notes else "CastPanel").splitlines()[0]
             xdo("windowfocus", "--sync", window)
             xdo("windowmove", window, 0, 0)
             return child
@@ -126,7 +126,7 @@ def exercise(focused_setup_parent=False, focused_exclusion=False, focused_lifecy
                 area = ui()["scroll"]
                 pinned = (item["id"] in (5, 6, 7, 8, 9, 10, 11, 12, 22, 99, 9100, 9101, 9200)
                           or 160 <= item["id"] <= 166
-                          or 400 <= item["id"] < 500 or 700 <= item["id"] <= 717
+                          or 400 <= item["id"] < 500 or 700 <= item["id"] <= 721
                           or 6000 <= item["id"] <= 6501
                           or ui().get("open_menu", 0) and bool(item["key"]))
                 if pinned or y >= area[1] and y+height <= area[1]+area[3]:
@@ -354,6 +354,8 @@ def exercise(focused_setup_parent=False, focused_exclusion=False, focused_lifecy
                 return
             daemon = start_daemon()
             wait_until(lambda: (root / "daemon.sock").exists(), "synthetic daemon did not start")
+            if focused_notes:
+                cli("license", "import", os.environ["CAST_PANEL_TEST_LICENSE"])
             initial = state()
             panel = start_panel()
             assert state()["virtual"] == initial["virtual"]
@@ -361,10 +363,41 @@ def exercise(focused_setup_parent=False, focused_exclusion=False, focused_lifecy
             assert ui()["density"] == scale and ui()["raster_font_size"] == 16*scale
             properties = subprocess.run(["xprop", "-id", window, "WM_CLASS", "_NET_WM_WINDOW_TYPE"],
                                         env=environment, text=True, capture_output=True, check=True).stdout
-            assert '"cast-panel", "CastPanel"' in properties and "_NET_WM_WINDOW_TYPE_UTILITY" in properties
+            expected_class = '"cast-pro-panel", "CastProPanel"' if focused_notes else '"cast-panel", "CastPanel"'
+            assert expected_class in properties and "_NET_WM_WINDOW_TYPE_UTILITY" in properties, properties
             pinned_accessible()
             assert widget(30) and widget(32) and widget(150), "start actions are hidden"
             capture("operate-task-cards")
+            if focused_notes:
+                click_widget(9301)
+                wait_until(lambda: ui()["view"] == 5 and widget("notes.mode"), "Notes options did not open")
+                for width in (360, 520):
+                    xdo("windowsize", window, round(width*scale), round(760*scale))
+                    time.sleep(.2)
+                    click_widget("notes.mode")
+                    click_widget(401)  # speech
+                    pinned_draft(10)
+                    click_widget(720)
+                    acknowledge()
+                    wait_until(lambda: state()["workflows"]["notes"]["mode"] == "speech", "Notes Apply click was discarded")
+                    assert not ui()["error"], ui()["error"]
+                    click_widget("notes.mode")
+                    click_widget(400)  # timed
+                    pinned_draft(10)
+                    click_widget(721)
+                    wait_until(lambda: not widget(720), "Notes Revert click was discarded")
+                    assert state()["workflows"]["notes"]["mode"] == "speech"
+                    click_widget("notes.mode")
+                    click_widget(400)
+                    click_widget(720)
+                    acknowledge()
+                    wait_until(lambda: state()["workflows"]["notes"]["mode"] == "timed", "Timed mode was not applied")
+                assert config.read_bytes() == original_config, "Notes Apply rewrote configuration"
+                click_widget(7)
+                assert panel.wait(timeout=8) == 0
+                cli("quit")
+                daemon.wait(timeout=8)
+                return
             if focused_license:
                 before = state()
                 click_widget(9200)
@@ -940,9 +973,12 @@ if __name__ == "__main__":
     focused = "--setup-parent-only" in sys.argv
     exclusion = "--exclusion-only" in sys.argv
     lifecycle = "--lifecycle-only" in sys.argv
+    notes_only = "--notes-only" in sys.argv
     license_only = "--license-only" in sys.argv
-    exercise(focused_setup_parent=focused, focused_exclusion=exclusion, focused_lifecycle=lifecycle, focused_license=license_only)
-    if license_only:
+    exercise(focused_setup_parent=focused, focused_exclusion=exclusion, focused_lifecycle=lifecycle, focused_license=license_only, focused_notes=notes_only)
+    if notes_only:
+        print("native Pro notes: pinned Apply and Revert commit mode changes at both window widths")
+    elif license_only:
         print("native License/About: planned features, masked diagnostics, acknowledged import/remove, UI confirmation, privacy and parent navigation passed")
     elif lifecycle:
         print("native application: automatic panel + daemon, retained outputs on Close, daemon stop/restart, saved recording and confirmed Quit passed")

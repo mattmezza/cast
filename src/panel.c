@@ -837,7 +837,7 @@ static void button(Panel *p, uint32_t id, const char *text, bool enabled, bool s
     bool card_action = (id >= 30 && id <= 39 && id != 34) || id == 130 ||
                        (id >= 137 && id <= 141) || id == 150 || id == 154 || id == 151;
     bool primary_action = id == 30 || id == 32 || id == 130 || id == 150;
-    bool draft_action = (id >= 700 && id <= 717) || id == 720 || id == 721;
+    bool draft_action = (id >= 700 && id <= 721);
     bool small_action = (card_action && !primary_action) || draft_action || action == A_ALL ||
                         action == A_PICK_COLOR || global_privacy;
     bool combo = action == A_DROPDOWN;
@@ -4401,7 +4401,7 @@ static bool flow_modal_widget(const Panel *p, const Widget *w)
     }
     if (p->open_menu) {
         return (position >= p->menu_start && position < p->menu_end) ||
-               (w->id >= 700 && w->id <= 717);
+               (w->id >= 700 && w->id <= 721);
     }
     return true;
 }
@@ -4410,7 +4410,7 @@ static bool widget_in_scroll(const Panel *p, const Widget *w)
     (void)p;
     return w->id != 9200 && w->id != 5 && w->id != 6 && w->id != 7 && w->id != 8 && w->id != 9 &&
            w->id != 22 && w->id != 9100 && w->id != 9101 && !(w->id >= 10 && w->id <= 12) &&
-           w->id != 99 && !(w->id >= 160 && w->id <= 166) && !(w->id >= 700 && w->id <= 717) &&
+           w->id != 99 && !(w->id >= 160 && w->id <= 166) && !(w->id >= 700 && w->id <= 721) &&
            w->type != W_OPTION;
 }
 static void cancel_editing(Panel *p)
@@ -5478,7 +5478,7 @@ static void click_event(Panel *p, float x, float y)
     bool draft_hit = false;
     for (int i = 0; i < p->widget_count; i++) {
         const Widget *w = &p->widgets[i];
-        if (w->id >= 700 && w->id <= 717 && x >= w->box.x && y >= w->box.y &&
+        if (w->id >= 700 && w->id <= 721 && x >= w->box.x && y >= w->box.y &&
             x < w->box.x + w->box.width && y < w->box.y + w->box.height) {
             draft_hit = true;
         }
