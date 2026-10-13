@@ -196,6 +196,24 @@ def inventory(args):
     if 'not found' in result:
         raise ValueError('unresolved runtime dependency')
     paths = {pathlib.Path(p).resolve() for p in re.findall(r'(?:=>\s*)?(/\S+)\s+\(', result)}
+    speech_evidence = None
+    speech_libraries = {}
+    if args.speech_profile:
+        speech_evidence = json.loads(pathlib.Path(args.speech_profile).read_text())
+        staged = binary.parent.parent / 'lib/cast-pro/speech'
+        for item in speech_evidence['libraries']:
+            original = pathlib.Path(item['path'])
+            if '.so' not in original.name:
+                continue
+            library = (staged / original.name) if staged.is_dir() else original
+            if digest(library) != item['sha256']:
+                raise ValueError('controlled speech library changed: ' + str(library))
+            speech_libraries[library.resolve()] = item
+            paths.add(library.resolve())
+            closure = run('ldd', str(library), required=True)
+            if 'not found' in closure:
+                raise ValueError('unresolved speech backend dependency')
+            paths.update(pathlib.Path(p).resolve() for p in re.findall(r'(?:=>\s*)?(/\S+)\s+\(', closure))
     # Known dynamic loaders are accounted separately from ELF NEEDED closure.
     dynamic = ROOT / 'packaging/runtime-dynamic.json'
     dyn = json.loads(dynamic.read_text()) if dynamic.exists() else {'libraries': []}
@@ -225,11 +243,21 @@ def inventory(args):
                 source = controlled_sources.get('ffmpeg')
             else:
                 package, chosen = 'controlled-unreviewed', 'NOASSERTION'
+        if p in speech_libraries:
+            item = speech_libraries[p]
+            package, chosen = item['package'], item['chosen_license']
+            if chosen != 'MIT':
+                raise ValueError('unapproved controlled speech library license')
+            source = {'version': item['version'], 'url': 'https://github.com/ggml-org/whisper.cpp'}
         reviewed = chosen != 'NOASSERTION'
         disallowed = ('GPL-' in chosen and 'WITH GCC-exception-3.1' not in chosen and 'LGPL-' not in chosen) or any(x in chosen for x in ('AGPL-', 'nonfree'))
         if args.edition == 'pro' and (not reviewed or disallowed):
             failures.append(f'{p.name}: {chosen} ({package or "unowned"})')
         copied = []
+        if p in speech_libraries:
+            dest = notices / 'controlled-speech'
+            shutil.copytree(pathlib.Path(args.speech_profile).parent / 'license-texts', dest, dirs_exist_ok=True)
+            copied.extend(str(x.relative_to(output)) for x in dest.rglob('*') if x.is_file())
         if p.is_relative_to(controlled / 'prefix/lib') or '/lib/cast-pro/media/' in str(p):
             materials = controlled / 'build-materials/licenses'
             if materials.is_dir():
@@ -250,7 +278,7 @@ def inventory(args):
         entries.append({'resolved_file': str(p), 'sha256': digest(p), 'package': package or None,
                         'version': source.get('version') if source else metadata.get('Version'),
                         'package_license_evidence': metadata.get('Licenses'), 'chosen_license': chosen,
-                        'reviewed': reviewed, 'linkage': 'shared', 'distributed': args.edition == 'pro' and (p.is_relative_to(controlled / 'prefix/lib') or '/lib/cast-pro/media/' in str(p)),
+                        'reviewed': reviewed, 'linkage': 'shared', 'distributed': args.edition == 'pro' and (p in speech_libraries or p.is_relative_to(controlled / 'prefix/lib') or '/lib/cast-pro/media/' in str(p)),
                         'upstream': source.get('url') if source else metadata.get('URL'), 'source_build_reference': 'profile.json and matching corresponding source bundle; candidate status follows profile release_eligible' if p.is_relative_to(controlled) or '/lib/cast-pro/media/' in str(p) else f'installed distribution source package {package} {metadata.get("Version", "")}',
                         'license_texts': copied})
     components = [{'name': 'Cast public core', 'license': 'MIT', 'linkage': 'compiled', 'distributed': True},
@@ -273,7 +301,7 @@ def inventory(args):
     sbom = {'schema': 1, 'format': 'cast-dependency-inventory', 'edition': args.edition,
             'media_profile': args.media_profile, 'binary': binary.name, 'binary_sha256': digest(binary),
             'runtime_libraries': entries, 'components': components,
-            'controlled_media_evidence': media_evidence,
+            'controlled_media_evidence': media_evidence, 'controlled_speech_evidence': speech_evidence,
             'dynamic_modules': dyn, 'clean_runtime_acceptance': acceptance,
             'build_only': ['compiler', 'GNU make', 'pkg-config', 'Python tests', 'curl dependency fetch', 'NASM'],
             'external': ['v4l2loopback kernel module', 'system Noto fonts', 'portal service', 'PipeWire service'],
@@ -296,6 +324,7 @@ if __name__ == '__main__':
     parser.add_argument('--official', type=int, choices=(0, 1), default=0)
     parser.add_argument('--release-timestamp', type=int, default=0)
     parser.add_argument('--binary')
+    parser.add_argument('--speech-profile', default='')
     parser.add_argument('--output', default=str(ROOT / 'build/audit'))
     parser.add_argument('--strict', action='store_true')
     args = parser.parse_args()

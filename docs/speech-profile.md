@@ -19,20 +19,25 @@ versions and options are checked against [upstream whisper CMake](https://github
 and [bundled ggml CMake](https://github.com/ggml-org/whisper.cpp/blob/927cfce34f31707e17f2bff35c349632fb9e2c3a/ggml/CMakeLists.txt).
 The full upstream tree and license notices are preserved; models are not fetched.
 
-The initial recipe supports Linux x86_64. It builds four static SDK archives with
-the bundled generic CPU backend: whisper, ggml, ggml-base and ggml-cpu. It disables
-native CPU tuning, optional x86 instruction extensions, OpenMP, GPU/BLAS/RPC
-backends, dynamic backend loading, download support, external ggml, examples,
-servers and dependency fetches. These are SDK archives, not a promise of a fully
-static Cast executable. System C/C++ runtime closure is still audited separately.
+The controlled recipe supports Linux x86_64. It builds shared Whisper, ggml and
+ggml-base libraries, plus two bundled CPU backends: generic x86_64 and AVX2.
+The AVX2 build enables SSE4.2, AVX, AVX2, BMI2, FMA and F16C. The helper checks all
+six CPU features before loading it and uses the generic backend on older CPUs.
+`CAST_SPEECH_CPU_GENERIC=1` disables acceleration for diagnostic comparisons.
+Both builds disable native tuning, OpenMP, GPU/BLAS/RPC, download support,
+external ggml, examples, servers and dependency fetches. Dynamic loading is
+limited to an explicit backend next to the linked controlled SDK; the helper
+never searches installed backends or reads `GGML_BACKEND_PATH`.
 
 The builder verifies cached Git objects and materializes the exact pinned commit.
-It records SHA-256 hashes of the source archive, static libraries, lock and recipe;
-preserves CMake cache, commands/compiler flags, complete source and upstream license
-texts in `corresponding-sources.tar.gz`; and compiles/runs a CPU-only backend smoke
-program. The generated `prefix/lib/pkgconfig/whisper.pc` includes the entire static
-archive group so no ambient ggml backend enters the helper. `profile.json` records
-the exact pkg-config flags and empty external CPU backend path.
+It hashes the source archive, shared libraries, lock and recipe; preserves both
+CMake caches, commands/compiler flags, complete source and upstream license texts
+in `corresponding-sources.tar.gz`; and runs a CPU-only backend smoke program.
+The generated pkg-config flags bind the controlled SDK. Packaging copies only
+profile-listed, hash-verified libraries into `usr/lib/cast-pro/speech`. ELF search
+paths are relative to the package. Runtime audits include both dynamically loaded
+CPU modules and their dependencies, as well as the helper's linked libraries.
+System C/C++ runtime closure is audited separately.
 
 A source build starts with `release_eligible=false`. Local testing requires
 `STT_ENGINEERING=1`. Official verification requires an acceptance record bound to
@@ -71,8 +76,6 @@ MIT covers the whisper/ggml SDK; GCC runtimes use the GCC runtime exception and
 glibc uses LGPL. Unknown licenses, changed files, different compiler/linker flags,
 unresolved libraries and accelerator libraries fail validation.
 
-The controlled upstream Git cache is absent in this sandbox, so the pinned source
-build and its inference acceptance have not run. The builder plan, missing-cache
-failure and profile tamper/qualification guards were tested with explicit
-nonproduction structural fixtures. Current signed application tests use the
-installed engineering SDK; they do not establish production source provenance.
+Structural verifier tests use explicitly nonproduction fixtures. They do not
+replace real inference, helper licensing, full-application or runtime-closure
+qualification of each controlled SDK.

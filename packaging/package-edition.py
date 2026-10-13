@@ -102,6 +102,7 @@ def main():
         helper_audit = audit_args.copy()
         helper_audit[helper_audit.index('--binary') + 1] = str(helper)
         helper_audit[helper_audit.index('--output') + 1] = str(doc / 'speech-dependencies')
+        helper_audit += ['--speech-profile', a.stt_profile]
         run(*helper_audit)
         speech_profile = pathlib.Path(a.stt_profile).resolve()
         speech_evidence = json.loads(speech_profile.read_text())

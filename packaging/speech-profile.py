@@ -140,7 +140,7 @@ def verify(args):
 def sdk_identity(data):
     fields = ('source_commit', 'source_archive_sha256', 'lock_sha256', 'recipe_sha256',
               'whisper_version', 'ggml_version', 'cflags', 'libs', 'libraries',
-              'build_options', 'cpu_smoke_sha256', 'corresponding_sources_sha256')
+              'build_options', 'cpu_variant_options', 'cpu_smoke_sha256', 'corresponding_sources_sha256')
     return hashlib.sha256(json.dumps({key: data.get(key) for key in fields},
                                     sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
@@ -157,13 +157,16 @@ def verify_controlled(data, *, official=False):
             data.get('build_options') != lock['build_options'] or
             data.get('cpu_backend') != ''):
         raise ValueError('controlled speech profile differs from its pinned generic CPU recipe')
-    expected = {'libwhisper.a', 'libggml.a', 'libggml-base.a', 'libggml-cpu.a'}
     entries = data['libraries']
-    if (len(entries) != 4 or {Path(item['path']).name for item in entries} != expected or
+    import re
+    expected = {'libwhisper.so', 'libggml.so', 'libggml-base.so',
+                'libggml-cpu-generic.so', 'libggml-cpu-avx2.so'}
+    names = {re.sub(r'(?<=\.so)\.[0-9.]+$', '', Path(item['path']).name) for item in entries}
+    if (names != expected or data.get('cpu_variant_options') != lock['cpu_variant_options'] or
             any(item.get('chosen_license') != 'MIT' or
                 sha(Path(item['path'])) != item.get('sha256') or
-                Path(item['path']).read_bytes()[:8] != b'!<arch>\n' for item in entries)):
-        raise ValueError('controlled CPU archive inventory is incomplete or has ambient libraries')
+                Path(item['path']).read_bytes()[:4] != b'\x7fELF' for item in entries)):
+        raise ValueError('controlled CPU library inventory is incomplete or has ambient libraries')
     kit = Path(data.get('corresponding_sources', ''))
     smoke = Path(data.get('cpu_smoke_result', ''))
     if not kit.is_file() or sha(kit) != data.get('corresponding_sources_sha256'):

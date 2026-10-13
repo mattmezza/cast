@@ -5,10 +5,14 @@
   "commit": "927cfce34f31707e17f2bff35c349632fb9e2c3a",
   "upstream": "https://github.com/ggml-org/whisper.cpp",
   "license": "MIT",
-  "ggml": {"version": "0.23.0", "source": "bundled ggml tree at the same whisper.cpp commit", "license": "MIT"},
+  "ggml": {
+    "version": "0.23.0",
+    "source": "bundled ggml tree at the same whisper.cpp commit",
+    "license": "MIT"
+  },
   "source_verification": "git cat-file verifies the exact pinned commit; git fsck verifies cached objects; git archive materializes and hashes the exact tree",
   "build_options": {
-    "BUILD_SHARED_LIBS": "OFF",
+    "BUILD_SHARED_LIBS": "ON",
     "WHISPER_BUILD_IS_DEV": "OFF",
     "WHISPER_USE_SYSTEM_GGML": "OFF",
     "WHISPER_USE_SYSTEM_LLAMA": "OFF",
@@ -24,7 +28,7 @@
     "WHISPER_VITISAI": "OFF",
     "GGML_BUILD_TESTS": "OFF",
     "GGML_BUILD_EXAMPLES": "OFF",
-    "GGML_BACKEND_DL": "OFF",
+    "GGML_BACKEND_DL": "ON",
     "GGML_CPU": "ON",
     "GGML_CPU_ALL_VARIANTS": "OFF",
     "GGML_NATIVE": "OFF",
@@ -67,5 +71,13 @@
     "GGML_OPENCL": "OFF",
     "GGML_HEXAGON": "OFF",
     "GGML_ZENDNN": "OFF"
+  },
+  "cpu_variant_options": {
+    "GGML_SSE42": "ON",
+    "GGML_AVX": "ON",
+    "GGML_AVX2": "ON",
+    "GGML_BMI2": "ON",
+    "GGML_FMA": "ON",
+    "GGML_F16C": "ON"
   }
 }

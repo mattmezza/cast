@@ -171,7 +171,8 @@ object matching version, core/private revision, release timestamp, platform and
 media profile, `runtime_dynamic_sha256` binding the exact
 `packaging/runtime-dynamic.json`, its unchanged `required_review` list as
 `required_reviews`, and `artifacts` mapping the native executable and speech-helper
-names to their exact hashes. The native executable's compiled identity is checked
+names to their exact hashes. Private packaging additionally requires
+`speech_libraries` matching the library hashes in `compiled.json`. The native executable's compiled identity is checked
 independently. Missing, changed, differently scoped or unreviewed evidence remains
 a release failure; it does not waive library-license or dependency-source checks.
 Compile first, perform clean-runtime acceptance, then package the same artifacts.

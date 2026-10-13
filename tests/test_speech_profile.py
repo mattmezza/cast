@@ -53,7 +53,7 @@ class ProfileTest(unittest.TestCase):
         plan = json.loads(result.stdout)
         self.assertTrue(plan['cache_only'])
         self.assertFalse(plan['release_eligible'])
-        self.assertEqual(plan['options']['GGML_BACKEND_DL'], 'OFF')
+        self.assertEqual(plan['options']['GGML_BACKEND_DL'], 'ON')
         self.assertEqual(plan['options']['WHISPER_USE_SYSTEM_GGML'], 'OFF')
         output = self.root / 'unbuilt'
         result = subprocess.run(command + ['--source-git', str(self.root / 'absent'),
@@ -78,9 +78,9 @@ class ControlledTest(unittest.TestCase):
         recipe = ROOT / 'tools/deps-stt.py'
         lock = json.loads(lock_path.read_text())
         entries = []
-        for name in ['libwhisper.a', 'libggml.a', 'libggml-base.a', 'libggml-cpu.a']:
+        for name in ['libwhisper.so', 'libggml.so', 'libggml-base.so', 'libggml-cpu-generic.so', 'libggml-cpu-avx2.so']:
             library = self.root / name
-            library.write_bytes(b'!<arch>\n')
+            library.write_bytes(b'\x7fELF TEST-ONLY fixture')
             entries.append({'path': str(library), 'sha256': digest(library), 'chosen_license': 'MIT'})
         smoke = self.root / 'cpu-smoke-result.txt'
         smoke.write_text('CPU_ONLY devices=1\nTEST-ONLY structural evidence\n')
@@ -98,7 +98,7 @@ class ControlledTest(unittest.TestCase):
              'source_commit': lock['commit'], 'source_archive_sha256': hashlib.sha256(source_bytes).hexdigest(),
              'lock_sha256': digest(lock_path), 'recipe_sha256': digest(recipe),
              'whisper_version': lock['version'], 'ggml_version': lock['ggml']['version'],
-             'libraries': entries, 'build_options': lock['build_options'], 'cflags': '', 'libs': '-lfixture',
+             'libraries': entries, 'cpu_variant_options': lock['cpu_variant_options'], 'build_options': lock['build_options'], 'cflags': '', 'libs': '-lfixture',
              'corresponding_sources': str(kit), 'corresponding_sources_sha256': digest(kit),
              'cpu_smoke_result': str(smoke), 'cpu_smoke_sha256': digest(smoke)}
     def tearDown(self):
@@ -122,10 +122,17 @@ class ControlledTest(unittest.TestCase):
     def test_artifact_changes_fail_closed(self):
         Path(self.data['corresponding_sources']).write_bytes(b'changed')
         self.assertNotEqual(self.check().returncode, 0)
+    def test_portable_backend_pair_and_instruction_options_are_required(self):
+        original = self.data['libraries'][:]
+        self.data['libraries'] = original[:-1]
+        self.assertNotEqual(self.check().returncode, 0)
+        self.data['libraries'] = original
+        self.data['cpu_variant_options']['GGML_AVX2'] = 'OFF'
+        self.assertNotEqual(self.check().returncode, 0)
     def test_qualify_requires_exact_review_artifacts(self):
         fields = ('source_commit', 'source_archive_sha256', 'lock_sha256', 'recipe_sha256',
              'whisper_version', 'ggml_version', 'cflags', 'libs', 'libraries', 'build_options',
-             'cpu_smoke_sha256', 'corresponding_sources_sha256')
+             'cpu_variant_options', 'cpu_smoke_sha256', 'corresponding_sources_sha256')
         identity = hashlib.sha256(json.dumps({key: self.data.get(key) for key in fields},
              sort_keys=True, separators=(',', ':')).encode()).hexdigest()
         acceptance = {}

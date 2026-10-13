@@ -285,6 +285,7 @@ ifeq ($(EDITION),pro)
 	sed 's/cast/cast-pro/g' completions/cast.fish > $(DESTDIR)$(PREFIX)/share/fish/vendor_completions.d/cast-pro.fish
 ifeq ($(STT),1)
 	install -Dm755 $(STT_HELPER) $(DESTDIR)$(PREFIX)/libexec/cast-pro-stt-helper
+	python3 packaging/stage-speech.py --profile '$(STT_PROFILE)' --destination '$(DESTDIR)$(PREFIX)/lib/cast-pro/speech'
 	install -Dm644 '$(STT_PROFILE)' $(DESTDIR)$(PREFIX)/share/doc/cast-pro/speech-profile.json
 	install -Dm644 '$(dir $(STT_PROFILE))THIRD-PARTY-NOTICES.txt' $(DESTDIR)$(PREFIX)/share/doc/cast-pro/speech-SDK-NOTICES.txt
 	mkdir -p $(DESTDIR)$(PREFIX)/share/doc/cast-pro/speech-license-texts
@@ -425,7 +426,7 @@ $(BUILD)/helper/whisper_helper.o: $(PRO_DIR)/src/speech/whisper_helper.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CPPFLAGS) $(STT_CFLAGS) -DCAST_SPEECH_HELPER_EXECUTABLE $(if $(STT_CPU_BACKEND),-DCAST_GGML_CPU_BACKEND_PATH='"$(STT_CPU_BACKEND)"') $(CFLAGS) -Wall -Wextra -Werror -std=c++17 -ffunction-sections -fdata-sections -c $< -o $@
 $(STT_HELPER): $(BUILD)/helper/whisper_helper.o $(STT_IDENTITY_OBJECTS)
-	$(CXX) $(LDFLAGS) -Wl,--gc-sections -o $@ $^ $(STT_LIBS) $(shell pkg-config --libs libsodium) -lpthread -lm
+	$(CXX) $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../lib/cast-pro/speech' -Wl,--gc-sections -o $@ $^ $(STT_LIBS) $(shell pkg-config --libs libsodium) -lpthread -lm
 endif
 
 $(BUILD)/test_panel_command_queue: tests/test_panel_command_queue.c src/panel_transport.c src/ipc_identity.h src/edition.c src/commands.c

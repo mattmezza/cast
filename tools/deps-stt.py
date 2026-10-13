@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build pinned, bundled-ggml generic CPU speech archives from an OFFLINE Git cache.
+"""Build pinned, bundled-ggml portable CPU speech libraries from an OFFLINE Git cache.
 
 This command never clones, fetches, downloads models, or blesses a release.
 Successful builds emit source/build evidence and a nonrelease controlled profile.
@@ -20,7 +20,7 @@ import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCK = ROOT / 'packaging/speech-cpu-lock.json'
-ARCHIVES = ('libwhisper.a', 'libggml.a', 'libggml-base.a', 'libggml-cpu.a')
+ARCHIVES = ('libwhisper.so', 'libggml.so', 'libggml-base.so', 'libggml-cpu-generic.so', 'libggml-cpu-avx2.so')
 
 
 def sha(path):
@@ -64,7 +64,7 @@ def build(args):
     tree = execute(git + ['ls-tree', '-r', commit])
     if any(line.startswith('160000 ') for line in tree.splitlines()):
         raise ValueError('pinned tree unexpectedly uses unmaterialized submodules')
-    for tool in ('cmake', 'cc', 'c++', 'ar', 'pkg-config', 'ldd'):
+    for tool in ('cmake', 'cc', 'c++', 'ar', 'pkg-config', 'ldd', 'readelf'):
         if not shutil.which(tool):
             raise ValueError(f'missing build-only tool: {tool}')
     target = args.output.resolve()
@@ -92,6 +92,7 @@ def build(args):
     commands = [['cmake', '-S', str(source), '-B', str(build_dir),
                  '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_POSITION_INDEPENDENT_CODE=ON',
                  '-DCMAKE_INSTALL_PREFIX=' + str(prefix), '-DCMAKE_INSTALL_LIBDIR=lib',
+                 '-DCMAKE_INSTALL_RPATH=$ORIGIN', '-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON',
                  '-DFETCHCONTENT_FULLY_DISCONNECTED=ON', '-DFETCHCONTENT_UPDATES_DISCONNECTED=ON',
                  '-DWHISPER_BUILD_COMMIT=' + commit,
                  '-DGGML_BUILD_COMMIT=' + commit]
@@ -108,16 +109,37 @@ def build(args):
         if f'{name}:BOOL={value}' not in cache_text:
             raise ValueError(f'required CPU-only build option was not honored: {name}')
     libdir = prefix / 'lib'
-    if list(libdir.rglob('*.so*')):
-        raise ValueError('controlled speech SDK unexpectedly produced dynamic backend libraries')
+    generic = prefix / 'bin/libggml-cpu.so'
+    generic.rename(libdir / 'libggml-cpu-generic.so')
+    variant_dir = target / 'compile-avx2'
+    variant_configure = commands[0].copy()
+    variant_configure[variant_configure.index('-B') + 1] = str(variant_dir)
+    variant_configure += [f'-D{name}={value}' for name, value in lock['cpu_variant_options'].items()]
+    variant_commands = [variant_configure,
+                        ['cmake', '--build', str(variant_dir), '--target', 'ggml-cpu', '--parallel', str(args.jobs)]]
+    for index, command in enumerate(variant_commands):
+        result = subprocess.run(command, env=env, text=True, capture_output=True)
+        (materials / f'avx2-command-{index}.log').write_text(result.stdout + result.stderr)
+        if result.returncode:
+            raise ValueError('controlled AVX2 build failed; see preserved build evidence')
+    variant_cache = (variant_dir / 'CMakeCache.txt').read_text()
+    for name, value in {**options, **lock['cpu_variant_options']}.items():
+        if f'{name}:BOOL={value}' not in variant_cache:
+            raise ValueError(f'AVX2 build option was not honored: {name}')
+    shutil.copy2(variant_dir / 'bin/libggml-cpu.so', libdir / 'libggml-cpu-avx2.so')
+    commands += variant_commands
+    shutil.copy2(variant_dir / 'CMakeCache.txt', materials / 'avx2-CMakeCache.txt')
+    shutil.copy2(variant_dir / 'compile_commands.json', materials / 'avx2-compile_commands.json')
+    # Parakeet is an unused upstream target; it is not part of our SDK closure.
+    for unused in libdir.glob('libparakeet.so*'):
+        unused.unlink()
     inventory = []
-    for name in ARCHIVES:
-        library = libdir / name
-        if not library.is_file() or library.read_bytes()[:8] != b'!<arch>\n':
-            raise ValueError(f'missing actual static archive: {library}')
+    for library in sorted(libdir.glob('*.so*')):
+        if library.read_bytes()[:4] != b'\x7fELF':
+            raise ValueError(f'missing ELF speech library: {library}')
         inventory.append({'path': str(library), 'sha256': sha(library),
-                          'package': 'whisper.cpp' if name == 'libwhisper.a' else 'ggml',
-                          'version': lock['version'] if name == 'libwhisper.a' else lock['ggml']['version'],
+                          'package': 'whisper.cpp' if library.name.startswith('libwhisper') else 'ggml',
+                          'version': lock['version'] if library.name.startswith('libwhisper') else lock['ggml']['version'],
                           'chosen_license': 'MIT', 'distributed': True})
     # Upstream static pkg-config metadata may omit ggml CPU dependency ordering.
     # Pin the complete archive group rather than permitting ambient backend libs.
@@ -125,14 +147,14 @@ def build(args):
     pc.parent.mkdir(parents=True, exist_ok=True)
     pc.write_text(f'prefix={prefix}\nlibdir=${{prefix}}/lib\nincludedir=${{prefix}}/include\n'
                   f'Name: whisper\nDescription: Cast pinned bundled-ggml CPU SDK\nVersion: {lock["version"]}\n'
-                  'Cflags: -I${includedir}\nLibs: -L${libdir} -Wl,--start-group -lwhisper -lggml '
-                  '-lggml-cpu -lggml-base -Wl,--end-group -pthread -lm\n')
+                  'Cflags: -I${includedir} -DCAST_GGML_BUNDLED_CPU=1\nLibs: -L${libdir} -lwhisper -lggml -lggml-base -ldl -pthread -lm\n')
     pc_env = {**env, 'PKG_CONFIG_LIBDIR': str(pc.parent)}
     cflags = execute(['pkg-config', '--cflags', 'whisper'], env=pc_env)
     libs = execute(['pkg-config', '--libs', '--static', 'whisper'], env=pc_env)
     smoke = materials / 'cpu-smoke.cpp'
     smoke.write_text('#include "whisper.h"\n#include "ggml-backend.h"\n#include <cstdio>\n'
                      'int main(){ auto p=whisper_context_default_params(); p.use_gpu=false;\n'
+                     f'if(!ggml_backend_load("{libdir}/libggml-cpu-generic.so"))return 3;\n'
                      'size_t n=ggml_backend_dev_count(); if(!n)return 1;\n'
                      'for(size_t i=0;i<n;++i)if(ggml_backend_dev_type(ggml_backend_dev_get(i))'
                      '!=GGML_BACKEND_DEVICE_TYPE_CPU)return 2;\n'
@@ -140,9 +162,15 @@ def build(args):
     smoke_bin = materials / 'cpu-smoke'
     compile_smoke = ['c++', '-std=c++17', str(smoke)] + shlex.split(cflags + ' ' + libs) + ['-o', str(smoke_bin)]
     execute(compile_smoke, env=pc_env)
-    smoke_result = execute([str(smoke_bin)], env=env)
-    closure = execute(['ldd', str(smoke_bin)], env=env)
-    if 'not found' in closure or any(x in closure.lower() for x in ('whisper', 'ggml', 'gomp', 'cuda', 'vulkan', 'opencl')):
+    for item in inventory:
+        dynamic = execute(['readelf', '-d', item['path']], env=env)
+        for line in dynamic.splitlines():
+            if ('RUNPATH' in line or 'RPATH' in line) and '[$ORIGIN]' not in line:
+                raise ValueError('speech library has a nonrelocatable or ambient runtime search path')
+    smoke_env = {**env, 'LD_LIBRARY_PATH': str(libdir)}
+    smoke_result = execute([str(smoke_bin)], env=smoke_env)
+    closure = execute(['ldd', str(smoke_bin)], env=smoke_env)
+    if 'not found' in closure or any(x in closure.lower() for x in ('gomp', 'cuda', 'vulkan', 'opencl')) or any(('libwhisper' in line or 'libggml' in line) and str(libdir) not in line for line in closure.splitlines()):
         raise ValueError('CPU smoke linked an ambient speech/accelerator runtime')
     (materials / 'cpu-smoke-result.txt').write_text(smoke_result + '\n' + closure + '\n')
     commands.append(compile_smoke)
@@ -187,7 +215,8 @@ def build(args):
         archive.add(target / 'THIRD-PARTY-NOTICES.txt', arcname='THIRD-PARTY-NOTICES.txt')
     profile = {'schema': 1, 'profile': 'cast-pro-speech-cpu', 'cpu_only': True,
                'build_kind': 'controlled-source', 'release_eligible': False,
-               'cpu_backend': '', 'backend_loading': 'statically registered generic CPU only; no runtime backend loading',
+               'cpu_backend': '', 'backend_loading': 'explicit bundled generic or CPU-feature-guarded AVX2; no backend search',
+               'cpu_variant_options': lock['cpu_variant_options'],
                'source_commit': commit, 'source_archive_sha256': sha(source_archive),
                'lock_sha256': sha(LOCK), 'recipe_sha256': sha(__file__),
                'whisper_version': lock['version'], 'ggml_version': lock['ggml']['version'],
