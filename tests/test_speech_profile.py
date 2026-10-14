@@ -187,5 +187,44 @@ class ControlledTest(unittest.TestCase):
         self.assertEqual(self.check(official=1).returncode, 0)
         Path(acceptance['full_application']['path']).write_text('changed')
         self.assertNotEqual(self.check(official=1).returncode, 0)
+class ResumeTest(unittest.TestCase):
+    """Reject unsafe retries before invoking any compiler; test-only Git inputs."""
+    def test_retry_rejects_finalized_or_changed_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tools = root / 'tools'; tools.mkdir()
+            recipe = tools / 'deps-stt.py'
+            recipe.write_bytes((ROOT / 'tools/deps-stt.py').read_bytes())
+            repo = root / 'cache'; repo.mkdir()
+            def git(*args):
+                return subprocess.check_output(['git', '-C', str(repo), *args], stderr=subprocess.DEVNULL)
+            git('init', '-q')
+            (repo / 'input.c').write_text('TEST-ONLY source fixture\n')
+            git('add', 'input.c')
+            git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture')
+            commit = git('rev-parse', 'HEAD').decode().strip()
+            packaging = root / 'packaging'; packaging.mkdir()
+            (packaging / 'speech-cpu-lock.json').write_text(json.dumps({'commit': commit, 'version': '0.0.0'}))
+            sdk = root / 'sdk'; sdk.mkdir()
+            materials = sdk / 'build-materials'; materials.mkdir()
+            (materials / ('whisper.cpp-' + commit + '.tar')).write_bytes(git('archive', '--format=tar', commit))
+            source = sdk / 'source'; source.mkdir()
+            (source / 'input.c').write_bytes((repo / 'input.c').read_bytes())
+            def check(message):
+                result = subprocess.run(['python3', str(recipe), '--source-git', str(repo),
+                    '--output', str(sdk), '--resume'], capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+                self.assertFalse((sdk / 'compile').exists())
+            (sdk / 'profile.json').write_text('{}')
+            check('never a finalized SDK')
+            (sdk / 'profile.json').unlink()
+            (source / 'input.c').write_text('changed')
+            check('resume source tree changed')
+            (source / 'input.c').write_bytes((repo / 'input.c').read_bytes())
+            (source / 'untracked.c').write_text('unexpected')
+            check('missing or untracked files')
+
 if __name__ == '__main__':
     unittest.main()

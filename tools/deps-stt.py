@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shlex
 import shutil
 import subprocess
@@ -68,17 +69,49 @@ def build(args):
         if not shutil.which(tool):
             raise ValueError(f'missing build-only tool: {tool}')
     target = args.output.resolve()
-    if target.exists():
-        raise ValueError('output must be new; refusing to mix controlled sources with an existing SDK')
-    target.mkdir(parents=True)
     materials = target / 'build-materials'
-    materials.mkdir()
     source_archive = materials / f'whisper.cpp-{commit}.tar'
-    execute(git + ['archive', '--format=tar', commit], output=source_archive)
     source = target / 'source'
-    source.mkdir()
-    with tarfile.open(source_archive) as archive:
-        archive.extractall(source, filter='data')
+    if args.resume:
+        if not target.is_dir() or (target / 'profile.json').exists():
+            raise ValueError('resume requires an unfinished controlled build, never a finalized SDK')
+        expected = materials / 'resume-source-verification.tar'
+        execute(git + ['archive', '--format=tar', commit], output=expected)
+        matches = sha(expected) == sha(source_archive)
+        expected.unlink()
+        if not matches:
+            raise ValueError('resume source archive differs from the exact offline pin')
+        with tarfile.open(source_archive) as archive:
+            tracked = set()
+            for item in archive:
+                path = source / item.name
+                if item.isfile():
+                    tracked.add(item.name)
+                    if path.is_symlink() or not path.is_file() or sha(path) != hashlib.sha256(archive.extractfile(item).read()).hexdigest():
+                        raise ValueError('resume source tree changed: ' + item.name)
+                elif item.issym():
+                    tracked.add(item.name)
+                    if not path.is_symlink() or str(path.readlink()) != item.linkname:
+                        raise ValueError('resume source link changed: ' + item.name)
+            generated_name = 'bindings/javascript/package.json'
+            generated = source / generated_name
+            if generated.exists():
+                expected_json = (source / 'bindings/javascript/package-tmpl.json').read_text().replace('@WHISPER_VERSION@', lock['version'])
+                if generated.is_symlink() or generated.read_text() != expected_json:
+                    raise ValueError('resume generated package metadata changed')
+                tracked.add(generated_name)
+            actual = {str(p.relative_to(source)) for p in source.rglob('*') if p.is_file() or p.is_symlink()}
+            if actual != tracked:
+                raise ValueError('resume source tree has missing or untracked files')
+    else:
+        if target.exists():
+            raise ValueError('output must be new; refusing to mix controlled sources with an existing SDK')
+        target.mkdir(parents=True)
+        materials.mkdir()
+        execute(git + ['archive', '--format=tar', commit], output=source_archive)
+        source.mkdir()
+        with tarfile.open(source_archive) as archive:
+            archive.extractall(source, filter='data')
     if not (source / 'ggml/src/ggml-cpu').is_dir():
         raise ValueError('pinned source lacks its bundled CPU backend')
     prefix = target / 'prefix'
@@ -175,7 +208,8 @@ def build(args):
     smoke_env = {**env, 'LD_LIBRARY_PATH': str(libdir)}
     smoke_result = execute([str(smoke_bin)], env=smoke_env)
     closure = execute(['ldd', str(smoke_bin)], env=smoke_env)
-    if 'not found' in closure or any(x in closure.lower() for x in ('gomp', 'cuda', 'vulkan', 'opencl')) or any(('libwhisper' in line or 'libggml' in line) and str(libdir) not in line for line in closure.splitlines()):
+    linked_names = re.findall(r'^\s*(\S+)\s+=>', closure, re.MULTILINE)
+    if 'not found' in closure or any(x in name.lower() for name in linked_names for x in ('gomp', 'cuda', 'vulkan', 'opencl')) or any(('libwhisper' in line or 'libggml' in line) and str(libdir) not in line for line in closure.splitlines()):
         raise ValueError('CPU smoke linked an ambient speech/accelerator runtime')
     (materials / 'cpu-smoke-result.txt').write_text(smoke_result + '\n' + closure + '\n')
     commands.append(compile_smoke)
@@ -243,6 +277,7 @@ def build(args):
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--source-git', type=Path)
 parser.add_argument('--output', type=Path, default=ROOT / 'build/deps-stt')
+parser.add_argument('--resume', action='store_true', help='Resume only an unfinished build after verifying its exact source archive and tree')
 parser.add_argument('--vulkan', action='store_true', help='Build the pinned optional Vulkan backend alongside portable CPU fallbacks')
 parser.add_argument('--jobs', type=int, default=2)
 parser.add_argument('--print-plan', action='store_true')
