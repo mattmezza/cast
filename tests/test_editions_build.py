@@ -100,7 +100,8 @@ class EditionBuildTests(unittest.TestCase):
             audit.package_metadata = lambda p: ('unreviewed-sdk', {'Version': '1.0', 'Licenses': 'MIT OR Proprietary'})
             try:
                 args = types.SimpleNamespace(binary=str(binary), edition='pro', media_profile='lgpl',
-                                             lgpl_root=str(root / 'controlled'), output=str(root / 'audit'), strict=True, official=0)
+                                             lgpl_root=str(root / 'controlled'), output=str(root / 'audit'),
+                                             speech_profile=None, strict=True, official=0)
                 with self.assertRaisesRegex(ValueError, 'Pro dependency review failed'):
                     audit.inventory(args)
                 inventory = json.loads((root / 'audit/inventory.json').read_text())
