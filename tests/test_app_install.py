@@ -39,7 +39,7 @@ with tempfile.TemporaryDirectory(prefix='cast-app-install-') as directory:
     desktop = configparser.ConfigParser(interpolation=None)
     desktop.read(entry)
     properties = desktop['Desktop Entry']
-    assert properties['Type'] == 'Application' and properties['Name'] == 'Cast'
+    assert properties['Type'] == 'Application' and properties['Name'] == 'SuperScreencast Community'
     assert properties['Exec'] == 'cast-app' and properties['Terminal'] == 'false'
     assert properties['Icon'] == 'cast' and properties['StartupWMClass'] == 'CastPanel'
     ET.parse(app / 'usr/share/icons/hicolor/scalable/apps/cast.svg')
