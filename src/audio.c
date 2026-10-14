@@ -964,6 +964,10 @@ void audio_test_push(CastAudio *a, int lane, uint64_t ns, const float *src, int 
     if (a->started) {
         pw_thread_loop_lock(a->loop);
     }
+    /* Injected samples represent a live fixture source, including on CI hosts
+     * without a PipeWire server. This hook is excluded from production builds. */
+    a->server_dead = false;
+    a->lane[lane].dead = false;
     if (lane == 0) {
         a->cfg.mic = true;
     } else {
