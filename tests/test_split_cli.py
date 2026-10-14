@@ -38,6 +38,22 @@ class SplitCliTests(unittest.TestCase):
         self.assertEqual(value.returncode, expected, (args, value.stdout, value.stderr))
         return value
 
+    def test_default_config_path_is_edition_specific(self):
+        edition = json.loads(self.cli('edition', '--json').stdout)['edition']
+        filename = 'cast-pro.conf' if edition == 'pro' else 'cast.conf'
+        for xdg in (str(self.root / 'config'), '', 'relative'):
+            self.env['XDG_CONFIG_HOME'] = xdg
+            base = self.root / 'config' if xdg.startswith('/') else self.root / '.config'
+            directory = base / 'cast'
+            directory.mkdir(parents=True, exist_ok=True)
+            for name in ('cast.conf', 'cast-pro.conf'):
+                (directory / name).write_text('[unknown]\nkey=value\n')
+            (directory / filename).write_text('[audio]\nmic=false\n')
+            self.assertIn(str(directory / filename), self.cli('config', 'check').stdout)
+        explicit = self.root / 'explicit.conf'
+        explicit.write_text('[audio]\nmic=false\n')
+        self.assertIn(str(explicit), self.cli('--config', explicit, 'config', 'check').stdout)
+
     def config(self, text, name='input.conf'):
         path = self.root / name
         path.write_text(text)

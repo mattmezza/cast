@@ -118,6 +118,11 @@ cp -n examples/cast.conf ~/.config/cast/cast.conf
 ./cast
 ```
 
+Community defaults to `~/.config/cast/cast.conf`; Pro defaults to
+`~/.config/cast/cast-pro.conf`. Both use the `cast` directory under
+`XDG_CONFIG_HOME` when set to an absolute path. Use `--config PATH` to select
+another file. Keep Pro-only settings in the Pro file.
+
 The panel and preview are Xorg utility windows (`CastPanel` and `CastPreview`);
 window managers that float utilities, including mwm, center them automatically.
 The panel follows the supplied **Operate / Compose** design. Its slim header

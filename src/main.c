@@ -156,8 +156,9 @@ static int config_path(Startup *s, char *e, size_t n)
         return 0;
     }
     const char *xdg = getenv("XDG_CONFIG_HOME"), *home = getenv("HOME");
+    const char *filename = cast_edition_identity()->pro ? "cast-pro.conf" : "cast.conf";
     if (xdg && *xdg && xdg[0] == '/') {
-        if (snprintf(s->config_path, sizeof s->config_path, "%s/cast/cast.conf", xdg) >=
+        if (snprintf(s->config_path, sizeof s->config_path, "%s/cast/%s", xdg, filename) >=
             (int)sizeof s->config_path) {
             return app_error(e, n, "XDG_CONFIG_HOME path too long");
         }
@@ -168,7 +169,7 @@ static int config_path(Startup *s, char *e, size_t n)
         if (!home || home[0] != '/') {
             return app_error(e, n, "HOME must be absolute when XDG_CONFIG_HOME is unset/invalid");
         }
-        if (snprintf(s->config_path, sizeof s->config_path, "%s/.config/cast/cast.conf", home) >=
+        if (snprintf(s->config_path, sizeof s->config_path, "%s/.config/cast/%s", home, filename) >=
             (int)sizeof s->config_path) {
             return app_error(e, n, "config path too long");
         }
