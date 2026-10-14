@@ -20,7 +20,7 @@ CHOICES = {
  'libstdc++': 'GPL-3.0-or-later WITH GCC-exception-3.1',
  'gcc-libs': 'GPL-3.0-or-later WITH GCC-exception-3.1',
  'libgomp': 'GPL-3.0-or-later WITH GCC-exception-3.1',
- 'whisper-cpp': 'MIT', 'ggml': 'MIT',
+ 'whisper-cpp': 'MIT', 'ggml': 'MIT', 'vulkan-icd-loader': 'Apache-2.0',
  'glib2': 'LGPL-2.1-or-later', 'glib2-devel': 'LGPL-2.1-or-later',
  'libpipewire': 'MIT', 'pipewire': 'MIT', 'graphite': 'LGPL-2.1-or-later', 'harfbuzz': 'MIT', 'libsodium': 'ISC',
  'openh264': 'BSD-2-Clause', 'openssl': 'Apache-2.0', 'sdl3': 'Zlib', 'sdl3_ttf': 'Zlib',

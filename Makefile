@@ -125,6 +125,7 @@ CORE_SOURCES = src/edition.c src/license_store.c src/edition_extensions.c src/wo
 MEDIA_SOURCES = src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c $(PRO_SOURCES) src/media.c src/webcam.c src/audio.c src/record.c src/stream.c src/compositor.c src/composition_assets.c src/presentation_text.c src/media_codec.c
 
 ifeq ($(EDITION):$(STT),pro:1)
+CPPFLAGS += $(if $(findstring -DCAST_GGML_BUNDLED_VULKAN=1,$(STT_CFLAGS)),-DCAST_WITH_SPEECH_VULKAN=1)
 CPPFLAGS += -DCAST_WITH_STT -DCAST_STT_HELPER_PATH='"$(STT_HELPER_PATH)"'
 STT_HELPER = $(BUILD)/cast-pro-stt-helper
 endif

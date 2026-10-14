@@ -107,8 +107,8 @@ def verify(args):
     if not path.is_file():
         raise ValueError('STT=1 requires an explicit reviewed speech profile; generate engineering evidence separately')
     data = json.loads(path.read_text())
-    if data.get('schema') != 1 or data.get('profile') != 'cast-pro-speech-cpu' or data.get('cpu_only') is not True:
-        raise ValueError('unsupported or non-CPU speech profile')
+    if data.get('schema') != 1 or type(data.get('cpu_only')) is not bool or (data.get('profile'), data.get('cpu_only')) not in (('cast-pro-speech-cpu', True), ('cast-pro-speech-vulkan', False)):
+        raise ValueError('unsupported speech backend profile')
     if data.get('cflags') != args.cflags.strip() or data.get('libs') != args.libs.strip():
         raise ValueError('speech SDK flags differ from audited profile')
     if data.get('cpu_backend', '') != args.cpu_backend:
@@ -121,7 +121,7 @@ def verify(args):
         chosen = item.get('chosen_license', '')
         if chosen not in set(LICENSES.values()) or not library.is_file() or sha(library) != item.get('sha256'):
             raise ValueError(f'unreviewed or changed speech dependency: {library}')
-        if any(name in library.name for name in ('cuda', 'vulkan', 'opencl', 'hip', 'metal', 'blas')):
+        if any(name in library.name for name in ('cuda', 'opencl', 'hip', 'metal', 'blas')) or ('vulkan' in library.name and data.get('cpu_only')):
             raise ValueError('CPU-only speech profile contains an unapproved accelerator')
     if data.get('build_kind') == 'controlled-source':
         verify_controlled(data, official=bool(args.official))
@@ -149,24 +149,36 @@ def verify_controlled(data, *, official=False):
     lock_path = ROOT / 'packaging/speech-cpu-lock.json'
     recipe_path = ROOT / 'tools/deps-stt.py'
     lock = json.loads(lock_path.read_text())
+    options = dict(lock['build_options'])
+    vulkan = data.get('profile') == 'cast-pro-speech-vulkan'
+    if vulkan:
+        options['GGML_VULKAN'] = 'ON'
+    # Preserve the previously accepted CPU engineering SDK for local dev only.
+    # Official profiles always require the current recipe, and the source kit
+    # below must still contain the exact recipe whose hash is recorded.
+    recipe_matches = data.get('recipe_sha256') == sha(recipe_path) or (
+        not official and not vulkan and data.get('recipe_sha256') ==
+        '33cd1f1d9acae7a18c3c4850c0e91acb2313a212cbd3c947103a78d6a807962e')
     if (data.get('source_commit') != lock['commit'] or
             data.get('whisper_version') != lock['version'] or
             data.get('ggml_version') != lock['ggml']['version'] or
             data.get('lock_sha256') != sha(lock_path) or
-            data.get('recipe_sha256') != sha(recipe_path) or
-            data.get('build_options') != lock['build_options'] or
+            not recipe_matches or
+            data.get('build_options') != options or
             data.get('cpu_backend') != ''):
-        raise ValueError('controlled speech profile differs from its pinned generic CPU recipe')
+        raise ValueError('controlled speech profile differs from its pinned portable backend recipe')
     entries = data['libraries']
     import re
     expected = {'libwhisper.so', 'libggml.so', 'libggml-base.so',
                 'libggml-cpu-generic.so', 'libggml-cpu-avx2.so'}
+    if vulkan:
+        expected.add('libggml-vulkan.so')
     names = {re.sub(r'(?<=\.so)\.[0-9.]+$', '', Path(item['path']).name) for item in entries}
     if (names != expected or data.get('cpu_variant_options') != lock['cpu_variant_options'] or
             any(item.get('chosen_license') != 'MIT' or
                 sha(Path(item['path'])) != item.get('sha256') or
                 Path(item['path']).read_bytes()[:4] != b'\x7fELF' for item in entries)):
-        raise ValueError('controlled CPU library inventory is incomplete or has ambient libraries')
+        raise ValueError('controlled speech library inventory is incomplete or has ambient libraries')
     kit = Path(data.get('corresponding_sources', ''))
     smoke = Path(data.get('cpu_smoke_result', ''))
     if not kit.is_file() or sha(kit) != data.get('corresponding_sources_sha256'):
@@ -196,6 +208,8 @@ def verify_controlled(data, *, official=False):
             raise ValueError('review record is not bound to this exact SDK')
         required = {'cpu_model_acceptance', 'signed_helper_boundary', 'full_application',
                     'source_license_inventory', 'runtime_closure'}
+        if vulkan:
+            required.add('gpu_model_acceptance')
         tests = review.get('acceptance', {})
         if not isinstance(tests, dict) or set(tests) != required:
             raise ValueError('review record lacks required inference/helper/application/source/runtime acceptance')

@@ -119,6 +119,20 @@ class ControlledTest(unittest.TestCase):
         self.data['source_commit'] = json.loads((ROOT / 'packaging/speech-cpu-lock.json').read_text())['commit']
         self.data['build_options']['GGML_VULKAN'] = 'ON'
         self.assertNotEqual(self.check().returncode, 0)
+    def test_vulkan_requires_pinned_backend_and_options(self):
+        self.data['profile'] = 'cast-pro-speech-vulkan'
+        self.data['cpu_only'] = False
+        self.data['build_options']['GGML_VULKAN'] = 'ON'
+        self.assertNotEqual(self.check().returncode, 0)  # Missing bundled plugin.
+        plugin = self.root / 'libggml-vulkan.so'
+        plugin.write_bytes(b'\x7fELF TEST-ONLY Vulkan fixture')
+        self.data['libraries'].append({'path': str(plugin), 'sha256': self.digest(plugin),
+                                      'chosen_license': 'MIT'})
+        self.assertEqual(self.check().returncode, 0)
+        self.assertNotEqual(self.check(official=1).returncode, 0)  # No exact GPU acceptance.
+        self.data['build_options']['GGML_VULKAN'] = 'OFF'
+        self.assertNotEqual(self.check().returncode, 0)
+
     def test_artifact_changes_fail_closed(self):
         Path(self.data['corresponding_sources']).write_bytes(b'changed')
         self.assertNotEqual(self.check().returncode, 0)
@@ -130,6 +144,19 @@ class ControlledTest(unittest.TestCase):
         self.data['cpu_variant_options']['GGML_AVX2'] = 'OFF'
         self.assertNotEqual(self.check().returncode, 0)
     def test_qualify_requires_exact_review_artifacts(self):
+        self.qualify_record(False)
+
+    def test_vulkan_qualification_requires_gpu_acceptance(self):
+        self.data['profile'] = 'cast-pro-speech-vulkan'
+        self.data['cpu_only'] = False
+        self.data['build_options']['GGML_VULKAN'] = 'ON'
+        plugin = self.root / 'libggml-vulkan.so'
+        plugin.write_bytes(b'\x7fELF TEST-ONLY Vulkan fixture')
+        self.data['libraries'].append({'path': str(plugin), 'sha256': self.digest(plugin),
+                                      'chosen_license': 'MIT'})
+        self.qualify_record(True)
+
+    def qualify_record(self, vulkan):
         fields = ('source_commit', 'source_archive_sha256', 'lock_sha256', 'recipe_sha256',
              'whisper_version', 'ggml_version', 'cflags', 'libs', 'libraries', 'build_options',
              'cpu_variant_options', 'cpu_smoke_sha256', 'corresponding_sources_sha256')
@@ -147,6 +174,14 @@ class ControlledTest(unittest.TestCase):
         self.profile.write_text(json.dumps(self.data))
         command = ['python3', str(ROOT / 'packaging/speech-profile.py'), 'qualify',
                    '--profile', str(self.profile), '--review-record', str(record)]
+        if vulkan:
+            self.assertNotEqual(subprocess.run(command, capture_output=True).returncode, 0)
+            proof = self.root / 'gpu-acceptance.txt'
+            proof.write_text('TEST-ONLY structural GPU acceptance\n')
+            acceptance['gpu_model_acceptance'] = {'path': str(proof),
+                                                 'sha256': self.digest(proof), 'passed': True}
+            record.write_text(json.dumps({'schema': 1, 'sdk_sha256': identity,
+                 'reviewed_by': 'TEST-ONLY fixture owner', 'acceptance': acceptance}))
         self.assertEqual(subprocess.run(command, capture_output=True).returncode, 0)
         self.data = json.loads(self.profile.read_text())
         self.assertEqual(self.check(official=1).returncode, 0)

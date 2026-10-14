@@ -88,7 +88,9 @@ def build(args):
            'GIT_NO_LAZY_FETCH': '1', 'GIT_CEILING_DIRECTORIES': str(target),
            'PKG_CONFIG_PATH': '', 'PKG_CONFIG_LIBDIR': '',
            'CFLAGS': '', 'CXXFLAGS': '', 'LDFLAGS': '', 'CPPFLAGS': ''}
-    options = lock['build_options']
+    options = dict(lock['build_options'])
+    if args.vulkan:
+        options['GGML_VULKAN'] = 'ON'
     commands = [['cmake', '-S', str(source), '-B', str(build_dir),
                  '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_POSITION_INDEPENDENT_CODE=ON',
                  '-DCMAKE_INSTALL_PREFIX=' + str(prefix), '-DCMAKE_INSTALL_LIBDIR=lib',
@@ -111,6 +113,8 @@ def build(args):
     libdir = prefix / 'lib'
     generic = prefix / 'bin/libggml-cpu.so'
     generic.rename(libdir / 'libggml-cpu-generic.so')
+    if args.vulkan:
+        (prefix / 'bin/libggml-vulkan.so').rename(libdir / 'libggml-vulkan.so')
     variant_dir = target / 'compile-avx2'
     variant_configure = commands[0].copy()
     variant_configure[variant_configure.index('-B') + 1] = str(variant_dir)
@@ -147,7 +151,8 @@ def build(args):
     pc.parent.mkdir(parents=True, exist_ok=True)
     pc.write_text(f'prefix={prefix}\nlibdir=${{prefix}}/lib\nincludedir=${{prefix}}/include\n'
                   f'Name: whisper\nDescription: Cast pinned bundled-ggml CPU SDK\nVersion: {lock["version"]}\n'
-                  'Cflags: -I${includedir} -DCAST_GGML_BUNDLED_CPU=1\nLibs: -L${libdir} -lwhisper -lggml -lggml-base -ldl -pthread -lm\n')
+                  'Cflags: -I${includedir} -DCAST_GGML_BUNDLED_CPU=1'
+                  + (' -DCAST_GGML_BUNDLED_VULKAN=1' if args.vulkan else '') + '\nLibs: -L${libdir} -lwhisper -lggml -lggml-base -ldl -pthread -lm\n')
     pc_env = {**env, 'PKG_CONFIG_LIBDIR': str(pc.parent)}
     cflags = execute(['pkg-config', '--cflags', 'whisper'], env=pc_env)
     libs = execute(['pkg-config', '--libs', '--static', 'whisper'], env=pc_env)
@@ -213,9 +218,9 @@ def build(args):
                 archive.add(item, arcname='build-materials/' + item.name)
         archive.add(notices, arcname='license-texts')
         archive.add(target / 'THIRD-PARTY-NOTICES.txt', arcname='THIRD-PARTY-NOTICES.txt')
-    profile = {'schema': 1, 'profile': 'cast-pro-speech-cpu', 'cpu_only': True,
+    profile = {'schema': 1, 'profile': 'cast-pro-speech-vulkan' if args.vulkan else 'cast-pro-speech-cpu', 'cpu_only': not args.vulkan,
                'build_kind': 'controlled-source', 'release_eligible': False,
-               'cpu_backend': '', 'backend_loading': 'explicit bundled generic or CPU-feature-guarded AVX2; no backend search',
+               'cpu_backend': '', 'backend_loading': 'explicit bundled CPU fallbacks and optional Vulkan; no backend search',
                'cpu_variant_options': lock['cpu_variant_options'],
                'source_commit': commit, 'source_archive_sha256': sha(source_archive),
                'lock_sha256': sha(LOCK), 'recipe_sha256': sha(__file__),
@@ -238,6 +243,7 @@ def build(args):
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--source-git', type=Path)
 parser.add_argument('--output', type=Path, default=ROOT / 'build/deps-stt')
+parser.add_argument('--vulkan', action='store_true', help='Build the pinned optional Vulkan backend alongside portable CPU fallbacks')
 parser.add_argument('--jobs', type=int, default=2)
 parser.add_argument('--print-plan', action='store_true')
 args = parser.parse_args()

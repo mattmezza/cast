@@ -5,6 +5,7 @@
     "PipeWire SPA plugins: installed independently; runtime-selected by PipeWire, not bundled",
     "SDL video/audio backend dynamically loaded system libraries and graphics drivers: clean-runtime acceptance required before official Pro release",
     "Fontconfig-selected system fonts: no system font files bundled",
-    "No optional hardware encoder SDK or speech runtime enabled in controlled media profile"
+    "No optional hardware encoder SDK enabled in controlled media profile; speech uses its separately audited SDK",
+    "Vulkan loader and device drivers: installed independently, not bundled; GPU readiness and CPU fallback verified for the shipped speech SDK"
   ]
 }
