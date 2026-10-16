@@ -129,7 +129,21 @@ filename/error. They preserve the started partial file and allow a later recordi
 virtual camera output keeps its independent path. Failure during initial setup removes the new,
 unstarted file. Matroska uses clusters limited to one second or one MiB to improve
 partial-file recovery opportunities. This does not promise that a crash or full disk
-leaves every frame decodable. Ordinary MP4 also depends on completed indexes/trailer.
+leaves every frame decodable.
+
+With `record.container=mp4`, Cast captures to `<requested-path>.mkv`, then remuxes
+without re-encoding after a clean stop. `record.state` remains `finalizing` during
+conversion; the reported path changes from MKV to the requested MP4 only after
+success. Explicit destination names are preserved regardless of their extension.
+The final MP4 is published atomically without replacing an existing file. The
+completed file and destination directory are synced before deleting the MKV.
+Finalization needs space for both files and a filesystem supporting hard links.
+
+Capture errors, interruption, or remux/publication errors preserve the started
+recovery MKV. Incompatible MP4 codecs are rejected at startup.
+A hard termination during conversion can leave a sibling `.tmp`; recover from
+the MKV. A failure syncing the destination directory may leave both completed
+MP4 and MKV files. No automatic recovery runs on the next launch.
 
 Work on a copy when attempting recovery:
 

@@ -408,6 +408,11 @@ quality values. `--write OUTPUT` writes a new mode-0600 file; an existing output
 not overwritten. In-place replacement requires `--write PATH --backup NEW_FILE`.
 Startup/reload never runs migration or saves session changes automatically.
 
+Selecting `record.container=mp4` captures to a sibling `<destination>.mkv` and
+remuxes into the requested MP4 after a successful stop. The MKV remains on capture
+or finalization failure; status reports its recovery path. Finalization requires
+space for both files. See [failure and recovery](media.md#failure-and-recovery).
+
 ## Optional Pro workflow fields
 
 Both editions parse and preserve the 93 declarative cinematic/cursor, transcription,

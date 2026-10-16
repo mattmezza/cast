@@ -156,6 +156,20 @@ terminal, explicitly enable virtual video and then select `cast` in the conferen
 ./cast quit
 ```
 
+Recording defaults to Matroska (`record.container=matroska`). With
+`record.container=mp4`, capture writes to `<destination>.mkv` first. On a clean
+stop, Cast copies the encoded streams into MP4 without re-encoding and publishes
+the requested destination only after finalization. Status reports the MKV path
+while recording/finalizing and the MP4 path after success. Existing destinations
+are never overwritten. Leave enough disk space for both files during finalization.
+
+If capture is interrupted or MP4 finalization fails, the MKV remains at the
+reported path for recovery. You can remux it manually with
+`ffmpeg -i recording.mp4.mkv -map 0 -c copy recovered.mp4`. A hard termination
+may also leave a `.tmp` file from an unfinished remux; the MKV is the recovery
+source. MP4 selection requires encoders compatible with that container.
+
+
 Bare `./cast` opens the control panel. `./cast --headless` runs the daemon in the
 terminal without opening the panel. Use `./cast preview on` for a separate view of
 the actual output. Close leaves outputs running; Stop daemon saves an active file

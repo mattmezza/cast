@@ -14,6 +14,8 @@
 #include <linux/videodev2.h>
 #include <math.h>
 #include <pthread.h>
+#include <signal.h>
+#include <sys/wait.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1103,6 +1105,13 @@ static void container_codec_test(const char *directory, const char *container,
     char path[PATH_MAX], error[CAST_ERR], selected[64], detail[CAST_ERR];
     snprintf(path, sizeof(path), "%s/%s-%s.media", directory, container, video);
     assert(!recorder_start(recorder, &cfg, path, error, sizeof(error)));
+    if (!strcmp(container, "mp4")) {
+        char current[PATH_MAX];
+        recorder_path(recorder, current, sizeof(current));
+        assert(strlen(current) == strlen(path) + 4 && !strncmp(current, path, strlen(path)));
+        assert(!strcmp(current + strlen(path), ".mkv"));
+        assert(access(current, F_OK) == 0 && access(path, F_OK) < 0);
+    }
     recorder_encoder(recorder, selected, sizeof(selected), detail, sizeof(detail));
     assert(selected[0] && detail[0]);
     if (strcmp(video, "auto")) {
@@ -1124,13 +1133,125 @@ static void container_codec_test(const char *directory, const char *container,
     uint64_t drops;
     recorder_status(recorder, &active, &paused, &drops, error, sizeof(error));
     assert(!active && !error[0]);
+    if (!strcmp(container, "mp4")) {
+        char current[PATH_MAX];
+        recorder_path(recorder, current, sizeof(current));
+        assert(!strcmp(current, path));
+        AVFormatContext *format = NULL;
+        assert(avformat_open_input(&format, path, NULL, NULL) >= 0);
+        assert(strstr(format->iformat->name, "mp4"));
+        avformat_close_input(&format);
+    }
     struct Inspection result = inspect(path);
     assert(result.video_frames >= 6 && result.audio_frames > 0 && result.red >= 6);
+    assert(fabs(result.audio_last - result.video_last) < 0.12);
     printf("container roundtrip: %s %s/%s, %d decoded video frames; %s\n",
            container, selected, sound, result.video_frames, detail);
     frame_free(&frame);
     recorder_close(recorder);
     audio_close(audio);
+}
+static void safe_mp4_failure_test(const char *directory)
+{
+    Config cfg;
+    config_defaults(&cfg);
+    cfg.width = 160;
+    cfg.height = 90;
+    snprintf(cfg.record_container, sizeof(cfg.record_container), "mp4");
+    CastAudio *audio = audio_test_open(&cfg);
+    CastRecorder *r = recorder_open(audio);
+    assert(audio && r);
+    Frame frame = {0};
+    assert(!frame_alloc(&frame, cfg.width, cfg.height));
+    paint(&frame, 0);
+    for (int mode = 0; mode < 3; mode++) {
+        char target[PATH_MAX - 8], current[PATH_MAX], retained[PATH_MAX], error[CAST_ERR];
+        snprintf(target, sizeof(target), "%s/safe-mp4-failure-%d.mp4", directory, mode);
+        assert(!recorder_start(r, &cfg, target, error, sizeof(error)));
+        recorder_path(r, retained, sizeof(retained));
+        for (int i = 0; i < 8; i++) {
+            frame.ts_ns = cast_now_ns();
+            assert(recorder_frame(r, &frame, error, sizeof(error)) >= 0);
+            delay_ms(33);
+        }
+        if (mode == 0) {
+            recorder_test_failure(r, 0);
+            frame.ts_ns = cast_now_ns();
+            assert(recorder_frame(r, &frame, error, sizeof(error)) >= 0);
+            delay_ms(50);
+        } else {
+            snprintf(current, sizeof(current), "%s%s", target, mode == 1 ? "" : ".tmp");
+            FILE *file = fopen(current, "wx");
+            assert(file && fputs("preserve", file) >= 0 && fclose(file) == 0);
+        }
+        if (mode != 0) assert(!recorder_stop(r, error, sizeof(error)));
+        while (recorder_finalizing(r)) delay_ms(10);
+        bool active, paused;
+        uint64_t drops;
+        recorder_status(r, &active, &paused, &drops, error, sizeof(error));
+        assert(!active && error[0]);
+        recorder_path(r, current, sizeof(current));
+        assert(!strcmp(current, retained));
+        struct Inspection result = inspect(retained);
+        assert(result.video_frames >= 6 && result.audio_frames > 0);
+        if (mode) {
+            snprintf(current, sizeof(current), "%s%s", target, mode == 1 ? "" : ".tmp");
+            FILE *file = fopen(current, "r");
+            char value[16] = {0};
+            assert(file && fread(value, 1, 8, file) == 8 && !strcmp(value, "preserve"));
+            fclose(file);
+        } else {
+            assert(access(target, F_OK) < 0);
+            recorder_test_failure(r, -1);
+        }
+    }
+    frame_free(&frame);
+    recorder_close(r);
+    audio_close(audio);
+    puts("safe MP4: encoder failure and destination/temporary collisions retain decodable MKV");
+}
+static void safe_mp4_interruption_test(const char *directory)
+{
+    char target[PATH_MAX - 8], recovery[PATH_MAX];
+    snprintf(target, sizeof(target), "%s/interrupted.mp4", directory);
+    snprintf(recovery, sizeof(recovery), "%s.mkv", target);
+    int ready[2];
+    assert(pipe(ready) == 0);
+    pid_t child = fork();
+    assert(child >= 0);
+    if (!child) {
+        close(ready[0]);
+        Config cfg;
+        config_defaults(&cfg);
+        cfg.width = 160;
+        cfg.height = 90;
+        snprintf(cfg.record_container, sizeof(cfg.record_container), "mp4");
+        CastAudio *audio = audio_test_open(&cfg);
+        CastRecorder *r = recorder_open(audio);
+        char error[CAST_ERR];
+        assert(audio && r && !recorder_start(r, &cfg, target, error, sizeof(error)));
+        Frame frame = {0};
+        assert(!frame_alloc(&frame, cfg.width, cfg.height));
+        paint(&frame, 0);
+        for (int i = 0; i < 70; i++) {
+            frame.ts_ns = cast_now_ns();
+            assert(recorder_frame(r, &frame, error, sizeof(error)) >= 0);
+            delay_ms(33);
+        }
+        assert(write(ready[1], "x", 1) == 1);
+        for (;;) pause();
+    }
+    close(ready[1]);
+    char byte;
+    assert(read(ready[0], &byte, 1) == 1);
+    close(ready[0]);
+    assert(kill(child, SIGKILL) == 0);
+    int status;
+    assert(waitpid(child, &status, 0) == child && WIFSIGNALED(status));
+    assert(access(target, F_OK) < 0);
+    struct Inspection result = inspect(recovery);
+    assert(result.video_frames >= 20 && result.audio_frames > 0);
+    puts("safe MP4: SIGKILL during capture leaves decodable Matroska clusters");
 }
 static void image_decode_test(const char *directory)
 {
@@ -1279,6 +1400,8 @@ int main(int argc, char **argv)
     image_decode_test(directory);
     flv_codec_test(directory);
     container_codec_test(directory, "mp4", "auto", "aac");
+    safe_mp4_failure_test(directory);
+    safe_mp4_interruption_test(directory);
     container_codec_test(directory, "matroska", "ffv1", "flac");
     timeline_test(directory, true);
     timeline_test(directory, false);
