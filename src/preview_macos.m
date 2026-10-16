@@ -265,11 +265,19 @@ int mac_preview_countdown(CastMacPreview *p, uint64_t remaining, char *error, si
 {
     (void)error; (void)size;
     if (!p) return 0;
+    @autoreleasepool {
     CastPreviewController *c = controller(p);
+    /* The daemon reports zero on every ordinary tick. Only retire a guide on
+     * its transition to zero, or the live image would flash black each frame. */
+    if (!remaining && !c.countdown) return 0;
     if (remaining) {
         c.window.title = [NSString stringWithFormat:@"SuperScreencast — Recording in %llu",
             (unsigned long long)((remaining+999999999)/1000000000)];
-        if (c.pending == -2) { c.pending = -1; c.countdown = NO; return 1; }
+        if (c.pending == -2) {
+            c.countdown = NO;
+            c.selector.enabled = YES;
+            return 1; /* Keep dismissal pending so the daemon also turns preview off. */
+        }
     } else {
         c.countdown = NO;
         c.selector.enabled = YES;
@@ -277,4 +285,5 @@ int mac_preview_countdown(CastMacPreview *p, uint64_t remaining, char *error, si
         if (!c.config.preview) [c.window orderOut:nil];
     }
     return 0;
+    }
 }
