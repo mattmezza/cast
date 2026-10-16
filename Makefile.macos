@@ -18,9 +18,15 @@ PACKAGES = fontconfig freetype2 libavcodec libavformat libavutil libswscale libs
 ifeq ($(PANEL),1)
 PACKAGES += sdl3 sdl3-ttf
 endif
-PKG_CFLAGS = $(shell $(PKG_CONFIG) --cflags $(PACKAGES))
-PKG_LIBS = $(shell $(PKG_CONFIG) --libs $(PACKAGES))
-INTEGRATION_ID := $(shell { printf '%s' 'darwin:$(PANEL):$(MACOS_MIN):$(CC):$(CFLAGS):$(LDFLAGS)'; cat src/*.[chm] src/*.S Makefile.macos; } | shasum -a 256 | cut -c1-32)
+ifneq ($(MAKECMDGOALS),clean)
+ifeq ($(shell $(PKG_CONFIG) --exists $(PACKAGES) 'libavcodec >= 61.19.100' && echo yes),)
+$(error Missing macOS build dependencies or FFmpeg is too old; run brew install pkgconf ffmpeg fontconfig freetype sdl3 sdl3_ttf and brew upgrade ffmpeg)
+endif
+endif
+PKG_CFLAGS := $(shell $(PKG_CONFIG) --cflags $(PACKAGES))
+PKG_LIBS := $(shell $(PKG_CONFIG) --libs $(PACKAGES))
+PKG_VERSIONS := $(shell $(PKG_CONFIG) --modversion $(PACKAGES))
+INTEGRATION_ID := $(shell { printf '%s' 'darwin:$(PANEL):$(MACOS_MIN):$(CC):$(CFLAGS):$(LDFLAGS):$(PKG_CFLAGS):$(PKG_LIBS):$(PKG_VERSIONS)'; cat src/*.[chm] src/*.S Makefile.macos; } | shasum -a 256 | cut -c1-32)
 BUILD = build/macos-p$(PANEL)-$(INTEGRATION_ID)
 CPPFLAGS += -Isrc -Ivendor/inih -D_DARWIN_C_SOURCE -DWITH_MACOS \
  -DCAST_APPLICATION_NAME='"cast"' -DCAST_PLATFORM='"macos-$(shell uname -m)"' \
@@ -59,10 +65,10 @@ $(BUILD)/%.o: %.m src/cast.h
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -fobjc-arc -fblocks -MMD -MP -c $< -o $@
 $(BUILD)/src/command_assets.o: src/command_assets.S completions/cast.bash completions/_cast completions/cast.fish packaging/install.sh
 	@mkdir -p $(dir $@)
-	$(CC) -c $< -o $@
+	$(CC) -mmacosx-version-min=$(MACOS_MIN) -c $< -o $@
 $(BUILD)/src/panel_font.o: src/panel_font.S assets/fonts/Inter.ttf
 	@mkdir -p $(dir $@)
-	$(CC) -c $< -o $@
+	$(CC) -mmacosx-version-min=$(MACOS_MIN) -c $< -o $@
 -include $(OBJECTS:.o=.d)
 macos-app: cast
 ifeq ($(PANEL),1)
