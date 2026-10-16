@@ -2,8 +2,9 @@
 
 This is the first recorder-focused macOS port. It targets Apple Silicon with macOS
 13 or later and keeps the existing C compositor, FFmpeg recording engine and
-SDL3/Clay control panel. The Apple-specific adapters still require compilation
-and runtime validation on a Mac; Linux checks cannot establish that capture works.
+SDL3/Clay control panel. The Apple-specific adapters compile against Apple SDKs
+and the synthetic checks pass on Apple Silicon. Hardware capture still requires
+permission and runtime validation; synthetic checks cannot establish that it works.
 Intel builds have not been validated.
 
 ## Build on your MacBook
@@ -14,6 +15,7 @@ this checkout. Run these commands in Terminal as your normal user:
 ```sh
 xcode-select --install
 brew install pkgconf ffmpeg fontconfig freetype sdl3 sdl3_ttf
+brew upgrade ffmpeg # if an older installation is present; requires FFmpeg 7.1+
 make -j4
 make check-macos
 make macos-app
@@ -24,6 +26,8 @@ If Command Line Tools are already installed, skip the first command. Homebrew's
 SDL3_ttf formula is named `sdl3_ttf`; its pkg-config module is `sdl3-ttf`.
 The bundle is ad-hoc signed for local development. Its libraries remain in
 Homebrew, so it runs on the build machine and is not a standalone distribution.
+The macOS 13 deployment target applies to Cast's sources. Homebrew libraries can
+require newer macOS versions; this local bundle inherits their requirements.
 Do not use the Arch installer or Linux `make install` instructions on macOS.
 `make PANEL=0` builds a CLI-only binary if you want to isolate capture from UI.
 
@@ -87,6 +91,26 @@ build fails. Runtime diagnostics are available through the panel and `cast docto
 No SSH connection is required for this manual validation loop.
 
 ## Scope and remaining work
+
+### Native validation checkpoint (2026-10-16)
+
+On macOS 27.0.1 (26A434), arm64, using Command Line Tools and the macOS SDK,
+`make -j4`, `make check-macos`, and `make macos-app` pass with Homebrew FFmpeg
+9.0.2, SDL3 3.4.18, and SDL3_ttf 3.2.2. Core configuration/privacy tests,
+compositor visual tests, Darwin IPC tests, and the synthetic recorder smoke test
+pass. The app bundle passes `codesign --verify --strict` and opens its SDL panel.
+
+Native testing found and fixed unavailable secure-wipe API use, a
+platform-dependent invalid-config fixture, text centering with positive glyph
+bearings, and virtual-camera activation incorrectly succeeding with null output.
+The build now checks dependencies before compiling and invalidates object files
+when dependency versions or flags change.
+
+Hardware validation remains pending the Screen Recording permission grant:
+the daemon correctly refuses capture without it. Display frames, panel exclusion,
+camera, microphone, system audio, physical A/V sync, permission revocation, and
+sleep/wake have not yet been established by these synthetic checks. Linux tests
+have not been rerun on this Mac; Linux's secure-wipe path remains unchanged.
 
 Available adapters: display capture through ScreenCaptureKit, camera through
 AVFoundation, default microphone through AVAudioEngine, system audio through
