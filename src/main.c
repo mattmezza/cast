@@ -44,7 +44,7 @@ static const char help[] =
     "Usage: cast [startup options] | cast --headless [startup options] | cast COMMAND\n"
     "With panel support, cast opens the app and starts or attaches to its daemon.\n"
     "Use --headless for a terminal/service daemon. Closing the panel leaves it running.\n"
-    "Startup: --backend xorg|wayland --output-device PATH --camera-device PATH\n"
+    "Startup: --backend macos|xorg|wayland --output-device PATH --camera-device PATH\n"
     "  --width N --height N --fps N --no-virtual --no-camera --mic-source NAME\n"
     "  --desktop-source NAME --record-dir PATH --container NAME --video-codec NAME\n"
     "  --audio-codec NAME --countdown SECONDS --config PATH --socket PATH\n"
