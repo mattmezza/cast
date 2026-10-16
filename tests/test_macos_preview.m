@@ -96,6 +96,10 @@ int main(void)
         NSView *view = image_view(window);
         assert([window.title containsString:@"Composition"]);
         memset(pixels, 0, sizeof pixels); /* Submission must own the original bytes. */
+        NSString *liveTitle = [window.title copy];
+        for (unsigned i=0;i<3;i++)
+            assert(!mac_preview_countdown(preview,0,error,sizeof error));
+        assert(window.visible && [window.title isEqualToString:liveTitle]);
         NSBitmapImageRep *image = snapshot(view);
         color_at(image,.4,.25,255,0,0);
         color_at(image,.6,.25,0,255,0);
@@ -176,8 +180,11 @@ int main(void)
         assert(!mac_preview_countdown_frame(preview,&private_frame,&cfg,error,sizeof error));
         [window performClose:nil];
         assert(mac_preview_countdown(preview,1000000000,error,sizeof error) == 1);
-        assert(mac_preview_target(preview) == -1 && !window.visible);
+        assert(mac_preview_target(preview) == -2 && mac_preview_target(preview) == -1 &&
+               !window.visible);
         assert(!mac_preview_countdown(preview,0,error,sizeof error));
+        color_at(snapshot(view),.5,.5,20,20,20);
+        assert(selector(window).enabled);
         cfg.preview = true;
         assert(!mac_preview_countdown_frame(preview,&private_frame,&cfg,error,sizeof error));
         assert(!mac_preview_countdown(preview,0,error,sizeof error));
