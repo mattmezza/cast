@@ -238,7 +238,9 @@ int audio_configure(CastAudio *a, const Config *cfg, char *error, size_t size)
 {
     if (audio_validate(a, cfg, error, size) < 0) return -1;
     pthread_mutex_lock(&a->lock);
-    bool unchanged = cfg->mic == a->cfg.mic && cfg->desktop == a->cfg.desktop && (!cfg->desktop || a->desktop_pending || a->desktop_ready);
+    bool unchanged = cfg->mic == a->cfg.mic && cfg->desktop == a->cfg.desktop &&
+        (!cfg->mic || a->engine.running) &&
+        (!cfg->desktop || a->desktop_pending || a->desktop_ready);
     Config old = a->cfg;
     if (unchanged) a->cfg = *cfg;
     pthread_mutex_unlock(&a->lock);
