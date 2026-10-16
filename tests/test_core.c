@@ -20,6 +20,9 @@ static void load_test(const char *text, bool pass, Config *c)
         }
         assert(!rc);
     } else {
+        if (!rc) {
+            fprintf(stderr, "unexpectedly accepted config:\n%s\n", text);
+        }
         assert(rc);
         assert(!memcmp(c, &before, sizeof *c));
         assert(strstr(err, path));
@@ -257,7 +260,7 @@ int main(void)
     load_test("[output]\nwidth=333\n", false, &c);
     load_test("[preset.bad]\nsecret=foo\n", false, &c);
     load_test("[zoom]\nmax=1\nfactor=2\n", false, &c);
-    load_test("[audio]\ndesktop=true\n", false, &c);
+    load_test("[audio]\ndesktop=true\ndesktop_source=\n", false, &c);
     load_test("[composition]\nlayout_order=screen,screen\n", false, &c);
     load_test("[preset.a_name_that_exceeds_the_parser_section_name_limit_without_truncation]"
               "\nlayout=screen\n",
