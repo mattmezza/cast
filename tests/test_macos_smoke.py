@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import tempfile
 import time
@@ -30,6 +31,17 @@ def main():
 
         def status():
             return json.loads(command('status', '--json'))
+
+        def probe_recording(path):
+            probe = subprocess.run(['ffprobe', '-v', 'error', '-count_frames',
+                                    '-show_streams', '-of', 'json', str(path)],
+                                   capture_output=True, text=True, check=True, timeout=15)
+            streams = json.loads(probe.stdout)['streams']
+            for kind in ('video', 'audio'):
+                assert any(stream['codec_type'] == kind and
+                           int(stream.get('nb_read_frames', 0)) > 0
+                           for stream in streams), (path, streams)
+            return streams
 
         with (root / 'daemon.log').open('w') as log:
             process = subprocess.Popen([*common, '--headless', '--backend', 'synthetic',
@@ -63,12 +75,15 @@ def main():
                     time.sleep(.05)
                 assert target.stat().st_size > 0
                 assert not Path(str(target) + '.mkv').exists()
-                probe = subprocess.run(['ffprobe', '-v', 'error', '-show_streams',
-                                        '-of', 'json', str(target)], capture_output=True,
-                                       text=True, check=True, timeout=15)
-                streams = json.loads(probe.stdout)['streams']
-                assert any(stream['codec_type'] == 'video' for stream in streams)
-                assert any(stream['codec_type'] == 'audio' for stream in streams)
+                probe_recording(target)
+                command('settings', 'record.container', 'matroska')
+                mkv = root / 'smoke.mkv'
+                command('record', 'start', mkv)
+                assert status()['record']['path'] == str(mkv)
+                time.sleep(.6)
+                command('record', 'stop')
+                probe_recording(mkv)
+                command('settings', 'record.container', 'mp4')
                 if os.uname().sysname == 'Darwin':
                     command('virtual', 'start', success=False)
                     command('stream', 'start', success=False)
@@ -82,7 +97,52 @@ def main():
                     except subprocess.TimeoutExpired:
                         process.kill()
                         process.wait()
-    print('synthetic macOS recorder smoke: IPC, pause/resume, safe MP4 and shutdown passed')
+
+        # A separate disposable daemon must leave its in-progress MKV usable
+        # even when no recording trailer or orderly shutdown can be written.
+        common = [binary, '--config', str(config), '--socket', str(root / 'recovery.sock')]
+        with (root / 'recovery.log').open('w') as log:
+            process = subprocess.Popen([*common, '--headless', '--backend', 'synthetic',
+                                        '--no-virtual', '--no-camera', '--width', '320',
+                                        '--height', '240', '--fps', '20'], env=env,
+                                       stdout=subprocess.DEVNULL, stderr=log)
+            try:
+                deadline = time.monotonic() + 15
+                while True:
+                    assert process.poll() is None, (root / 'recovery.log').read_text()
+                    try:
+                        status()
+                        break
+                    except AssertionError:
+                        assert time.monotonic() < deadline, (root / 'recovery.log').read_text()
+                        time.sleep(.05)
+                target = root / 'interrupted.mp4'
+                recovery = Path(str(target) + '.mkv')
+                command('record', 'start', target)
+                assert status()['record']['path'] == str(recovery)
+                deadline = time.monotonic() + 15
+                while True:
+                    assert process.poll() is None, (root / 'recovery.log').read_text()
+                    try:
+                        streams = probe_recording(recovery)
+                        if any(stream['codec_type'] == 'video' and
+                               int(stream.get('nb_read_frames', 0)) >= 20
+                               for stream in streams):
+                            break
+                    except (AssertionError, subprocess.CalledProcessError):
+                        pass
+                    assert time.monotonic() < deadline, 'no recoverable recording data flushed'
+                    time.sleep(.1)
+                process.kill()
+                assert process.wait(timeout=15) == -signal.SIGKILL
+                assert not target.exists()
+                assert recovery.stat().st_size > 0
+                probe_recording(recovery)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=15)
+    print('synthetic recorder smoke: IPC, pause/resume, MP4, MKV, crash recovery and shutdown passed')
 
 
 if __name__ == '__main__':
