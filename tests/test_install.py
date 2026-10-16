@@ -79,7 +79,8 @@ class InstallerTests(unittest.TestCase):
         cls.updater = directory / 'cast-updater'
         subprocess.run(['cc', '-D_GNU_SOURCE', '-std=gnu11', '-Wall', '-Wextra', '-Werror',
                         '-I', str(ROOT / 'src'), str(ROOT / 'src/update.c'), str(ROOT / 'src/edition.c'), str(ROOT / 'src/license_store.c'), str(ROOT / 'src/edition_extensions.c'), str(ROOT / 'src/workflow_schema.c'), str(harness),
-                        str(assembly), '-lm', '-o', str(cls.updater)], check=True)
+                        str(ROOT / 'src/os_compat.c'), str(assembly), '-pthread', '-lm',
+                        '-o', str(cls.updater)], check=True)
 
     @classmethod
     def tearDownClass(cls):

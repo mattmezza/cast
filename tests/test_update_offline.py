@@ -43,10 +43,11 @@ class ProUpdateTests(unittest.TestCase):
                         '-I', str(PRIVATE / 'src'), str(harness), str(assembly),
                         str(ROOT / 'src/update.c'), str(ROOT / 'src/edition.c'),
                         str(ROOT / 'src/license_store.c'), str(ROOT / 'src/edition_extensions.c'),
-                        str(ROOT / 'src/workflow_schema.c'),
+                        str(ROOT / 'src/workflow_schema.c'), str(ROOT / 'src/os_compat.c'),
                         str(PRIVATE / 'tests/verifier_provider.c'),
                         str(PRIVATE / 'src/license_verifier.c'),
-                        str(PRIVATE / 'src/bounded_json.c'), '-lsodium', '-lm', '-o', str(cls.binary)], check=True)
+                        str(PRIVATE / 'src/bounded_json.c'), '-lsodium', '-pthread', '-lm',
+                        '-o', str(cls.binary)], check=True)
 
     @classmethod
     def tearDownClass(cls): cls.temp.cleanup()
