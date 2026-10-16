@@ -118,12 +118,11 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           [[ $(git rev-parse HEAD) == "$SOURCE_COMMIT" ]]
           if [[ "$PUBLISH" == false ]]; then
-            if git show-ref --verify --quiet "refs/tags/$BUILD_TAG"; then
-              [[ $(git rev-parse "refs/tags/$BUILD_TAG^{commit}") == "$SOURCE_COMMIT" ]]
-            else
-              # Only a local tag for the dispatch validation; never push it.
-              git tag "$BUILD_TAG" "$SOURCE_COMMIT"
-            fi
+            # The version may already be released. Point only this disposable
+            # checkout's local tag at the selected dry-run source so makepkg can
+            # verify its archive. No credentials are retained and no tag is pushed.
+            # Published releases keep their original exact-tag verification above.
+            git tag --force "$BUILD_TAG" "$SOURCE_COMMIT"
           fi
           python3 packaging/public-boundary.py
           make EDITION=community X11=0 WAYLAND=0 PANEL=0 check-editions
