@@ -133,6 +133,10 @@ active display mode's physical pixels (3024x1964), with the existing 8192-pixel
 bound. The fixed build was rebuilt, checked, packaged, granted screen permission,
 and used for another hardware recording. Reapplying microphone settings now
 restarts an engine that has stopped after an interruption.
+After renewing camera/microphone and Documents-folder grants for that same final
+executable, a further seven-second MP4 finalized with 210 decoded video frames,
+329 decoded AAC frames, visible camera video, and a captured system test tone.
+Both audio inputs and the camera were disabled after verification.
 
 The daemon correctly refuses capture without a matching permission grant. Live
 permission revocation, sleep/wake, external displays, sustained performance, and
