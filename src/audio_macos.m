@@ -78,7 +78,8 @@ int audio_validate(CastAudio *a, const Config *cfg, char *error, size_t size)
             buffers->mBuffers[0].mDataByteSize >= count * sizeof(float) * (planar ? 1 : 2) &&
             (!planar || buffers->mBuffers[1].mDataByteSize >= count * sizeof(float))) {
             pthread_mutex_lock(&a->lock);
-            if (at > a->desktop_end || at + count < a->desktop_end) a->desktop_begin = at;
+            if (!a->desktop_end || at > a->desktop_end + RATE/4 || at + count + RATE/4 < a->desktop_end) a->desktop_begin = at;
+            else for (uint64_t p = a->desktop_end; p < at; ++p) a->desktop_samples[(p%RING)*2] = a->desktop_samples[(p%RING)*2+1] = 0;
             for (size_t i = 0; i < count; ++i) {
                 uint64_t p = at + i; if (p < a->accept_after) continue;
                 for (unsigned ch = 0; ch < 2; ++ch) a->desktop_samples[(p % RING)*2+ch] = ((float *)buffers->mBuffers[planar ? ch : 0].mData)[planar ? i : i*2+ch];
@@ -184,7 +185,8 @@ static int start(CastAudio *a, char *error, size_t size)
             int count = swr_convert(a->resampler, dest, 8192, (const uint8_t **)buffer.floatChannelData, (int)buffer.frameLength);
             if (count < 0) return;
             pthread_mutex_lock(&a->lock);
-            if (at > a->end || at + (uint64_t)count < a->end) a->begin = at;
+            if (!a->end || at > a->end + RATE/4 || at + (uint64_t)count + RATE/4 < a->end) a->begin = at;
+            else for (uint64_t p = a->end; p < at; ++p) a->samples[(p%RING)*2] = a->samples[(p%RING)*2+1] = 0;
             for (int i = 0; i < count; ++i) {
                 uint64_t p = at + (uint64_t)i;
                 if (p < a->accept_after) continue;
