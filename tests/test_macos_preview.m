@@ -55,6 +55,19 @@ static void color_at(NSBitmapImageRep *image, double x, double y, int r, int g, 
         fprintf(stderr, "pixel %.2f,%.2f: got %d,%d,%d expected %d,%d,%d\n", x,y,red,green,blue,r,g,b);
     assert(abs(red-r) <= 4 && abs(green-g) <= 4 && abs(blue-b) <= 4);
 }
+static void mouse_event(CastMacPreview *preview, NSWindow *window, NSEventType type,
+                        NSPoint point)
+{
+    NSEvent *event = [NSEvent mouseEventWithType:type location:point modifierFlags:0
+        timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:window.windowNumber
+        context:nil eventNumber:1 clickCount:1 pressure:type == NSEventTypeLeftMouseDown ? 1 : 0];
+    assert(event);
+    [NSApp postEvent:event atStart:YES];
+    double start = NSProcessInfo.processInfo.systemUptime;
+    mac_preview_events(preview);
+    /* In particular, mouseDown must return before any mouseUp is posted. */
+    assert(NSProcessInfo.processInfo.systemUptime-start < .5);
+}
 int main(void)
 {
     signal(SIGALRM, timeout_handler);
@@ -112,6 +125,26 @@ int main(void)
         control.selectedSegment = 0;
         [NSApp sendAction:control.action to:control.target from:control];
         assert(mac_preview_target(preview) == 3 && mac_preview_target(preview) == -1);
+        NSRect segments = [control convertRect:control.bounds toView:nil];
+        NSPoint recording = NSMakePoint(NSMinX(segments)+NSWidth(segments)*.75,
+                                        NSMidY(segments));
+        mouse_event(preview,window,NSEventTypeLeftMouseDown,recording);
+        assert(mac_preview_target(preview) == 1 && mac_preview_target(preview) == -1);
+        mouse_event(preview,window,NSEventTypeLeftMouseUp,recording);
+        NSPoint composition = NSMakePoint(NSMinX(segments)+NSWidth(segments)*.25,
+                                          NSMidY(segments));
+        mouse_event(preview,window,NSEventTypeLeftMouseDown,composition);
+        assert(mac_preview_target(preview) == 3 && mac_preview_target(preview) == -1);
+        mouse_event(preview,window,NSEventTypeLeftMouseUp,composition);
+        NSPoint title = NSMakePoint(200,NSHeight(window.contentView.bounds)+10);
+        mouse_event(preview,window,NSEventTypeLeftMouseDown,title);
+        mouse_event(preview,window,NSEventTypeLeftMouseDragged,title);
+        mouse_event(preview,window,NSEventTypeLeftMouseUp,title);
+        NSPoint grip = NSMakePoint(NSWidth(window.contentView.bounds)-2,2);
+        mouse_event(preview,window,NSEventTypeLeftMouseDown,grip);
+        mouse_event(preview,window,NSEventTypeLeftMouseDragged,grip);
+        mouse_event(preview,window,NSEventTypeLeftMouseUp,grip);
+        assert(window.visible && mac_preview_target(preview) == -1);
         Frame invalid = frame; invalid.stride = 1;
         assert(mac_preview_frame(preview,&invalid,&state,&cfg,error,sizeof error) < 0);
         color_at(snapshot(view),.5,.5,20,20,20); /* Invalid input cannot retain old pixels. */
@@ -121,9 +154,13 @@ int main(void)
         color_at(snapshot(view),.5,.5,20,20,20);
         cfg.preview = true;
         assert(!mac_preview_frame(preview,&private_frame,&state,&cfg,error,sizeof error));
-        [window performClose:nil];
+        NSButton *close = [window standardWindowButton:NSWindowCloseButton];
+        NSRect closeRect = [close convertRect:close.bounds toView:nil];
+        NSPoint closePoint = NSMakePoint(NSMidX(closeRect),NSMidY(closeRect));
+        mouse_event(preview,window,NSEventTypeLeftMouseDown,closePoint);
         assert(!window.visible);
         assert(mac_preview_target(preview) == -2 && mac_preview_target(preview) == -1);
+        mouse_event(preview,window,NSEventTypeLeftMouseUp,closePoint);
         assert(!mac_preview_frame(preview,&private_frame,&state,&cfg,error,sizeof error));
         assert(window.visible);
 
