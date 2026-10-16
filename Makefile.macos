@@ -140,7 +140,7 @@ $(BUILD)/src/panel_font.o: src/panel_font.S assets/fonts/Inter.ttf
 -include $(OBJECTS:.o=.d)
 macos-app: $(BINARY) $(STT_HELPER)
 ifeq ($(PANEL),1)
-	python3 packaging/macos-app.py --binary ./$(BINARY) --output "build/macos/$(APP_NAME).app" $(if $(STT_HELPER),--stt-helper $(STT_HELPER) --speech-profile $(STT_PROFILE)) $(if $(filter 1,$(MACOS_STANDALONE)),--standalone) $(if $(filter lgpl,$(MEDIA_PROFILE)),--media-root '$(LGPL_ROOT)')
+	python3 packaging/macos-app.py --binary ./$(BINARY) --output "build/macos/$(APP_NAME).app" $(if $(STT_HELPER),--stt-helper $(STT_HELPER) --speech-profile $(STT_PROFILE)) $(if $(filter 1,$(MACOS_STANDALONE)),--standalone) $(if $(filter lgpl,$(MEDIA_PROFILE)),--media-root '$(LGPL_ROOT)') $(if $(filter pro,$(EDITION)),--pro-root '$(PRO_ROOT)')
 else
 	@echo 'macos-app requires PANEL=1' >&2; exit 1
 endif

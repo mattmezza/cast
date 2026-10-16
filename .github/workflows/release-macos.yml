@@ -100,7 +100,7 @@ jobs:
           ref: ${{ needs.source.outputs.commit }}
           persist-credentials: false
       - name: Install build dependencies
-        run: brew install pkgconf fontconfig freetype sdl3 sdl3_ttf nasm
+        run: brew install pkgconf fontconfig freetype sdl3 sdl3_ttf nasm ffmpeg
       - name: Build and check exact release source
         shell: bash
         run: |
@@ -118,6 +118,8 @@ jobs:
           set -euo pipefail
           app='build/macos/Super Screencast.app'
           [[ $("$app/Contents/MacOS/cast" --version) == "cast $RELEASE_VERSION" ]]
+          python3 tests/test_macos_bundle.py --app "$app"
+          python3 tests/test_macos_smoke.py --binary "$app/Contents/MacOS/cast"
           # Inspect every bundled Mach-O, including libraries copied by the packager.
           while IFS= read -r -d '' file; do
             file "$file" | grep -q 'Mach-O' || continue

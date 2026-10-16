@@ -123,6 +123,7 @@ def main():
     parser.add_argument('--stt-helper', type=Path)
     parser.add_argument('--media-root', type=Path)
     parser.add_argument('--speech-profile', type=Path)
+    parser.add_argument('--pro-root', type=Path)
     parser.add_argument('--standalone', action='store_true', help='bundle non-system runtime dylibs')
     args = parser.parse_args()
     if sys.platform != 'darwin':
@@ -187,6 +188,12 @@ def main():
         for source in (repository / 'LICENSE', repository / 'docs/macos.md',
                        repository / 'assets/fonts/OFL.txt'):
             shutil.copy2(source, resources / source.name)
+        if edition == 'pro':
+            if args.pro_root is None:
+                parser.error('Pro packaging requires --pro-root for its license notices')
+            private = args.pro_root / 'pro' if (args.pro_root / 'pro/src').is_dir() else args.pro_root
+            shutil.copy2(private / 'LICENSE', resources / 'PRO-LICENSE')
+            shutil.copy2(private / 'EULA-DRAFT.md', resources / 'PRO-EULA-DRAFT.md')
         if args.media_root:
             shutil.copytree(args.media_root / 'build-materials/licenses', resources / 'media-licenses')
             shutil.copy2(args.media_root / 'profile.json', resources / 'media-profile.json')

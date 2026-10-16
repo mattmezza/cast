@@ -208,3 +208,27 @@ an independently staged complete edition package and clean runtime validation.
 Newest-eligible hosted release discovery and owner endpoints remain production
 inputs, not successful simulated network operations. Archive checksums provide
 integrity; only the signed Pro manifest authenticates Pro release provenance.
+
+## Static Linux and standalone macOS assets (0.10.4 onward)
+
+`release-static-linux.yml` builds the Community X11/Wayland/panel executable on
+Ubuntu 24.04 with glibc archives. `readelf` must show neither an ELF interpreter
+nor `DT_NEEDED` entries. The downloadable executable is
+`cast-VERSION-linux-x86_64-static`; checksums, linker evidence, build identity,
+and exact corresponding dependency/application sources accompany it. Desktop
+services, fonts, kernel devices, and compatible runtime-loaded PipeWire/SDL
+modules remain host requirements. This executable is not a complete Linux system.
+
+`release-macos.yml` builds the native arm64 Community app with controlled LGPL
+media. `cast-VERSION-macos-arm64.zip` contains `Super Screencast.app`, with the
+website mark, runtime libraries, dependency notices and ad-hoc signatures. The
+workflow tests the recorder and packaged dependency closure before upload. Media,
+Homebrew dependency, and application sources/build materials accompany the ZIP.
+The app is not Developer ID signed or notarized, and its minimum macOS version
+reflects all bundled libraries. Pro uses the same version from the shared core;
+its production signing and publication remain separate.
+
+Both workflows accept a blank `release_tag` for an unpublished CI verification
+run. Publishing the new GitHub release triggers all three platform pipelines.
+Existing releases/assets are not overwritten. Wait for all builds and inspect
+release assets before announcing availability.
