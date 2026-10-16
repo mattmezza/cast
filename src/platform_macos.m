@@ -12,13 +12,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <math.h>
 
 @interface CastScreenCapture : NSObject <SCStreamOutput, SCStreamDelegate> {
 @public
     pthread_mutex_t lock;
     Frame latest;
     Config config;
-    uint64_t generation, epoch;
+    uint64_t generation, epoch, accept_after;
     bool closed, ready, failed;
     char failure[CAST_ERR];
 }
@@ -81,6 +82,7 @@ static int mac_config(const Config *cfg, char *error, size_t size)
 {
     pthread_mutex_lock(&lock);
     uint64_t request = ++epoch;
+    accept_after = cast_now_ns();
     Config cfg = config;
     ready = false;
     failed = false;
@@ -177,15 +179,21 @@ static int mac_config(const Config *cfg, char *error, size_t size)
 - (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sample ofType:(SCStreamOutputType)type
 {
     if (type != SCStreamOutputTypeScreen || !CMSampleBufferIsValid(sample)) return;
+    double age = CMTimeGetSeconds(CMTimeSubtract(CMClockGetTime(CMClockGetHostTimeClock()),
+        CMSampleBufferGetPresentationTimeStamp(sample)));
+    if (!isfinite(age) || age < -0.05 || age > 0.5) return;
+    uint64_t now = cast_now_ns();
+    uint64_t timestamp = age > 0 && now > (uint64_t)(age * 1e9)
+        ? now - (uint64_t)(age * 1e9) : now;
     CFArrayRef attachments = CMSampleBufferGetSampleAttachmentsArray(sample, false);
     if (!attachments || !CFArrayGetCount(attachments)) return;
     NSDictionary *metadata = (__bridge NSDictionary *)CFArrayGetValueAtIndex(attachments, 0);
     NSNumber *status = metadata[SCStreamFrameInfoStatus];
     if (!status || status.integerValue != SCFrameStatusComplete) {
         pthread_mutex_lock(&lock);
-        if (!closed && stream == self.stream) {
+        if (!closed && stream == self.stream && timestamp >= accept_after) {
             if (status && status.integerValue == SCFrameStatusIdle && ready)
-                latest.ts_ns = cast_now_ns(); /* Unchanged desktop is still live. */
+                latest.ts_ns = timestamp; /* Unchanged desktop is still live. */
             else {
                 ready = false;
                 frame_free(&latest); /* Blank/suspended/stopped content must not linger. */
@@ -200,7 +208,7 @@ static int mac_config(const Config *cfg, char *error, size_t size)
     if (!width || !height || width > 8192 || height > 8192) return;
     if (CVPixelBufferLockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) return;
     pthread_mutex_lock(&lock);
-    if (!closed && !failed && stream == self.stream && frame_alloc(&latest, (int)width, (int)height) == 0) {
+    if (!closed && !failed && stream == self.stream && timestamp >= accept_after && frame_alloc(&latest, (int)width, (int)height) == 0) {
         const uint8_t *base = CVPixelBufferGetBaseAddress(pixels);
         size_t stride = CVPixelBufferGetBytesPerRow(pixels);
         if (base && stride >= width * 4) {
@@ -211,7 +219,7 @@ static int mac_config(const Config *cfg, char *error, size_t size)
                     dst[0] = src[2]; dst[1] = src[1]; dst[2] = src[0]; dst[3] = 255;
                 }
             }
-            latest.ts_ns = cast_now_ns();
+            latest.ts_ns = timestamp;
             ready = true;
         }
     }
@@ -254,7 +262,10 @@ Capabilities macos_capabilities(Platform *p)
 uint64_t macos_source_generation(Platform *p)
 {
     CastScreenCapture *capture = (__bridge CastScreenCapture *)p;
-    return capture->generation;
+    pthread_mutex_lock(&capture->lock);
+    uint64_t generation = capture->generation;
+    pthread_mutex_unlock(&capture->lock);
+    return generation;
 }
 int macos_capture(Platform *p, Frame *frame, Cursor *cursor, char *error, size_t size)
 {
@@ -277,9 +288,12 @@ int macos_reconfigure(Platform *p, const Config *cfg, char *error, size_t size)
 {
     if (mac_config(cfg, error, size)) return -1;
     CastScreenCapture *capture = (__bridge CastScreenCapture *)p;
+    pthread_mutex_lock(&capture->lock);
     bool changed = strcmp(capture->config.monitor, cfg->monitor) || capture->config.fps != cfg->fps || capture->config.cursor != cfg->cursor;
     capture->config = *cfg;
-    if (changed) { capture->generation++; [capture begin]; }
+    if (changed) capture->generation++;
+    pthread_mutex_unlock(&capture->lock);
+    if (changed) [capture begin];
     return 0;
 }
 int macos_command(Platform *p, Config *cfg, int argc, char **argv, char *error, size_t size)
@@ -333,7 +347,9 @@ int macos_panel_register(Platform *p, char *error, size_t size)
     /* The panel may have become visible since startup enumeration. Refresh the
      * application filter before accepting more source frames. Source generation
      * also retires compositor caches that might contain the panel. */
+    pthread_mutex_lock(&capture->lock);
     capture->generation++;
+    pthread_mutex_unlock(&capture->lock);
     [capture begin];
     macos_panel_status(p, error, size);
     return 0;
