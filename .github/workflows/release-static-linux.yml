@@ -108,18 +108,20 @@ jobs:
           sudo apt-get install -y build-essential cmake ninja-build meson nasm pkg-config python3 \
             libfontconfig1-dev libfreetype-dev libpipewire-0.3-dev libglib2.0-dev \
             libx11-dev libxext-dev libxrandr-dev libxi-dev libxfixes-dev libxcomposite-dev \
-            libxrender-dev libxcb1-dev libxau-dev libxdmcp-dev libxtst-dev \
+            libxrender-dev libxcb1-dev libxau-dev libxdmcp-dev libxtst-dev libxcursor-dev libxss-dev libxinerama-dev libxt-dev libxv-dev libudev-dev \
             libwayland-dev wayland-protocols libxkbcommon-dev libdecor-0-dev \
             libssl-dev zlib1g-dev libbz2-dev liblzma-dev libpng-dev libbrotli-dev \
             libpcre2-dev libffi-dev libmount-dev libselinux1-dev libsepol-dev libblkid-dev \
             libdbus-1-dev libasound2-dev libpulse-dev libdrm-dev libgbm-dev libegl1-mesa-dev \
             xvfb xauth x11-utils x11-xserver-utils xdotool xclip dbus-x11 \
-            pipewire pipewire-pulse wireplumber fonts-dejavu-core curl git zsh fish
+            pipewire pipewire-pulse wireplumber pulseaudio-utils ffmpeg fonts-dejavu-core curl git zsh fish
       - name: Build actual static executable and run unit and CLI tests
         run: |
           test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
           python3 packaging/public-boundary.py
           python3 packaging/build-static-linux.py --jobs 4
+      - name: Verify PipeWire capture with a synthetic null sink
+        run: dbus-run-session -- python3 packaging/test-static-audio.py
       - name: Preserve exact linked dependency sources
         run: python3 packaging/static-linux-sources.py
       - name: Prepare verified static release assets
