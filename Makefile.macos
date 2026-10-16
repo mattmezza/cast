@@ -149,10 +149,10 @@ CORE_SOURCES = src/edition.c src/license_store.c src/edition_extensions.c src/wo
  src/os_compat.c vendor/inih/ini.c $(PRO_SOURCES)
 $(BUILD)/test_core: tests/test_core.c $(CORE_SOURCES)
 	@mkdir -p $(BUILD)
-	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ $^ $(PKG_LIBS) $(LDLIBS)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) $(LDFLAGS) -std=gnu11 -o $@ $^ $(PKG_LIBS) $(LDLIBS)
 $(BUILD)/test_visual: tests/test_visual.c tests/compositor_runtime_stubs.c src/compositor.c src/composition_assets.c src/presentation_text.c
 	@mkdir -p $(BUILD)
-	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ $^ $(PKG_LIBS) $(LDLIBS)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) $(LDFLAGS) -std=gnu11 -o $@ $^ $(PKG_LIBS) $(LDLIBS)
 $(BUILD)/test_os_compat: tests/test_os_compat.c src/os_compat.c src/os_compat.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(WARN) -Werror -std=gnu11 -Isrc -o $@ tests/test_os_compat.c src/os_compat.c -pthread

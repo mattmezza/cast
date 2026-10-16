@@ -74,7 +74,6 @@ def main():
                      'Static PipeWire capture route did not become ready')
                 recording = work / 'capture.mkv'
                 call(*common, 'record', 'start', str(recording))
-                call(*common, 'record', 'resume')
                 time.sleep(3)
                 call(*common, 'record', 'stop')
                 wait(lambda: not json.loads(call(*common, 'status', '--json').stdout)['record']['finalizing'],
