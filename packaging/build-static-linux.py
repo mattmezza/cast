@@ -35,7 +35,9 @@ def main():
     lock_path = ROOT / 'packaging/static-linux-lock.json'
     lock = json.loads(lock_path.read_text())
     toolchain = subprocess.check_output(['dpkg-query', '-W', '-f=${binary:Package}=${Version}\n'])
-    identity = hashlib.sha256(lock_path.read_bytes() + Path(__file__).read_bytes() + toolchain).hexdigest()
+    identity = hashlib.sha256(lock_path.read_bytes() +
+                              (ROOT / 'packaging/media-lgpl-lock.json').read_bytes() +
+                              Path(__file__).read_bytes() + toolchain).hexdigest()
     marker = base / 'sdk.identity'
     reuse = args.reuse_sdk and marker.is_file() and marker.read_text().strip() == identity
 

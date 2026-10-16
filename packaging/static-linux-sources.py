@@ -19,10 +19,22 @@ ubuntu.mkdir(exist_ok=True)
 packages = {}
 archives = sorted(set(re.findall(r'(/[^\s()]+\.a)(?:\(|\s)', (build / 'cast.map').read_text())))
 for archive in archives:
-    path = Path(archive)
+    path = Path(archive).resolve()
     if path.is_relative_to(build):
         continue
-    owner = subprocess.check_output(['dpkg-query', '-S', archive], text=True).split(': /')[0].splitlines()[0]
+    # Linker maps retain GCC search paths containing ../..; dpkg stores
+    # canonical install paths. Try the original path too for usrmerge aliases.
+    candidates = [str(path), archive]
+    if str(path).startswith('/usr/lib/'):
+        candidates.append(str(path)[4:])
+    for candidate in dict.fromkeys(candidates):
+        ownership = subprocess.run(['dpkg-query', '-S', candidate], text=True,
+                                   capture_output=True)
+        if ownership.returncode == 0:
+            break
+    else:
+        raise RuntimeError('No source-package owner for linked archive: ' + archive)
+    owner = ownership.stdout.split(': /')[0].splitlines()[0]
     source, version = subprocess.check_output(
         ['dpkg-query', '-W', '-f=${source:Package}\t${source:Version}', owner], text=True).split('\t')
     packages[source] = version
