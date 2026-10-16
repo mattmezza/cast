@@ -1,8 +1,8 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
-#include "media_internal.h"
 #include "media_codec.h"
+#include "media_internal.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <libavcodec/avcodec.h>
@@ -35,6 +35,8 @@ struct CastRecorder {
     Config cfg;
     char path[PATH_MAX], file_path[PATH_MAX], error[CAST_ERR], codec_error[CAST_ERR];
     char encoder_info[CAST_ERR];
+    char final_path[PATH_MAX];
+    bool safe_mp4;
     MediaCodecSelection selected, pending_selection;
     uint64_t segment_ns, elapsed_ns, generation, accept_after_ns, audio_segment_sample;
     int64_t audio_produced, audio_encoded, last_video_pts;
@@ -196,8 +198,8 @@ static int send_frame(CastRecorder *r, AVCodecContext *c, AVStream *s, AVFrame *
 static int setup_video(CastRecorder *r)
 {
     MediaCodecSelection selection;
-    if (media_video_open(&r->cfg, false, r->format->oformat->flags & AVFMT_GLOBALHEADER,
-                         &r->video, &selection, r->codec_error, sizeof(r->codec_error))) {
+    if (media_video_open(&r->cfg, false, r->format->oformat->flags & AVFMT_GLOBALHEADER, &r->video,
+                         &selection, r->codec_error, sizeof(r->codec_error))) {
         return -1;
     }
     r->pending_selection = selection;
@@ -409,6 +411,134 @@ static int encode_video(CastRecorder *r, const struct VideoJob *job)
 #endif
     return rc;
 }
+/* Publish only a complete MP4. The sibling MKV remains the recovery artifact
+ * until publication succeeds; link() never replaces a destination created meanwhile. */
+static int remux_mp4(CastRecorder *r)
+{
+    AVFormatContext *input = NULL;
+    AVPacket *packet = NULL;
+    char temporary[PATH_MAX];
+    int z = snprintf(temporary, sizeof(temporary), "%s.tmp", r->final_path);
+    if (z < 0 || (size_t)z >= sizeof(temporary)) {
+        return fferror(r->codec_error, sizeof(r->codec_error), "MP4 temporary path",
+                       AVERROR(ENAMETOOLONG));
+    }
+    z = avformat_open_input(&input, r->file_path, NULL, NULL);
+    if (z < 0) {
+        goto done;
+    }
+    z = avformat_find_stream_info(input, NULL);
+    if (z < 0) {
+        goto done;
+    }
+    z = avformat_alloc_output_context2(&r->format, NULL, "mp4", temporary);
+    if (z < 0 || !r->format) {
+        z = AVERROR(ENOMEM);
+        goto done;
+    }
+    for (unsigned i = 0; i < input->nb_streams; i++) {
+        AVStream *stream = avformat_new_stream(r->format, NULL);
+        if (!stream) {
+            z = AVERROR(ENOMEM);
+            goto done;
+        }
+        z = avcodec_parameters_copy(stream->codecpar, input->streams[i]->codecpar);
+        if (z < 0) {
+            goto done;
+        }
+        stream->codecpar->codec_tag = 0;
+        stream->time_base = input->streams[i]->time_base;
+    }
+    r->fd = open(temporary, O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (r->fd < 0) {
+        z = AVERROR(errno);
+        goto done;
+    }
+    uint8_t *buffer = av_malloc(65536);
+    if (!buffer) {
+        z = AVERROR(ENOMEM);
+        goto done;
+    }
+    r->io = avio_alloc_context(buffer, 65536, 1, r, NULL, write_file, seek_file);
+    if (!r->io) {
+        av_free(buffer);
+        z = AVERROR(ENOMEM);
+        goto done;
+    }
+    r->format->pb = r->io;
+    r->format->flags |= AVFMT_FLAG_CUSTOM_IO;
+    z = avformat_write_header(r->format, NULL);
+    if (z < 0) {
+        goto done;
+    }
+    packet = av_packet_alloc();
+    if (!packet) {
+        z = AVERROR(ENOMEM);
+        goto done;
+    }
+    while ((z = av_read_frame(input, packet)) >= 0) {
+        unsigned i = (unsigned)packet->stream_index;
+        av_packet_rescale_ts(packet, input->streams[i]->time_base,
+                             r->format->streams[i]->time_base);
+        packet->pos = -1;
+        z = av_interleaved_write_frame(r->format, packet);
+        av_packet_unref(packet);
+        if (z < 0) {
+            goto done;
+        }
+    }
+    if (z != AVERROR_EOF) {
+        goto done;
+    }
+    z = av_write_trailer(r->format);
+    avio_flush(r->io);
+    if (z >= 0 && r->io->error < 0) {
+        z = r->io->error;
+    }
+    if (z >= 0 && fsync(r->fd) < 0) {
+        z = AVERROR(errno);
+    }
+    if (z >= 0 && link(temporary, r->final_path) < 0) {
+        z = AVERROR(errno);
+    }
+    if (z >= 0) {
+        char directory[PATH_MAX];
+        snprintf(directory, sizeof(directory), "%s", r->final_path);
+        char *slash = strrchr(directory, '/');
+        if (slash) {
+            if (slash == directory) {
+                slash[1] = 0;
+            } else {
+                *slash = 0;
+            }
+        } else {
+            snprintf(directory, sizeof(directory), ".");
+        }
+        int directory_fd = open(directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        if (directory_fd < 0) {
+            z = AVERROR(errno);
+        } else {
+            if (fsync(directory_fd) < 0) {
+                z = AVERROR(errno);
+            }
+            close(directory_fd);
+        }
+    }
+done:
+    av_packet_free(&packet);
+    avformat_close_input(&input);
+    /* Only remove a temporary file that this invocation actually created. */
+    bool created = r->fd >= 0;
+    free_encoder(r);
+    if (created) {
+        unlink(temporary);
+    }
+    if (z < 0) {
+        return fferror(r->codec_error, sizeof(r->codec_error), "MP4 remux failed; MKV retained", z);
+    }
+    unlink(r->file_path);
+    return 0;
+}
 /* Only the recording worker owns codec/muxer resources while a recording exists.
  * encoder_mutex also gives privacy barriers a point after all in-flight codec
  * calls, without holding the independent queue/status mutex. */
@@ -464,7 +594,13 @@ static int finish_encoder(CastRecorder *r, bool failed, uint64_t elapsed, uint64
                      "recording fsync; partial file retained", AVERROR(errno));
     }
     free_encoder(r);
+    if (rc == 0 && r->safe_mp4) {
+        rc = remux_mp4(r);
+    }
     pthread_mutex_lock(&r->mutex);
+    if (rc == 0 && r->safe_mp4) {
+        snprintf(r->path, sizeof(r->path), "%s", r->final_path);
+    }
     clear_queue(r);
     snprintf(r->error, sizeof(r->error), "%s", rc < 0 ? r->codec_error : "");
     atomic_store(&r->active, false);
@@ -597,6 +733,27 @@ CastRecorder *recorder_open(CastAudio *audio)
     r->worker_started = true;
     return r;
 }
+static int create_capture(CastRecorder *r)
+{
+    if (r->safe_mp4) {
+        snprintf(r->final_path, sizeof(r->final_path), "%s", r->file_path);
+        struct stat st;
+        if (lstat(r->final_path, &st) == 0) {
+            errno = EEXIST;
+            return -1;
+        }
+        if (errno != ENOENT) {
+            return -1;
+        }
+        size_t len = strlen(r->file_path);
+        if (len + 4 >= sizeof(r->file_path)) {
+            errno = ENAMETOOLONG;
+            return -1;
+        }
+        memcpy(r->file_path + len, ".mkv", 5);
+    }
+    return open(r->file_path, O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600);
+}
 static int create_file(CastRecorder *r, const char *path)
 {
     if (path && *path) {
@@ -605,7 +762,7 @@ static int create_file(CastRecorder *r, const char *path)
             return -1;
         }
         snprintf(r->file_path, sizeof(r->file_path), "%s", path);
-        r->fd = open(r->file_path, O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600);
+        r->fd = create_capture(r);
     } else {
         time_t t = time(NULL);
         struct tm tm;
@@ -624,7 +781,7 @@ static int create_file(CastRecorder *r, const char *path)
                          "record directory path is too long");
                 return -1;
             }
-            r->fd = open(r->file_path, O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600);
+            r->fd = create_capture(r);
             if (r->fd >= 0 || errno != EEXIST) {
                 break;
             }
@@ -659,6 +816,8 @@ int recorder_start(CastRecorder *r, const Config *cfg, const char *path, char *r
     pthread_mutex_unlock(&r->mutex);
     pthread_mutex_lock(&r->encoder_mutex);
     r->cfg = *cfg;
+    r->safe_mp4 = !strcmp(cfg->record_container, "mp4");
+    r->final_path[0] = 0;
     r->codec_error[0] = 0;
     r->audio_produced = r->audio_encoded = 0;
     r->last_video_pts = -1;
@@ -682,7 +841,8 @@ int recorder_start(CastRecorder *r, const Config *cfg, const char *path, char *r
     if (create_file(r, path) < 0) {
         goto fail;
     }
-    int z = avformat_alloc_output_context2(&r->format, NULL, cfg->record_container, r->file_path);
+    int z = avformat_alloc_output_context2(
+        &r->format, NULL, r->safe_mp4 ? "matroska" : cfg->record_container, r->file_path);
     if (z < 0 || !r->format) {
         fferror(r->codec_error, sizeof(r->codec_error), "recording container",
                 z < 0 ? z : AVERROR(EINVAL));
@@ -706,8 +866,17 @@ int recorder_start(CastRecorder *r, const Config *cfg, const char *path, char *r
     if (setup_video(r) < 0 || setup_audio(r) < 0) {
         goto fail_file;
     }
+    if (r->safe_mp4) {
+        const AVOutputFormat *mp4 = av_guess_format("mp4", NULL, NULL);
+        if (!mp4 || avformat_query_codec(mp4, r->video->codec_id, FF_COMPLIANCE_NORMAL) <= 0 ||
+            avformat_query_codec(mp4, r->sound->codec_id, FF_COMPLIANCE_NORMAL) <= 0) {
+            snprintf(r->codec_error, sizeof(r->codec_error),
+                     "selected codecs are not compatible with MP4");
+            goto fail_file;
+        }
+    }
     AVDictionary *options = NULL;
-    if (!strcmp(cfg->record_container, "matroska")) {
+    if (r->safe_mp4 || !strcmp(cfg->record_container, "matroska")) {
         av_dict_set(&options, "cluster_time_limit", "1000", 0);
         av_dict_set(&options, "cluster_size_limit", "1048576", 0);
     }
@@ -726,8 +895,8 @@ int recorder_start(CastRecorder *r, const Config *cfg, const char *path, char *r
     pthread_mutex_lock(&r->mutex);
     r->error[0] = 0;
     r->selected = r->pending_selection;
-    snprintf(r->encoder_info, sizeof(r->encoder_info), "%.63s; %.900s",
-             r->selected.encoder, r->selected.detail);
+    snprintf(r->encoder_info, sizeof(r->encoder_info), "%.63s; %.900s", r->selected.encoder,
+             r->selected.detail);
     snprintf(r->path, sizeof(r->path), "%s", r->file_path);
     r->elapsed_ns = 0;
     r->audio_segment_sample = 0;
@@ -939,7 +1108,8 @@ bool recorder_finalizing(CastRecorder *r)
 {
     return atomic_load(&r->finalizing);
 }
-void recorder_encoder(CastRecorder *r, char *name, size_t name_size, char *detail, size_t detail_size)
+void recorder_encoder(CastRecorder *r, char *name, size_t name_size, char *detail,
+                      size_t detail_size)
 {
     pthread_mutex_lock(&r->mutex);
     snprintf(name, name_size, "%s", r->selected.encoder);
