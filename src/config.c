@@ -41,13 +41,30 @@ typedef struct {
 #define FIXED_ANCHORS                                                                              \
     "top-left,top-right,bottom-left,bottom-right,top,bottom,left,right,"                           \
     "top-center,bottom-center,center-left,center-right"
+#ifdef __APPLE__
+#define DEFAULT_BACKEND "macos"
+#define DEFAULT_OUTPUT "none"
+#define DEFAULT_VIRTUAL "false"
+#define DEFAULT_CAMERA "default"
+#define DEFAULT_CAMERA_ENABLED "false"
+#define DEFAULT_FOLLOW "false"
+#define DEFAULT_DESKTOP_SOURCE "default"
+#else
+#define DEFAULT_BACKEND "xorg"
+#define DEFAULT_OUTPUT "/dev/video10"
+#define DEFAULT_VIRTUAL "true"
+#define DEFAULT_CAMERA "/dev/video0"
+#define DEFAULT_CAMERA_ENABLED "true"
+#define DEFAULT_FOLLOW "true"
+#define DEFAULT_DESKTOP_SOURCE ""
+#endif
 static const Setting settings[] = {
-    E("output", "backend", backend, "xorg,wayland,synthetic", "xorg"),
-    S("output", "device", output_device, "/dev/video10"),
+    E("output", "backend", backend, "auto,xorg,x11,wayland,macos,synthetic", DEFAULT_BACKEND),
+    S("output", "device", output_device, DEFAULT_OUTPUT),
     I("output", "width", width, 64, 7680, "1920"),
     I("output", "height", height, 64, 4320, "1080"),
     I("output", "fps", fps, 1, 120, "30"),
-    B("output", "enabled", virtual_enabled, "true"),
+    B("output", "enabled", virtual_enabled, DEFAULT_VIRTUAL),
     C("output", "pause_background", pause_color, "#20252b"),
     S("output", "pause_title", pause_text, "Paused"),
     S("output", "pause_subtitle", pause_subtitle, ""),
@@ -70,8 +87,8 @@ static const Setting settings[] = {
     I("output", "blur_subtitle_size", blur_subtitle_size, 8, 256, "24"),
     I("output", "blur_footer_size", blur_footer_size, 8, 256, "18"),
     I("output", "blur_text_gap", blur_text_gap, 0, 512, "12"),
-    S("camera", "device", camera_device, "/dev/video0"),
-    B("camera", "enabled", camera_enabled, "true"),
+    S("camera", "device", camera_device, DEFAULT_CAMERA),
+    B("camera", "enabled", camera_enabled, DEFAULT_CAMERA_ENABLED),
     B("camera", "visible", camera_visible, "true"),
     E("camera", "shape", shape, "rectangle,rounded,circle", "rounded"),
     E("camera", "anchor", anchor, ANCHORS, "bottom-right"),
@@ -141,7 +158,7 @@ static const Setting settings[] = {
     D("zoom", "max", zoom_max, 1, 20, "8"),
     D("zoom", "step", zoom_step, 0.01, 10, "0.25"),
     I("zoom", "transition_ms", zoom_transition_ms, 0, 3000, "250"),
-    B("zoom", "follow", zoom_follow, "true"),
+    B("zoom", "follow", zoom_follow, DEFAULT_FOLLOW),
     I("zoom", "deadzone", zoom_deadzone, 0, 2000, "80"),
     D("zoom", "smoothing", zoom_smoothing, 0.001, 1, "0.18"),
     B("cursor", "enabled", cursor, "true"),
@@ -177,7 +194,7 @@ static const Setting settings[] = {
     B("audio", "mic", mic, "false"),
     B("audio", "desktop", desktop, "false"),
     S("audio", "mic_source", mic_source, ""),
-    S("audio", "desktop_source", desktop_source, ""),
+    S("audio", "desktop_source", desktop_source, DEFAULT_DESKTOP_SOURCE),
     D("audio", "mic_gain", mic_gain, 0, 4, "1"),
     D("audio", "desktop_gain", desktop_gain, 0, 4, "1"),
     B("audio", "virtual", virtual_audio, "false"),
@@ -492,6 +509,13 @@ void config_defaults(Config *c)
                              e, sizeof e);
         }
     }
+#ifdef __APPLE__
+    /* Finder launches do not have a useful recording working directory. */
+    const char *home = getenv("HOME");
+    if (home && home[0] == '/' && strlen(home) + 8 < sizeof c->record_dir) {
+        snprintf(c->record_dir, sizeof c->record_dir, "%s/Movies", home);
+    }
+#endif
     c->preset_count = 3;
     Preset *p = &c->presets[0];
     strcpy(p->name, "coding");

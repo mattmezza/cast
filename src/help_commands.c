@@ -58,6 +58,18 @@ static const char fish_guide[] =
     "    cast completions --script fish > \"$__fish_config_dir/completions/cast.fish\"\n"
     "    source \"$__fish_config_dir/completions/cast.fish\"\n"
     "  Fish automatically loads this file in future terminals.\n\n";
+#ifdef __APPLE__
+static const char setup_guide[] =
+    "SuperScreencast macOS development build\n"
+    "Build: brew install pkgconf ffmpeg fontconfig freetype sdl3 sdl3_ttf\n"
+    "       make macos-app\n"
+    "Launch: open build/macos/SuperScreencast.app\n"
+    "Allow Screen & System Audio Recording in System Settings > Privacy & Security.\n"
+    "Enable the camera or microphone only when needed and allow their permissions.\n"
+    "Recordings default to ~/Movies. Select MP4 for safe MKV capture followed by conversion.\n"
+    "Virtual camera/audio, global input effects, and streaming are unavailable in this port.\n"
+    "See docs/macos.md for build and hardware validation steps.\n";
+#else
 static const char setup_guide[] =
     "cast setup guide\n"
     "This command prints instructions; it changes no devices, modules or files.\n\n"
@@ -180,6 +192,8 @@ static const char setup_guide[] =
     "  feeding the conference window back into its own camera tile.\n\n"
     "Shell completion: cast completions bash, cast completions zsh, or\n"
     "cast completions fish prints the corresponding installation instructions.\n";
+
+#endif
 
 int help_command(int argc, char **argv, char *error, size_t size)
 {

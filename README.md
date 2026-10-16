@@ -58,6 +58,13 @@ speech-following speaker notes. Editable recording projects remain planned. See
 and pull requests are not currently accepted. Issues may be used to report bugs,
 with no response-time commitment.
 
+## macOS development port
+
+An initial macOS recorder port reuses the control panel and composition engine,
+with ScreenCaptureKit display/system-audio capture and AVFoundation camera/mic
+adapters. Virtual devices and streaming are not included. Build and hardware
+validation on a Mac are still required; see [macOS setup](docs/macos.md).
+
 ## Build and run
 
 Build dependencies: C compiler, GNU make, pkg-config, FFmpeg development libraries

@@ -1,3 +1,6 @@
+ifeq ($(shell uname -s),Darwin)
+include Makefile.macos
+else
 .POSIX:
 CC = cc
 PKG_CONFIG = pkg-config
@@ -77,7 +80,7 @@ override LDFLAGS += -Wl,-rpath,$(LGPL_ROOT)/prefix/lib
 endif
 endif
 CPPFLAGS += -DCAST_APPLICATION_NAME='"$(BINARY)"' -DCAST_MEDIA_PROFILE='"$(MEDIA_PROFILE)"' -DCAST_PLATFORM='"linux-$(shell uname -m)"' -DCAST_CORE_REVISION='"$(CORE_REVISION)"' -DCAST_PRIVATE_REVISION='"$(PRIVATE_REVISION)"' -DCAST_RELEASE_TIMESTAMP=$(RELEASE_TIMESTAMP) -DCAST_OFFICIAL_RELEASE=$(OFFICIAL_RELEASE)
-SOURCES = src/main.c src/commands.c src/config.c src/config_migrate.c src/state.c src/compositor.c src/composition_assets.c src/presentation_text.c src/platform.c src/media.c src/webcam.c src/audio.c src/record.c src/stream.c src/panel_transport.c src/panel_lifecycle.c src/help_commands.c src/update.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/edition_service.c src/media_codec.c src/app_runtime.c vendor/inih/ini.c
+SOURCES = src/os_compat.c src/main.c src/commands.c src/config.c src/config_migrate.c src/state.c src/compositor.c src/composition_assets.c src/presentation_text.c src/platform.c src/media.c src/webcam.c src/audio.c src/record.c src/stream.c src/panel_transport.c src/panel_lifecycle.c src/help_commands.c src/update.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/edition_service.c src/media_codec.c src/app_runtime.c vendor/inih/ini.c
 INI_FLAGS = -DINI_HANDLER_LINENO=1 -DINI_CALL_HANDLER_ON_NEW_SECTION=1 -DINI_ALLOW_MULTILINE=0 -DINI_ALLOW_INLINE_COMMENTS=0 -DINI_STOP_ON_FIRST_ERROR=1 -DINI_MAX_LINE=8192
 CPPFLAGS += -Isrc -Ivendor/inih $(INI_FLAGS) -D_GNU_SOURCE
 LDLIBS += -lm -lpthread -ldl
@@ -121,8 +124,8 @@ LDLIBS += $(PANEL_LIBS)
 
 
 endif
-CORE_SOURCES = src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c $(PRO_SOURCES) src/compositor.c src/composition_assets.c src/presentation_text.c src/config.c src/state.c vendor/inih/ini.c
-MEDIA_SOURCES = src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c $(PRO_SOURCES) src/media.c src/webcam.c src/audio.c src/record.c src/stream.c src/compositor.c src/composition_assets.c src/presentation_text.c src/media_codec.c
+CORE_SOURCES = src/os_compat.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c $(PRO_SOURCES) src/compositor.c src/composition_assets.c src/presentation_text.c src/config.c src/state.c vendor/inih/ini.c
+MEDIA_SOURCES = src/os_compat.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c $(PRO_SOURCES) src/media.c src/webcam.c src/audio.c src/record.c src/stream.c src/compositor.c src/composition_assets.c src/presentation_text.c src/media_codec.c
 
 ifeq ($(EDITION):$(STT),pro:1)
 CPPFLAGS += $(if $(findstring -DCAST_GGML_BUNDLED_VULKAN=1,$(STT_CFLAGS)),-DCAST_WITH_SPEECH_VULKAN=1)
@@ -391,18 +394,18 @@ check-edition-install:
 	python3 tests/test_edition_install.py --pro-root '$(PRO_ROOT)' --lgpl-root '$(LGPL_ROOT)'
 .PHONY: check-edition-install
 
-build/edition-contract-tests/test_editions: tests/test_editions.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/edition.h src/license_store.h src/edition_extensions.h src/pro_extension.h src/ipc_identity.h src/cast.h
+build/edition-contract-tests/test_editions: tests/test_editions.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/edition.h src/license_store.h src/edition_extensions.h src/pro_extension.h src/ipc_identity.h src/cast.h src/os_compat.c
 	@mkdir -p build/edition-contract-tests
 	$(CC) -D_GNU_SOURCE -Isrc -std=gnu11 -O2 $(WARN) -Werror -o $@ $(filter %.c,$^)
-build/edition-contract-tests/test_editions_contract: tests/test_editions_contract.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/config.c src/presentation_text.c vendor/inih/ini.c src/edition.h src/license_store.h src/edition_extensions.h src/pro_extension.h src/presentation_text.h src/cast.h
+build/edition-contract-tests/test_editions_contract: tests/test_editions_contract.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/config.c src/presentation_text.c vendor/inih/ini.c src/edition.h src/license_store.h src/edition_extensions.h src/pro_extension.h src/presentation_text.h src/cast.h src/os_compat.c
 	@mkdir -p build/edition-contract-tests
 	$(CC) -D_GNU_SOURCE -DWITH_PRO -Isrc -Ivendor/inih $(INI_FLAGS) $(shell pkg-config --cflags fontconfig freetype2) -std=gnu11 -O2 -ffunction-sections -fdata-sections $(WARN) -Werror -o $@ $(filter %.c,$^) -Wl,--gc-sections $(shell pkg-config --libs fontconfig freetype2) -lm
-build/edition-contract-tests/test_edition_service: tests/test_edition_service.c src/edition_service.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/config.c src/presentation_text.c vendor/inih/ini.c src/edition_service.h src/edition.h src/license_store.h src/edition_extensions.h src/pro_extension.h src/presentation_text.h src/cast.h
+build/edition-contract-tests/test_edition_service: tests/test_edition_service.c src/edition_service.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/config.c src/presentation_text.c vendor/inih/ini.c src/edition_service.h src/edition.h src/license_store.h src/edition_extensions.h src/pro_extension.h src/presentation_text.h src/cast.h src/os_compat.c
 	@mkdir -p build/edition-contract-tests
 	$(CC) -D_GNU_SOURCE -Isrc -Ivendor/inih $(INI_FLAGS) $(shell pkg-config --cflags fontconfig freetype2) -std=gnu11 -O2 -ffunction-sections -fdata-sections $(WARN) -Werror -o $@ $(filter %.c,$^) -Wl,--gc-sections $(shell pkg-config --libs fontconfig freetype2) -lpthread -lm
 check-edition-service: build/edition-contract-tests/test_edition_service
 	build/edition-contract-tests/test_edition_service
-build/edition-contract-tests/test_workflow_service: tests/test_workflow_service.c src/edition_service.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/config.c src/presentation_text.c vendor/inih/ini.c src/pro_runtime.h src/pro_extension.h src/edition_service.h src/cast.h
+build/edition-contract-tests/test_workflow_service: tests/test_workflow_service.c src/edition_service.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/config.c src/presentation_text.c vendor/inih/ini.c src/pro_runtime.h src/pro_extension.h src/edition_service.h src/cast.h src/os_compat.c
 	@mkdir -p build/edition-contract-tests
 	$(CC) -D_GNU_SOURCE -DWITH_PRO -Isrc -Ivendor/inih $(INI_FLAGS) $(shell pkg-config --cflags fontconfig freetype2) -std=gnu11 -O2 -ffunction-sections -fdata-sections $(WARN) -Werror -o $@ $(filter %.c,$^) -Wl,--gc-sections $(shell pkg-config --libs fontconfig freetype2) -lpthread -lm
 check-workflow-service: build/edition-contract-tests/test_workflow_service
@@ -423,7 +426,7 @@ check-editions: build/edition-contract-tests/test_editions build/edition-contrac
 	build/edition-contract-tests/test_editions_contract
 
 ifeq ($(EDITION):$(STT),pro:1)
-STT_IDENTITY_SOURCES = src/edition.c src/license_store.c $(PRO_DIR)/src/license_verifier.c $(PRO_DIR)/src/bounded_json.c
+STT_IDENTITY_SOURCES = src/os_compat.c src/edition.c src/license_store.c $(PRO_DIR)/src/license_verifier.c $(PRO_DIR)/src/bounded_json.c
 STT_IDENTITY_OBJECTS = $(STT_IDENTITY_SOURCES:%.c=$(BUILD)/helper/%.o)
 $(STT_HELPER) $(STT_IDENTITY_OBJECTS) $(BUILD)/helper/whisper_helper.o: | edition-preflight
 $(BUILD)/helper/%.o: %.c
@@ -436,11 +439,25 @@ $(STT_HELPER): $(BUILD)/helper/whisper_helper.o $(STT_IDENTITY_OBJECTS)
 	$(CXX) $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../lib/cast-pro/speech' -Wl,--gc-sections -o $@ $^ $(STT_LIBS) $(shell pkg-config --libs libsodium) -lpthread -lm
 endif
 
-$(BUILD)/test_panel_command_queue: tests/test_panel_command_queue.c src/panel_transport.c src/ipc_identity.h src/edition.c src/commands.c
+$(BUILD)/test_panel_command_queue: tests/test_panel_command_queue.c src/panel_transport.c src/ipc_identity.h src/edition.c src/commands.c src/os_compat.c
 	@mkdir -p $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -ffunction-sections -fdata-sections -o $@ tests/test_panel_command_queue.c src/edition.c src/commands.c -Wl,--gc-sections -pthread -lm $(LDFLAGS)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -ffunction-sections -fdata-sections -o $@ tests/test_panel_command_queue.c src/edition.c src/commands.c src/os_compat.c -Wl,--gc-sections -pthread -lm $(LDFLAGS)
 check-panel-command-queue: $(BUILD)/test_panel_command_queue
 	$(BUILD)/test_panel_command_queue
 .PHONY: check-panel-command-queue
 
 check-unit: check-workflow-runtime check-panel-command-queue
+
+$(BUILD)/test_os_compat: tests/test_os_compat.c src/os_compat.c src/os_compat.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(WARN) -Werror -std=gnu11 -Isrc -o $@ tests/test_os_compat.c src/os_compat.c -pthread
+$(BUILD)/test_os_stream_ipc: tests/test_os_compat.c src/os_compat.c src/os_compat.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(WARN) -Werror -std=gnu11 -DCAST_TEST_STREAM_IPC -Isrc -o $@ tests/test_os_compat.c src/os_compat.c -pthread
+.PHONY: check-os-compat
+check-os-compat: $(BUILD)/test_os_compat $(BUILD)/test_os_stream_ipc
+	$(BUILD)/test_os_compat
+	$(BUILD)/test_os_stream_ipc
+check-unit: check-os-compat
+
+endif # Darwin uses Makefile.macos

@@ -1,0 +1,94 @@
+# Local macOS recorder build. Linux keeps its existing build and release pipeline.
+.DEFAULT_GOAL := all
+CC = clang
+PKG_CONFIG ?= pkg-config
+EDITION ?= community
+PANEL ?= 1
+MACOS_MIN ?= 13.0
+CFLAGS ?= -O2 -g
+WARN = -Wall -Wextra -Wformat=2 -Wstrict-prototypes -Wmissing-prototypes
+VERSION = 0.10.3
+ifeq ($(EDITION),pro)
+$(error The macOS port currently supports EDITION=community only)
+endif
+ifneq ($(filter-out 0 1,$(PANEL)),)
+$(error PANEL must be 0 or 1)
+endif
+PACKAGES = fontconfig freetype2 libavcodec libavformat libavutil libswscale libswresample
+ifeq ($(PANEL),1)
+PACKAGES += sdl3 sdl3-ttf
+endif
+PKG_CFLAGS = $(shell $(PKG_CONFIG) --cflags $(PACKAGES))
+PKG_LIBS = $(shell $(PKG_CONFIG) --libs $(PACKAGES))
+INTEGRATION_ID := $(shell { printf '%s' 'darwin:$(PANEL):$(MACOS_MIN):$(CC):$(CFLAGS):$(LDFLAGS)'; cat src/*.[chm] src/*.S Makefile.macos; } | shasum -a 256 | cut -c1-32)
+BUILD = build/macos-p$(PANEL)-$(INTEGRATION_ID)
+CPPFLAGS += -Isrc -Ivendor/inih -D_DARWIN_C_SOURCE -DWITH_MACOS \
+ -DCAST_APPLICATION_NAME='"cast"' -DCAST_PLATFORM='"macos-$(shell uname -m)"' \
+ -DCAST_BUILD_ID='"$(INTEGRATION_ID)"' -DCAST_MEDIA_PROFILE='"system"' \
+ -DCAST_CORE_REVISION='"$(shell git rev-parse HEAD)"' \
+ -DINI_HANDLER_LINENO=1 -DINI_CALL_HANDLER_ON_NEW_SECTION=1 -DINI_ALLOW_MULTILINE=0 \
+ -DINI_ALLOW_INLINE_COMMENTS=0 -DINI_STOP_ON_FIRST_ERROR=1 -DINI_MAX_LINE=8192
+CFLAGS += -mmacosx-version-min=$(MACOS_MIN)
+LDLIBS = -lm -lpthread -framework Foundation -framework AVFoundation \
+ -framework ScreenCaptureKit -framework CoreMedia -framework CoreVideo \
+ -framework CoreGraphics -framework AudioToolbox -framework CoreAudio
+SOURCES = src/main.c src/commands.c src/config.c src/config_migrate.c src/state.c \
+ src/compositor.c src/composition_assets.c src/presentation_text.c src/platform.c \
+ src/media.c src/record.c src/stream.c src/panel_transport.c src/panel_lifecycle.c \
+ src/help_commands.c src/update.c src/edition.c src/license_store.c src/edition_extensions.c \
+ src/workflow_schema.c src/edition_service.c src/media_codec.c src/app_runtime.c \
+ src/os_compat.c vendor/inih/ini.c
+OBJC_SOURCES = src/platform_macos.m src/audio_macos.m src/webcam_macos.m
+ASSETS = $(BUILD)/src/command_assets.o
+ifeq ($(PANEL),1)
+SOURCES += src/panel.c src/panel_color_pick.c
+CPPFLAGS += -DWITH_PANEL -Ivendor/clay
+ASSETS += $(BUILD)/src/panel_font.o
+endif
+OBJECTS = $(SOURCES:%.c=$(BUILD)/%.o) $(OBJC_SOURCES:%.m=$(BUILD)/%.o) $(ASSETS)
+.PHONY: all FORCE macos-app check check-macos check-unit clean
+all: cast
+FORCE:
+cast: FORCE $(OBJECTS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) $(PKG_LIBS) $(LDLIBS)
+$(BUILD)/%.o: %.c src/cast.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -MMD -MP -c $< -o $@
+$(BUILD)/%.o: %.m src/cast.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -fobjc-arc -fblocks -MMD -MP -c $< -o $@
+$(BUILD)/src/command_assets.o: src/command_assets.S completions/cast.bash completions/_cast completions/cast.fish packaging/install.sh
+	@mkdir -p $(dir $@)
+	$(CC) -c $< -o $@
+$(BUILD)/src/panel_font.o: src/panel_font.S assets/fonts/Inter.ttf
+	@mkdir -p $(dir $@)
+	$(CC) -c $< -o $@
+-include $(OBJECTS:.o=.d)
+macos-app: cast
+ifeq ($(PANEL),1)
+	python3 packaging/macos-app.py --binary ./cast --output build/macos/SuperScreencast.app
+else
+	@echo 'macos-app requires PANEL=1' >&2; exit 1
+endif
+CORE_SOURCES = src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c \
+ src/compositor.c src/composition_assets.c src/presentation_text.c src/config.c src/state.c \
+ src/os_compat.c vendor/inih/ini.c
+$(BUILD)/test_core: tests/test_core.c $(CORE_SOURCES)
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ $^ $(PKG_LIBS) $(LDLIBS)
+$(BUILD)/test_visual: tests/test_visual.c tests/compositor_runtime_stubs.c src/compositor.c src/composition_assets.c src/presentation_text.c
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ $^ $(PKG_LIBS) $(LDLIBS)
+$(BUILD)/test_os_compat: tests/test_os_compat.c src/os_compat.c src/os_compat.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(WARN) -Werror -std=gnu11 -Isrc -o $@ tests/test_os_compat.c src/os_compat.c -pthread
+.PHONY: check-os-compat
+check-os-compat: $(BUILD)/test_os_compat
+	$(BUILD)/test_os_compat
+check-unit: check-os-compat $(BUILD)/test_core $(BUILD)/test_visual
+	$(BUILD)/test_core
+	$(BUILD)/test_visual
+check check-macos: cast check-unit
+	python3 tests/test_macos_smoke.py --binary ./cast
+clean:
+	rm -rf build/macos-p* build/macos cast

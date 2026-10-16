@@ -30,6 +30,7 @@ static int update_error(char *error, size_t size, const char *format, ...)
     return -1;
 }
 
+#ifndef __APPLE__
 static int valid_tag(const char *tag)
 {
     if (!tag || tag[0] != 'v' || strlen(tag) > 64) {
@@ -146,6 +147,16 @@ static int community_update(int argc, char **argv, char *error, size_t error_siz
     }
     return result;
 }
+
+#else
+static int community_update(int argc, char **argv, char *error, size_t error_size)
+{
+    (void)argc;
+    (void)argv;
+    return update_error(error, error_size,
+                        "macOS updates are not available; rebuild and replace the local .app");
+}
+#endif
 
 /* Offline Pro bundles contain exactly manifest.json and the signed cast-pro artifact.
  * Copy first, then authenticate the copied bytes. Source changes cannot race the hash. */

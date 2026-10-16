@@ -1,0 +1,39 @@
+name: macOS recorder
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'src/**'
+      - 'vendor/**'
+      - 'assets/fonts/**'
+      - 'completions/**'
+      - 'Makefile*'
+      - 'packaging/macos-app.py'
+      - 'packaging/install.sh'
+      - 'tests/test_macos_smoke.py'
+      - '.github/workflows/macos.yml'
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  recorder:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install local build dependencies
+        run: brew install pkgconf ffmpeg fontconfig freetype sdl3 sdl3_ttf
+      - name: Build recorder and app
+        run: |
+          make -j4
+          make macos-app
+      - name: Run tests without capture permissions
+        run: make check-macos
+      - name: Archive development bundle
+        run: ditto -c -k --sequesterRsrc --keepParent build/macos/SuperScreencast.app build/macos/SuperScreencast-dev.zip
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: superscreencast-macos-development
+          path: build/macos/SuperScreencast-dev.zip
