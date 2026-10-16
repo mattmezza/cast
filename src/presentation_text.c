@@ -228,7 +228,7 @@ int presentation_template_expand(const char *input, const struct tm *when, char 
             }
             memcpy(format, colon ? colon + 1 : default_format, length);
             format[length] = 0;
-            size_t maximum;
+            size_t maximum = 0;
             if (format_validate(format, &maximum, error, n)) {
                 return -1;
             }

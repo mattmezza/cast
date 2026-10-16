@@ -299,6 +299,7 @@ See [dependency and license rationale](docs/dependencies.md) and packaged notice
 The next Community release is [0.10.0](docs/release-notes/0.10.0.md). Local prompt
 briefs stay on the developer's laptop and are excluded from public source archives.
 The separate private Pro monorepo contains desktop code in `pro/` and only a future
-Go service placeholder in `server/`. [Single-binary delivery feasibility](docs/static-delivery.md)
-records the remaining static-library and runtime requirements; current native packages
-are dynamically linked.
+Go service placeholder in `server/`. [Static delivery](docs/static-delivery.md) describes the Community Linux x86_64
+static build pipeline and its validation requirements. It retains the native panel,
+X11, and Wayland; desktop services and dynamically loaded host modules remain
+runtime requirements. Arch packages and Pro builds use shared libraries.

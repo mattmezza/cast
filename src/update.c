@@ -302,7 +302,7 @@ static int pro_update(int argc, char **argv, const char *license_path, const cha
         return update_error(error, size, "bundle path is too long"), 2;
     }
     unsigned char manifest[CAST_LICENSE_MAX];
-    size_t length;
+    size_t length = 0;
     if (read_manifest(manifest_path, manifest, &length, error, size)) {
         return 5;
     }

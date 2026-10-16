@@ -151,6 +151,30 @@ static void feed(CastStream *stream, Frame *frame, int color, bool silent, int m
         wait_ms(33);
     }
 }
+/* Flat pixels can stay far below a target bitrate with OpenH264. Fresh seeded
+ * noise ensures the stopped-reader fixture fills TCP buffers with either encoder. */
+static void feed_noise(CastStream *stream, Frame *frame, uint32_t *seed, int milliseconds)
+{
+    char error[CAST_ERR];
+    uint64_t deadline = cast_now_ns() + (uint64_t)milliseconds * 1000000ULL;
+    while (cast_now_ns() < deadline) {
+        for (int y = 0; y < frame->height; y++) {
+            for (int x = 0; x < frame->width; x++) {
+                *seed ^= *seed << 13;
+                *seed ^= *seed >> 17;
+                *seed ^= *seed << 5;
+                uint8_t *pixel = frame->data + (size_t)y * frame->stride + x * 4;
+                pixel[0] = (uint8_t)*seed;
+                pixel[1] = (uint8_t)(*seed >> 8);
+                pixel[2] = (uint8_t)(*seed >> 16);
+                pixel[3] = 255;
+            }
+        }
+        frame->ts_ns = cast_now_ns();
+        assert(stream_frame(stream, frame, false, error, sizeof(error)) == 0);
+        wait_ms(33);
+    }
+}
 struct Decoded {
     int video_count, audio_count, colors[3];
     double video_last, audio_last, max_gap, energy, quiet_energy, late_energy, late_quiet;
@@ -544,6 +568,10 @@ static void reconnect_test(Config *config, CastAudio *audio, const char *directo
 static void backpressure_test(Config *config, CastAudio *audio, const char *directory)
 {
     char output[PATH_MAX], error[CAST_ERR];
+    int previous_width = config->width, previous_height = config->height;
+    config->width = 1280;
+    config->height = 720;
+    uint32_t seed = 0x93b74a21U;
     snprintf(output, sizeof(output), "%s/stalled.flv", directory);
     unsigned port = free_port();
     pid_t ingest = ingest_start(port, output);
@@ -556,12 +584,12 @@ static void backpressure_test(Config *config, CastAudio *audio, const char *dire
     assert(stream_start(stream, config, error, sizeof(error)) == 0);
     Frame frame = {0};
     assert(frame_alloc(&frame, config->width, config->height) == 0);
-    feed(stream, &frame, 0, false, 500);
+    feed_noise(stream, &frame, &seed, 500);
     wait_state(stream, STREAM_STREAMING, 2000);
     assert(kill(ingest, SIGSTOP) == 0);
     uint64_t deadline = cast_now_ns() + 5000000000ULL;
     while (stream_test_write_age(stream) < 100000000ULL && cast_now_ns() < deadline) {
-        feed(stream, &frame, 0, false, 50);
+        feed_noise(stream, &frame, &seed, 50);
     }
     assert(stream_test_write_age(stream) >= 100000000ULL);
     uint64_t before = cast_now_ns();
@@ -585,6 +613,8 @@ static void backpressure_test(Config *config, CastAudio *audio, const char *dire
     frame_free(&frame);
     unlink(output);
     config->stream.video_bitrate_kbps = 300;
+    config->width = previous_width;
+    config->height = previous_height;
     fprintf(stderr,
             "actual stopped-reader backpressure: bounded queue, privacy %.3fms, timeout retired "
             "worker\n",

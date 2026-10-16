@@ -21,6 +21,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, default=ROOT / 'build/static-linux')
     parser.add_argument('--jobs', type=int, default=4)
+    parser.add_argument('--reuse-sdk', action='store_true', help='reuse only a matching locked SDK/toolchain')
+    parser.add_argument('--sdk-only', action='store_true', help='prepare dependencies without application/tests')
     args = parser.parse_args()
     if os.uname().sysname != 'Linux' or os.uname().machine != 'x86_64':
         parser.error('requires native Linux x86_64 with glibc')
@@ -30,7 +32,13 @@ def main():
     prefix, cache = base / 'prefix', base / 'upstream'
     cache.mkdir(parents=True, exist_ok=True)
     prefix.mkdir(exist_ok=True)
-    lock = json.loads((ROOT / 'packaging/static-linux-lock.json').read_text())
+    lock_path = ROOT / 'packaging/static-linux-lock.json'
+    lock = json.loads(lock_path.read_text())
+    toolchain = subprocess.check_output(['dpkg-query', '-W', '-f=${binary:Package}=${Version}\n'])
+    identity = hashlib.sha256(lock_path.read_bytes() + Path(__file__).read_bytes() + toolchain).hexdigest()
+    marker = base / 'sdk.identity'
+    reuse = args.reuse_sdk and marker.is_file() and marker.read_text().strip() == identity
+
     sources = {}
     for source in lock['sources']:
         archive = cache / source['archive']
@@ -57,59 +65,65 @@ def main():
                        str(prefix / 'lib/x86_64-linux-gnu/pkgconfig')]),
                        CMAKE_PREFIX_PATH=str(prefix))
     jobs = '-j' + str(args.jobs)
-    # Ubuntu's libmount-dev contains no static archive. Build its matching
-    # family of mount/blkid/uuid libraries without unrelated system programs.
-    run('./configure', '--prefix=' + str(prefix), '--libdir=' + str(prefix / 'lib'),
-        '--disable-all-programs', '--enable-libmount', '--enable-libblkid',
-        '--enable-libuuid', '--enable-static', '--disable-shared', '--without-selinux',
-        '--disable-nls', cwd=sources['util-linux'], env=environment)
-    run('make', jobs, cwd=sources['util-linux'], env=environment)
-    run('make', 'install', cwd=sources['util-linux'], env=environment)
-    # PipeWire upstream explicitly uses shared_library(), ignoring default_library.
-    # Build a static counterpart from exactly the same compiled client objects.
-    pipewire = sources['pipewire']
-    pwbuild = base / 'pipewire-build'
-    if pwbuild.exists():
-        shutil.rmtree(pwbuild)
-    run('meson', 'setup', pwbuild, pipewire, '--prefix=/usr', '--libdir=lib/x86_64-linux-gnu',
-        '--auto-features=disabled', '-Dexamples=disabled', '-Dtests=disabled',
-        '-Dspa-plugins=enabled', '-Dsupport=enabled', '-Daudioconvert=enabled',
-        '-Daudiomixer=enabled', '-Dpipewire-jack=disabled', '-Dpipewire-v4l2=disabled', env=environment)
-    run('ninja', '-C', pwbuild, jobs, env=environment)
-    objects = sorted(pwbuild.glob('src/pipewire/libpipewire-0.3.so*.p/*.o'))
-    if not objects:
-        raise ValueError('PipeWire client objects missing')
-    (prefix / 'lib').mkdir(exist_ok=True)
-    run('ar', 'rcs', prefix / 'lib/libpipewire-0.3.a', *objects)
-    # Install the same build's public/generated headers and pkg-config files.
-    # Distro headers can describe an older ABI and must never drive this build.
-    pwstage = base / 'pipewire-install'
-    run('meson', 'install', '-C', pwbuild, '--destdir', pwstage, env=environment)
-    shutil.copytree(pwstage / 'usr', prefix, dirs_exist_ok=True)
-    for metadata in prefix.rglob('*.pc'):
-        text = metadata.read_text().replace('prefix=/usr', 'prefix=' + str(prefix))
-        metadata.write_text(text)
-    shutil.copy2(prefix / 'lib/libpipewire-0.3.a', prefix / 'lib/x86_64-linux-gnu/libpipewire-0.3.a')
-    run('make', jobs, 'BUILDTYPE=Release', 'libraries', cwd=sources['openh264'], env=environment)
-    run('make', 'PREFIX=' + str(prefix), 'install-static', cwd=sources['openh264'], env=environment)
-    media = json.loads((ROOT / 'packaging/media-lgpl-lock.json').read_text())
-    flags = [x for x in media['ffmpeg_flags'] if x not in ('--enable-shared', '--disable-static')]
-    run('./configure', '--prefix=' + str(prefix), '--enable-static', '--disable-shared',
-        '--pkg-config-flags=--static', *flags, cwd=sources['ffmpeg'], env=environment)
-    run('make', jobs, cwd=sources['ffmpeg'], env=environment)
-    run('make', 'install', cwd=sources['ffmpeg'], env=environment)
-    for name, options in [
-        ('SDL', ['-DSDL_SHARED=OFF', '-DSDL_STATIC=ON', '-DSDL_TESTS=OFF',
-                 '-DSDL_TEST_LIBRARY=OFF', '-DSDL_X11=ON', '-DSDL_WAYLAND=ON']),
-        ('SDL_ttf', ['-DBUILD_SHARED_LIBS=OFF', '-DSDLTTF_SAMPLES=OFF', '-DSDLTTF_HARFBUZZ=OFF',
-                     '-DSDLTTF_PLUTOSVG=OFF'])]:
-        build = base / (name + '-build')
-        run('cmake', '-S', sources[name], '-B', build, '-G', 'Ninja',
-            '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_INSTALL_PREFIX=' + str(prefix),
-            '-DCMAKE_INSTALL_LIBDIR=lib', *options, env=environment)
-        run('cmake', '--build', build, '--parallel', args.jobs, env=environment)
-        run('cmake', '--install', build, env=environment)
+    if not reuse:
+        # Ubuntu's libmount-dev contains no static archive. Build its matching
+        # family of mount/blkid/uuid libraries without unrelated system programs.
+        run('./configure', '--prefix=' + str(prefix), '--libdir=' + str(prefix / 'lib'),
+            '--disable-all-programs', '--enable-libmount', '--enable-libblkid',
+            '--enable-libuuid', '--enable-static', '--disable-shared', '--without-selinux',
+            '--disable-nls', cwd=sources['util-linux'], env=environment)
+        run('make', jobs, cwd=sources['util-linux'], env=environment)
+        run('make', 'install', cwd=sources['util-linux'], env=environment)
+        # PipeWire upstream explicitly uses shared_library(), ignoring default_library.
+        # Build a static counterpart from exactly the same compiled client objects.
+        pipewire = sources['pipewire']
+        pwbuild = base / 'pipewire-build'
+        if pwbuild.exists():
+            shutil.rmtree(pwbuild)
+        run('meson', 'setup', pwbuild, pipewire, '--prefix=/usr', '--libdir=lib/x86_64-linux-gnu',
+            '--auto-features=disabled', '-Dexamples=disabled', '-Dtests=disabled',
+            '-Dspa-plugins=enabled', '-Dsupport=enabled', '-Daudioconvert=enabled',
+            '-Daudiomixer=enabled', '-Dpipewire-jack=disabled', '-Dpipewire-v4l2=disabled', env=environment)
+        run('ninja', '-C', pwbuild, jobs, env=environment)
+        objects = sorted(pwbuild.glob('src/pipewire/libpipewire-0.3.so*.p/*.o'))
+        if not objects:
+            raise ValueError('PipeWire client objects missing')
+        (prefix / 'lib').mkdir(exist_ok=True)
+        run('ar', 'rcs', prefix / 'lib/libpipewire-0.3.a', *objects)
+        # Install the same build's public/generated headers and pkg-config files.
+        # Distro headers can describe an older ABI and must never drive this build.
+        pwstage = base / 'pipewire-install'
+        run('meson', 'install', '-C', pwbuild, '--destdir', pwstage, env=environment)
+        shutil.copytree(pwstage / 'usr', prefix, dirs_exist_ok=True)
+        for metadata in prefix.rglob('*.pc'):
+            text = metadata.read_text().replace('prefix=/usr', 'prefix=' + str(prefix))
+            metadata.write_text(text)
+        shutil.copy2(prefix / 'lib/libpipewire-0.3.a', prefix / 'lib/x86_64-linux-gnu/libpipewire-0.3.a')
+        run('make', jobs, 'BUILDTYPE=Release', 'libraries', cwd=sources['openh264'], env=environment)
+        run('make', 'PREFIX=' + str(prefix), 'install-static', cwd=sources['openh264'], env=environment)
+        media = json.loads((ROOT / 'packaging/media-lgpl-lock.json').read_text())
+        flags = [x for x in media['ffmpeg_flags'] if x not in ('--enable-shared', '--disable-static')]
+        run('./configure', '--prefix=' + str(prefix), '--enable-static', '--disable-shared',
+            '--pkg-config-flags=--static', *flags, cwd=sources['ffmpeg'], env=environment)
+        run('make', jobs, cwd=sources['ffmpeg'], env=environment)
+        run('make', 'install', cwd=sources['ffmpeg'], env=environment)
+        for name, options in [
+            ('SDL', ['-DSDL_SHARED=OFF', '-DSDL_STATIC=ON', '-DSDL_TESTS=OFF',
+                     '-DSDL_TEST_LIBRARY=OFF', '-DSDL_X11=ON', '-DSDL_WAYLAND=ON']),
+            ('SDL_ttf', ['-DBUILD_SHARED_LIBS=OFF', '-DSDLTTF_SAMPLES=OFF', '-DSDLTTF_HARFBUZZ=OFF',
+                         '-DSDLTTF_PLUTOSVG=OFF'])]:
+            build = base / (name + '-build')
+            run('cmake', '-S', sources[name], '-B', build, '-G', 'Ninja',
+                '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_INSTALL_PREFIX=' + str(prefix),
+                '-DCMAKE_INSTALL_LIBDIR=lib', *options, env=environment)
+            run('cmake', '--build', build, '--parallel', args.jobs, env=environment)
+            run('cmake', '--install', build, env=environment)
+        marker.write_text(identity + '\n')
+    else:
+        print('Reusing verified-source SDK with matching installed toolchain', flush=True)
     run('python3', ROOT / 'tools/check-static-deps.py', '--edition', 'community', env=environment)
+    if args.sdk_only:
+        return
     packages = ['fontconfig', 'freetype2', 'libavcodec', 'libavformat', 'libavutil',
                 'libswscale', 'libswresample', 'libpipewire-0.3', 'x11', 'xext', 'xrandr',
                 'xi', 'xfixes', 'xcomposite', 'gio-2.0', 'gio-unix-2.0', 'sdl3', 'sdl3-ttf']
@@ -121,7 +135,9 @@ def main():
     variables = ['EDITION=community', 'X11=1', 'WAYLAND=1', 'PANEL=1', 'STT=0',
                  'SOURCE_COMMIT=' + commit, 'OFFICIAL_RELEASE=1',
                  'PKG_LIBS=' + libs, 'PANEL_LIBS=', 'LDFLAGS=-static -no-pie -Wl,-Map,' + str(base / 'cast.map')]
-    run('make', jobs, *variables, 'all', 'check', 'check-xorg', 'check-panel', env=environment)
+    run('make', jobs, *variables, 'all', env=environment)
+    for suite in ('check', 'check-xorg', 'check-panel'):
+        run('make', jobs, *variables, suite, env=environment)
     # Each test executable also consumes LDFLAGS. Relink the release executable
     # last, with its own map, so source collection audits the actual payload.
     program = ROOT / 'cast'
