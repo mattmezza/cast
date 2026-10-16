@@ -34,6 +34,17 @@ static int mac_error(char *error, size_t size, const char *message)
     snprintf(error, size, "%s", message);
     return -1;
 }
+static bool display_pixels(CGDirectDisplayID display, size_t *width, size_t *height)
+{
+    CGDisplayModeRef mode = CGDisplayCopyDisplayMode(display);
+    if (!mode) return false;
+    /* CGDisplayPixelsWide/High report logical dimensions on Retina displays.
+     * ScreenCaptureKit's output dimensions need the active mode's pixels. */
+    *width = CGDisplayModeGetPixelWidth(mode);
+    *height = CGDisplayModeGetPixelHeight(mode);
+    CGDisplayModeRelease(mode);
+    return *width && *height;
+}
 static int mac_config(const Config *cfg, char *error, size_t size)
 {
     if (strcmp(cfg->capture_kind, "monitor"))
@@ -114,9 +125,9 @@ static int mac_config(const Config *cfg, char *error, size_t size)
                 pthread_mutex_unlock(&self->lock);
                 return;
             }
-            size_t pixelWidth = CGDisplayPixelsWide(display.displayID);
-            size_t pixelHeight = CGDisplayPixelsHigh(display.displayID);
-            if (!pixelWidth || !pixelHeight || pixelWidth > 8192 || pixelHeight > 8192) {
+            size_t pixelWidth = 0, pixelHeight = 0;
+            if (!display_pixels(display.displayID, &pixelWidth, &pixelHeight) ||
+                pixelWidth > 8192 || pixelHeight > 8192) {
                 self->failed = true;
                 snprintf(self->failure, sizeof self->failure, "macOS display dimensions exceed capture bounds (8192 pixels per axis)");
                 pthread_mutex_unlock(&self->lock);
@@ -305,8 +316,11 @@ int macos_command(Platform *p, Config *cfg, int argc, char **argv, char *error, 
         size_t used = 0;
         if (size) error[0] = 0;
         for (uint32_t i = 0; i < count && used < size; i++) {
+            size_t width = 0, height = 0;
+            if (!display_pixels(displays[i], &width, &height))
+                return mac_error(error, size, "cannot read macOS display pixel dimensions");
             int n = snprintf(error + used, size - used, "%u%s: %zux%zu\n", displays[i],
-                displays[i] == CGMainDisplayID() ? " (main)" : "", CGDisplayPixelsWide(displays[i]), CGDisplayPixelsHigh(displays[i]));
+                displays[i] == CGMainDisplayID() ? " (main)" : "", width, height);
             if (n < 0 || (size_t)n >= size - used) break;
             used += (size_t)n;
         }
