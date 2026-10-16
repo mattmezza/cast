@@ -61,6 +61,16 @@ approving the prompt, enable the device again. Use the `.app` for hardware testi
 its bundle and usage descriptions. Rebuilding an ad-hoc signed app may require
 permission to be granted again.
 
+If permission appears enabled but the app still reports it is required after a
+rebuild, quit the app, remove its old entry with the minus button in Screen &
+System Audio Recording, then add the current `build/macos/SuperScreencast.app`
+with the plus button and enable it again. Reopen the app. The privacy log may
+report `Failed to match existing code requirement` when a grant belongs to an
+older ad-hoc signature. Keep the bundle unchanged during hardware validation;
+granting an older build while a new build is being packaged will not authorize
+the replacement. Camera and microphone permissions can also need renewed grants
+after the executable changes.
+
 The capture backend supports the main display or numeric display IDs from
 `cast screen list`. It captures at the display's pixel resolution, including
 Retina displays, then uses the existing compositor to fit the output dimensions.
