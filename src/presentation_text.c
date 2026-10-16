@@ -39,6 +39,7 @@ typedef struct {
     int width, height;
 } TextBlock;
 static int static_raster(PresentationText *, TextFont *, const Config *, Frame *, char *, size_t);
+static int fail(char *error, size_t n, const char *format, ...) __attribute__((format(printf, 3, 4)));
 static int fail(char *error, size_t n, const char *format, ...)
 {
     if (error && n) {

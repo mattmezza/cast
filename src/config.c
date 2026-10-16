@@ -238,6 +238,7 @@ static const Setting settings[] = {
     S("licensing", "file", licensing_file, ""),
     S("licensing", "upgrade_url", licensing_upgrade_url, "")};
 #define NSET (sizeof settings / sizeof settings[0])
+static int fail(char *err, size_t n, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
 static int fail(char *err, size_t n, const char *fmt, ...)
 {
     va_list ap;

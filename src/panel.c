@@ -639,6 +639,7 @@ static void save_navigation(Panel *p)
     saved.notes_all_settings = p->notes_all_settings;
     *p->navigation = saved;
 }
+static const char *format(Panel *p, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 static const char *format(Panel *p, const char *fmt, ...)
 {
     if (p->string_used + 512 >= sizeof p->strings) {
