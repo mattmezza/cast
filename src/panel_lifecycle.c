@@ -1,4 +1,5 @@
 #include "panel_lifecycle.h"
+#include "os_compat.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -15,7 +16,6 @@
 
 extern char **environ;
 #define HANDOFF_FD 3
-#define HANDOFF_SEALS (F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL)
 typedef struct {
     char magic[8], version[32];
     uint32_t config_size;
@@ -65,7 +65,7 @@ static bool existing_producer(const Config *config)
         (st.st_mode & 0077)) {
         return false;
     }
-    int fd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+    int fd = cast_socket(true);
     if (fd < 0) {
         return false;
     }
@@ -77,10 +77,9 @@ static bool existing_producer(const Config *config)
     }
     memcpy(address.sun_path, config->socket_path, path_length + 1);
     bool connected = connect(fd, (void *)&address, sizeof address) == 0;
-    struct ucred peer;
-    socklen_t bytes = sizeof peer;
-    connected = connected && !getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &peer, &bytes) &&
-                peer.uid == getuid();
+    uid_t peer_uid;
+    pid_t peer_pid;
+    connected = connected && !cast_peer_identity(fd, &peer_uid, &peer_pid) && peer_uid == getuid();
     close(fd);
     return connected;
 }
@@ -154,13 +153,7 @@ static int config_memfd(const Config *config, char *error, size_t n)
     snprintf(blob->version, sizeof blob->version, "%s", CAST_VERSION);
     blob->config_size = sizeof(Config);
     blob->config = *config;
-    int fd = memfd_create("cast-app-config", MFD_CLOEXEC | MFD_ALLOW_SEALING);
-    if (fd >= 0 && (ftruncate(fd, sizeof *blob) ||
-                    pwrite(fd, blob, sizeof *blob, 0) != (ssize_t)sizeof *blob ||
-                    fcntl(fd, F_ADD_SEALS, HANDOFF_SEALS))) {
-        close(fd);
-        fd = -1;
-    }
+    int fd = cast_handoff_create(blob, sizeof *blob);
     free(blob);
     if (fd < 0) {
         fail(error, n, "cannot create sealed daemon configuration handoff");
@@ -257,11 +250,13 @@ int panel_lifecycle_start(PanelLifecycle *lifecycle, const Config *config, char 
             posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
     }
     if (!result) {
+#ifndef __APPLE__
         result = posix_spawn_file_actions_addclosefrom_np(&actions, HANDOFF_FD + 1);
+#endif
     }
     pid_t child = 0;
     if (!result) {
-        result = posix_spawn(&child, "/proc/self/exe", &actions, NULL, arguments, environ);
+        result = cast_spawn_self(&child, &actions, arguments, environ);
     }
     if (initialized) {
         posix_spawn_file_actions_destroy(&actions);
@@ -369,10 +364,8 @@ int panel_lifecycle_config_fd(int fd, Config *config, char *error, size_t n)
     struct stat st;
     int result = -1;
     LaunchConfig *blob = malloc(sizeof *blob);
-    int seals = fd >= 0 ? fcntl(fd, F_GET_SEALS) : -1;
-    if (!config || !blob || seals < 0 || (seals & HANDOFF_SEALS) != HANDOFF_SEALS ||
-        fstat(fd, &st) || !S_ISREG(st.st_mode) || st.st_uid != getuid() ||
-        st.st_size != (off_t)sizeof *blob ||
+    if (!config || !blob || !cast_handoff_valid(fd) || fstat(fd, &st) || !S_ISREG(st.st_mode) ||
+        st.st_uid != getuid() || st.st_size != (off_t)sizeof *blob ||
         pread(fd, blob, sizeof *blob, 0) != (ssize_t)sizeof *blob ||
         memcmp(blob->magic, "CASTAPP1", 8) || !memchr(blob->version, 0, sizeof blob->version) ||
         strcmp(blob->version, CAST_VERSION) || blob->config_size != sizeof(Config)) {

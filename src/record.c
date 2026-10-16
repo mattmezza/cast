@@ -3,6 +3,7 @@
 #endif
 #include "media_codec.h"
 #include "media_internal.h"
+#include "os_compat.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <libavcodec/avcodec.h>
@@ -698,7 +699,7 @@ static void *worker(void *data)
                 until.tv_sec++;
                 until.tv_nsec -= 1000000000;
             }
-            pthread_cond_timedwait(&r->changed, &r->mutex, &until);
+            cast_cond_wait_monotonic(&r->changed, &r->mutex, &until);
         }
         pthread_mutex_unlock(&r->mutex);
     }
@@ -718,11 +719,7 @@ CastRecorder *recorder_open(CastAudio *audio)
 #endif
     pthread_mutex_init(&r->mutex, NULL);
     pthread_mutex_init(&r->encoder_mutex, NULL);
-    pthread_condattr_t attr;
-    pthread_condattr_init(&attr);
-    pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
-    pthread_cond_init(&r->changed, &attr);
-    pthread_condattr_destroy(&attr);
+    cast_cond_monotonic(&r->changed);
     if (pthread_create(&r->worker, NULL, worker, r) != 0) {
         pthread_cond_destroy(&r->changed);
         pthread_mutex_destroy(&r->mutex);

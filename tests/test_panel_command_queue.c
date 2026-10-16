@@ -55,7 +55,7 @@ int main(void)
     client.completed = client.queued = 0;
     client.snapshot.connected = true;
     client.config.ipc_timeout_ms = 5000;
-    client.wake = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+    client.wake = cast_wake_open(&client.wake_writer);
     assert(client.wake >= 0);
     char error[CAST_ERR];
     for (unsigned i = 0; i < PANEL_QUEUE - 1; ++i) {
@@ -66,6 +66,7 @@ int main(void)
     assert(client.count == PANEL_QUEUE && client.queued == PANEL_QUEUE);
     assert(client.queue[PANEL_QUEUE - 1].privacy_priority);
     assert(panel_client_command(&client, 1, pause, error, sizeof error));
+    if (client.wake_writer != client.wake) close(client.wake_writer);
     close(client.wake);
     pthread_mutex_destroy(&client.mutex);
     puts("panel queue: privacy priorities, preparation budget and ordered acknowledgements PASS");

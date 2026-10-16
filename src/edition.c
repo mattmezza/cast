@@ -2,6 +2,7 @@
 #include "cast.h"
 #include "edition_extensions.h"
 #include "license_store.h"
+#include "os_compat.h"
 #include "pro_extension.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -129,7 +130,7 @@ static int delegate(const char *path, CastLicenseInfo *info, char *e, size_t n)
                     "verify/import licenses");
     }
     int fds[2];
-    if (pipe2(fds, O_CLOEXEC)) {
+    if (cast_pipe_cloexec(fds)) {
         return fail(e, n, "start Pro verifier: %s", strerror(errno));
     }
     pid_t pid = fork();

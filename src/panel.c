@@ -32,6 +32,7 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include "os_compat.h"
 
 /* Small immediate widgets share Clay's layout, clipping, and pointer geometry.
  * The worker transports bounded requests; no socket operation runs on this thread. */
@@ -4908,8 +4909,13 @@ static void activate(Panel *p, Widget *w)
             break;
         }
         extern char **environ;
-        char *args[] = {"xdg-open", (char *)url, NULL};
-        int result = posix_spawnp(&p->browser_pid, "xdg-open", NULL, NULL, args, environ);
+#ifdef __APPLE__
+        const char *opener = "/usr/bin/open";
+#else
+        const char *opener = "xdg-open";
+#endif
+        char *args[] = {(char *)opener, (char *)url, NULL};
+        int result = posix_spawnp(&p->browser_pid, opener, NULL, NULL, args, environ);
         if (result) {
             p->browser_pid = 0;
             snprintf(p->error, sizeof p->error, "Open browser: %s", strerror(result));

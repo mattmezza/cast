@@ -22,7 +22,17 @@ int composition_logo_load(const char *path, Frame *out, char *error, size_t n)
 {
     /* O_PATH does not activate device drivers. Verify the held inode, then
      * obtain its readable descriptor without resolving the user's path again. */
+#ifdef __APPLE__
+    /* Reject special files and symlinks before opening; O_NONBLOCK also prevents
+     * a concurrently substituted FIFO from stalling the control thread. */
+    struct stat before;
+    if (lstat(path, &before) || !S_ISREG(before.st_mode)) {
+        return logo_error(error, n, path, "use a local regular image file");
+    }
+    int handle = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW);
+#else
     int handle = open(path, O_PATH | O_CLOEXEC);
+#endif
     if (handle < 0) {
         return logo_error(error, n, path, strerror(errno));
     }
@@ -32,6 +42,13 @@ int composition_logo_load(const char *path, Frame *out, char *error, size_t n)
         close(handle);
         return logo_error(error, n, path, "use a local regular PNG/JPEG/WebP/BMP file up to 8 MiB");
     }
+#ifdef __APPLE__
+    if (info.st_dev != before.st_dev || info.st_ino != before.st_ino) {
+        close(handle);
+        return logo_error(error, n, path, "image changed while opening");
+    }
+    int fd = handle;
+#else
     char descriptor[64];
     snprintf(descriptor, sizeof descriptor, "/proc/self/fd/%d", handle);
     int fd = open(descriptor, O_RDONLY | O_CLOEXEC);
@@ -39,6 +56,7 @@ int composition_logo_load(const char *path, Frame *out, char *error, size_t n)
     if (fd < 0) {
         return logo_error(error, n, path, strerror(errno));
     }
+#endif
     uint8_t *bytes = av_mallocz((size_t)info.st_size + AV_INPUT_BUFFER_PADDING_SIZE);
     if (!bytes) {
         close(fd);

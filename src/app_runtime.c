@@ -2,6 +2,7 @@
 #include "compositor.h"
 #include "edition_extensions.h"
 #include "ipc_identity.h"
+#include "os_compat.h"
 #include <errno.h>
 #include <poll.h>
 #include <pthread.h>
@@ -311,11 +312,13 @@ static int launch_notes(void *context, const Config *config, char *error, size_t
     int rc = posix_spawn_file_actions_init(&actions);
     bool initialized = !rc;
     if (!rc) {
+#ifndef __APPLE__
         rc = posix_spawn_file_actions_addclosefrom_np(&actions, 3);
+#endif
     }
     pid_t child = 0;
     if (!rc) {
-        rc = posix_spawn(&child, "/proc/self/exe", &actions, NULL, argv, environ);
+        rc = cast_spawn_self(&child, &actions, argv, environ);
     }
     if (initialized) {
         posix_spawn_file_actions_destroy(&actions);
@@ -731,7 +734,7 @@ int app_ipc_connect(const char *path, int timeout, char *e, size_t n)
     if (lstat(path, &st) || !S_ISSOCK(st.st_mode) || st.st_uid != getuid() || (st.st_mode & 0077)) {
         return app_error(e, n, "no owned user-only cast socket at %s; start cast first", path);
     }
-    int fd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+    int fd = cast_socket(true);
     if (fd < 0) {
         return app_error(e, n, "socket: %s", strerror(errno));
     }
@@ -752,9 +755,9 @@ int app_ipc_connect(const char *path, int timeout, char *e, size_t n)
         close(fd);
         return app_error(e, n, "daemon connection failed: %s", strerror(result ? result : errno));
     }
-    struct ucred cred;
-    len = sizeof cred;
-    if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) || cred.uid != getuid()) {
+    uid_t peer_uid;
+    pid_t peer_pid;
+    if (cast_peer_identity(fd, &peer_uid, &peer_pid) || peer_uid != getuid()) {
         close(fd);
         return app_error(e, n, "daemon peer ownership mismatch");
     }

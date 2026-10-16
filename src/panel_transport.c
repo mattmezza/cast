@@ -9,9 +9,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/eventfd.h>
 #include <sys/mman.h>
+#ifndef __APPLE__
 #include <sys/random.h>
+#endif
+#include "os_compat.h"
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -63,7 +65,7 @@ struct PanelClient {
     pthread_mutex_t mutex;
     bool stop, servicing_privacy;
     uint32_t acknowledged;
-    int peer, wake;
+    int peer, wake, wake_writer;
     SharedPreview *shared;
     PanelSnapshot snapshot;
     QueuedCommand queue[PANEL_QUEUE];
@@ -103,10 +105,14 @@ PanelTransport *panel_transport_create(void)
     PanelTransport *t = calloc(1, sizeof *t);
     if (t) {
         t->peer = t->writer = t->reader = -1;
+#ifdef __APPLE__
+        arc4random_buf(&t->generation, sizeof t->generation);
+#else
         if (getrandom(&t->generation, sizeof t->generation, GRND_NONBLOCK) !=
             (ssize_t)sizeof t->generation) {
             t->generation = cast_now_ns() ^ ((uint64_t)getpid() << 32);
         }
+#endif
         if (!t->generation) {
             t->generation = 1;
         }
@@ -298,8 +304,7 @@ bool panel_transport_request(PanelTransport *t, App *a, int fd, const void *pack
     if (!++t->generation) {
         t->generation = 1;
     }
-    t->writer = memfd_create("cast-panel-preview", MFD_CLOEXEC | MFD_ALLOW_SEALING);
-    if (t->writer < 0 || ftruncate(t->writer, sizeof(SharedPreview))) {
+    if (cast_preview_files(sizeof(SharedPreview), &t->writer, &t->reader)) {
         snprintf(error, sizeof error, "panel memfd: %s", strerror(errno));
         goto failed;
     }
@@ -309,6 +314,7 @@ bool panel_transport_request(PanelTransport *t, App *a, int fd, const void *pack
         snprintf(error, sizeof error, "panel mmap: %s", strerror(errno));
         goto failed;
     }
+#ifndef __APPLE__
     /* FUTURE_WRITE permits only this existing daemon mapping to keep writing. */
     if (fcntl(t->writer, F_ADD_SEALS,
               F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_FUTURE_WRITE | F_SEAL_SEAL)) {
@@ -322,6 +328,7 @@ bool panel_transport_request(PanelTransport *t, App *a, int fd, const void *pack
         snprintf(error, sizeof error, "panel read-only descriptor: %s", strerror(errno));
         goto failed;
     }
+#endif
     atomic_init(&t->shared->sequence, 0);
     t->shared->version = PANEL_PROTOCOL_VERSION;
     t->shared->snapshot_size = sizeof(PanelSnapshot);
@@ -389,7 +396,7 @@ static int connect_daemon(PanelClient *client, char *error, size_t n)
         (st.st_mode & 0077)) {
         return app_error(error, n, "daemon socket and parent must be owned and user-only");
     }
-    int fd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    int fd = cast_socket(true);
     if (fd < 0) {
         return app_error(error, n, "panel socket: %s", strerror(errno));
     }
@@ -410,10 +417,9 @@ static int connect_daemon(PanelClient *client, char *error, size_t n)
         }
         goto failed;
     }
-    struct ucred credentials;
-    size = sizeof credentials;
-    if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &credentials, &size) ||
-        credentials.uid != getuid()) {
+    uid_t peer_uid;
+    pid_t peer_pid;
+    if (cast_peer_identity(fd, &peer_uid, &peer_pid) || peer_uid != getuid()) {
         errno = EPERM;
         goto failed;
     }
@@ -541,11 +547,8 @@ static int client_attach(PanelClient *c, char *error, size_t n)
                 reply.bytes == sizeof(SharedPreview) && reply.generation;
     }
     struct stat st;
-    int seals = mapping >= 0 ? fcntl(mapping, F_GET_SEALS) : -1;
-    int required_seals = F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_FUTURE_WRITE | F_SEAL_SEAL;
     valid = valid && !fstat(mapping, &st) && st.st_size == sizeof(SharedPreview) &&
-            (fcntl(mapping, F_GETFL) & O_ACCMODE) == O_RDONLY &&
-            (seals & required_seals) == required_seals;
+            (fcntl(mapping, F_GETFL) & O_ACCMODE) == O_RDONLY && cast_preview_valid(mapping);
     SharedPreview *shared =
         valid ? mmap(NULL, sizeof(SharedPreview), PROT_READ, MAP_SHARED, mapping, 0) : MAP_FAILED;
     if (mapping >= 0) {
@@ -735,7 +738,7 @@ PanelClient *panel_client_open(const Config *config, uint64_t window, char *erro
     c->config = *config;
     c->window = window;
     c->peer = -1;
-    c->wake = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+    c->wake = cast_wake_open(&c->wake_writer);
     c->staging = malloc(PANEL_PIXELS);
     snprintf(c->snapshot.error, sizeof c->snapshot.error, "connecting to daemon");
     int rc = pthread_mutex_init(&c->mutex, NULL);
@@ -746,6 +749,9 @@ PanelClient *panel_client_open(const Config *config, uint64_t window, char *erro
         }
         free(c->staging);
         if (c->wake >= 0) {
+            if (c->wake_writer != c->wake && c->wake_writer >= 0) {
+                close(c->wake_writer);
+            }
             close(c->wake);
         }
         free(c);
@@ -756,6 +762,9 @@ PanelClient *panel_client_open(const Config *config, uint64_t window, char *erro
         app_error(error, n, "cannot create panel worker: %s", strerror(rc));
         pthread_mutex_destroy(&c->mutex);
         free(c->staging);
+        if (c->wake_writer != c->wake && c->wake_writer >= 0) {
+            close(c->wake_writer);
+        }
         close(c->wake);
         free(c);
         return NULL;
@@ -772,11 +781,14 @@ void panel_client_close(PanelClient *c)
         }
         pthread_mutex_unlock(&c->mutex);
         uint64_t wake = 1;
-        ssize_t notified = write(c->wake, &wake, sizeof wake);
+        ssize_t notified = write(c->wake_writer, &wake, sizeof wake);
         (void)notified;
         pthread_join(c->worker, NULL);
         pthread_mutex_destroy(&c->mutex);
         free(c->staging);
+        if (c->wake_writer != c->wake && c->wake_writer >= 0) {
+            close(c->wake_writer);
+        }
         close(c->wake);
         free(c);
     }
@@ -873,9 +885,9 @@ int panel_client_command(PanelClient *c, int argc, const char *const *argv, char
                              .reply_timeout =
                                  cast_command_reply_timeout(argc, argv, c->config.ipc_timeout_ms),
                              .privacy_priority = cast_command_privacy_priority(argc, argv)};
-    command.discovery = argc == 2 && !strcmp(argv[1], "list") &&
-                        (!strcmp(argv[0], "camera") || !strcmp(argv[0], "screen") ||
-                         !strcmp(argv[0], "audio"));
+    command.discovery =
+        argc == 2 && !strcmp(argv[1], "list") &&
+        (!strcmp(argv[0], "camera") || !strcmp(argv[0], "screen") || !strcmp(argv[0], "audio"));
     memcpy(command.packet, "CASTG1\0", 8);
     cast_command_header_write(command.packet + 16);
     for (int i = 0; i < argc; i++) {
@@ -899,7 +911,7 @@ int panel_client_command(PanelClient *c, int argc, const char *const *argv, char
     c->count++;
     pthread_mutex_unlock(&c->mutex);
     uint64_t wake = 1;
-    ssize_t notified = write(c->wake, &wake, sizeof wake);
+    ssize_t notified = write(c->wake_writer, &wake, sizeof wake);
     (void)notified;
     return 0;
 }

@@ -10,6 +10,7 @@
 #ifdef WITH_PANEL
 #include "panel.h"
 #endif
+#include "os_compat.h"
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -169,7 +170,12 @@ static int config_path(Startup *s, char *e, size_t n)
         if (!home || home[0] != '/') {
             return app_error(e, n, "HOME must be absolute when XDG_CONFIG_HOME is unset/invalid");
         }
+#ifdef __APPLE__
+        if (snprintf(s->config_path, sizeof s->config_path, "%s/Library/Application Support/%s/%s",
+                     home, cast_edition_identity()->pro ? "cast-pro" : "cast", filename) >=
+#else
         if (snprintf(s->config_path, sizeof s->config_path, "%s/.config/cast/%s", home, filename) >=
+#endif
             (int)sizeof s->config_path) {
             return app_error(e, n, "config path too long");
         }
@@ -238,6 +244,17 @@ int app_socket_path(Config *c, char *e, size_t n)
         return 0;
     }
     const char *runtime = getenv("XDG_RUNTIME_DIR");
+#ifdef __APPLE__
+    char fallback[96];
+    if (!runtime || runtime[0] != '/') {
+        snprintf(fallback, sizeof fallback, "/tmp/%s-%lu",
+                 cast_edition_identity()->pro ? "cast-pro" : "cast", (unsigned long)getuid());
+        if (mkdir(fallback, 0700) && errno != EEXIST) {
+            return app_error(e, n, "cannot create private runtime directory: %s", strerror(errno));
+        }
+        runtime = fallback;
+    }
+#endif
     if (!runtime || runtime[0] != '/') {
         return app_error(
             e, n, "set an absolute XDG_RUNTIME_DIR or --socket PATH in an owned private directory");
@@ -732,9 +749,10 @@ static void drain_peers(App *a, Peer *peers, int *count)
             }
             rc = decode_packet(command, size, &argc, argv, out, sizeof out);
             if (!rc) {
-                int safety = app_runtime_safety(a,argc,argv,out,sizeof out);
-                if (safety != 1) rc = safety;
-                else if (!strcmp(argv[0], "--notes-window")) {
+                int safety = app_runtime_safety(a, argc, argv, out, sizeof out);
+                if (safety != 1) {
+                    rc = safety;
+                } else if (!strcmp(argv[0], "--notes-window")) {
                     rc = app_runtime_notes_register(a, argc, argv, p->pid, out, sizeof out);
                 } else if (!strcmp(argv[0], "license") || !strcmp(argv[0], "edition") ||
                            !strcmp(argv[0], "features") || cast_edition_has_request(argc, argv)) {
@@ -786,7 +804,7 @@ static int daemon_socket(const Config *c, int *lockfd, char *e, size_t n)
         if (!S_ISSOCK(st.st_mode) || st.st_uid != getuid()) {
             return app_error(e, n, "refusing to remove unowned/non-socket path %s", c->socket_path);
         }
-        int probe = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+        int probe = cast_socket(true);
         struct sockaddr_un a = {.sun_family = AF_UNIX};
         strcpy(a.sun_path, c->socket_path);
         if (probe < 0) {
@@ -806,7 +824,7 @@ static int daemon_socket(const Config *c, int *lockfd, char *e, size_t n)
     } else if (errno != ENOENT) {
         return app_error(e, n, "inspect socket: %s", strerror(errno));
     }
-    int fd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+    int fd = cast_socket(true);
     if (fd < 0) {
         return app_error(e, n, "socket: %s", strerror(errno));
     }
@@ -975,10 +993,10 @@ static int run_daemon(Config config, Startup startup)
         }
         if (ready > 0 && (pollers[0].revents & POLLIN)) {
             int fd;
-            while ((fd = accept4(server, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC)) >= 0) {
-                struct ucred cred;
-                socklen_t len = sizeof cred;
-                if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) || cred.uid != getuid()) {
+            while ((fd = cast_accept(server)) >= 0) {
+                uid_t peer_uid;
+                pid_t peer_pid;
+                if (cast_peer_identity(fd, &peer_uid, &peer_pid) || peer_uid != getuid()) {
                     reply_peer(fd, -1, "peer ownership mismatch");
                     continue;
                 }
@@ -987,7 +1005,7 @@ static int run_daemon(Config config, Startup startup)
                     continue;
                 }
                 peers[count++] = (Peer){
-                    fd, cast_now_ns() + (uint64_t)a->config.ipc_timeout_ms * 1000000ULL, cred.pid};
+                    fd, cast_now_ns() + (uint64_t)a->config.ipc_timeout_ms * 1000000ULL, peer_pid};
             }
         }
         if (stopping) {

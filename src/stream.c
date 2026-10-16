@@ -2,8 +2,8 @@
 #define _GNU_SOURCE
 #endif
 #include "stream.h"
-#include "media_internal.h"
 #include "media_codec.h"
+#include "media_internal.h"
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -19,7 +19,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#ifndef __APPLE__
 #include <sys/prctl.h>
+#endif
+#include "os_compat.h"
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -116,6 +119,7 @@ static void wipe(void *memory, size_t size)
 static void lock_media(struct StreamShared *shared)
 {
     int result = pthread_mutex_lock(&shared->media_mutex);
+#ifndef __APPLE__
     if (result == EOWNERDEAD) {
         /* A deadline can kill an encoder during its short memory copy. No stale
          * partially copied frame may survive that process's retirement. */
@@ -127,6 +131,9 @@ static void lock_media(struct StreamShared *shared)
         wipe(shared->audio, sizeof(shared->audio));
         pthread_mutex_consistent(&shared->media_mutex);
     }
+#else
+    (void)result;
+#endif
 }
 static void clear_media_locked(struct StreamShared *shared)
 {
@@ -553,7 +560,9 @@ static int encode_video(struct StreamEncoder *encoder)
     }
     int result = av_frame_make_writable(encoder->video_frame);
     if (result >= 0) {
-        Frame source = {.data = raw, .width = shared->cfg.width, .height = shared->cfg.height,
+        Frame source = {.data = raw,
+                        .width = shared->cfg.width,
+                        .height = shared->cfg.height,
                         .stride = shared->cfg.width * 4};
         result = media_video_convert(&encoder->conversion, &source, encoder->video_frame, true);
     }
@@ -671,8 +680,14 @@ int stream_worker_main(int fd)
 #endif
     /* A detached daemon must not leave an orphan credential-bearing worker. */
     pid_t parent = getppid();
+#ifndef __APPLE__
     prctl(PR_SET_PDEATHSIG, SIGKILL);
     prctl(PR_SET_DUMPABLE, 0);
+#else
+    /* Streaming startup is rejected until Darwin has equivalent worker supervision. */
+    munmap(shared, shared->size);
+    return 2;
+#endif
     if (getppid() != parent || parent == 1) {
         munmap(shared, shared->size);
         return 2;
@@ -854,9 +869,11 @@ static int spawn_worker(struct CastStream *stream)
     posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
     posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
     posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+#ifndef __APPLE__
     posix_spawn_file_actions_addclosefrom_np(&actions, STREAM_WORKER_FD + 1);
+#endif
     char *arguments[] = {"cast", "--internal-stream-worker", "3", NULL};
-    int result = posix_spawn(&stream->child, "/proc/self/exe", &actions, NULL, arguments, environ);
+    int result = cast_spawn_self(&stream->child, &actions, arguments, environ);
     posix_spawn_file_actions_destroy(&actions);
     close(duplicate);
     if (!result) {
@@ -1022,7 +1039,7 @@ static void *supervise(void *opaque)
             deadline.tv_sec++;
             deadline.tv_nsec -= 1000000000L;
         }
-        pthread_cond_timedwait(&stream->changed, &stream->mutex, &deadline);
+        cast_cond_wait_monotonic(&stream->changed, &stream->mutex, &deadline);
     }
     pthread_mutex_unlock(&stream->mutex);
     return NULL;
@@ -1036,11 +1053,7 @@ CastStream *stream_open(CastAudio *audio)
     stream->fd = -1;
     stream->audio = audio;
     pthread_mutex_init(&stream->mutex, NULL);
-    pthread_condattr_t attributes;
-    pthread_condattr_init(&attributes);
-    pthread_condattr_setclock(&attributes, CLOCK_MONOTONIC);
-    pthread_cond_init(&stream->changed, &attributes);
-    pthread_condattr_destroy(&attributes);
+    cast_cond_monotonic(&stream->changed);
     if (pthread_create(&stream->supervisor, NULL, supervise, stream)) {
         pthread_cond_destroy(&stream->changed);
         pthread_mutex_destroy(&stream->mutex);
@@ -1089,6 +1102,13 @@ void stream_close(CastStream *stream)
 }
 int stream_start(CastStream *stream, const Config *cfg, char *error, size_t size)
 {
+#ifdef __APPLE__
+    (void)stream;
+    (void)cfg;
+    snprintf(error, size, "streaming is not supported on macOS in this release");
+    return -1;
+#endif
+
     if (config_validate(cfg, error, size)) {
         return -1;
     }
@@ -1099,7 +1119,8 @@ int stream_start(CastStream *stream, const Config *cfg, char *error, size_t size
         return -1;
     }
     MediaCodecSelection chosen;
-    if (local_support(cfg, &chosen, error, size) || stream_key_validate(cfg->stream.key_file, error, size)) {
+    if (local_support(cfg, &chosen, error, size) ||
+        stream_key_validate(cfg->stream.key_file, error, size)) {
         return -1;
     }
     pthread_mutex_lock(&stream->mutex);
@@ -1121,7 +1142,12 @@ int stream_start(CastStream *stream, const Config *cfg, char *error, size_t size
         pthread_mutex_unlock(&stream->mutex);
         return -1;
     }
+#ifdef __APPLE__
+    int fd = -1;
+    errno = ENOTSUP;
+#else
     int fd = memfd_create("cast-stream-mailbox", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+#endif
     if (fd < 0 || ftruncate(fd, (off_t)shared_size)) {
         if (fd >= 0) {
             close(fd);
@@ -1145,18 +1171,22 @@ int stream_start(CastStream *stream, const Config *cfg, char *error, size_t size
     shared->queue_capacity = (unsigned)cfg->stream.queue_frames;
     shared->cfg = *cfg;
     /* Pin this start's initialized auto choice for the exec worker and retries. */
-    snprintf(shared->cfg.stream.video_encoder, sizeof(shared->cfg.stream.video_encoder),
-             "%s", chosen.encoder);
+    snprintf(shared->cfg.stream.video_encoder, sizeof(shared->cfg.stream.video_encoder), "%s",
+             chosen.encoder);
     shared->silent = true;
     pthread_mutexattr_t attributes;
     pthread_mutexattr_init(&attributes);
     pthread_mutexattr_setpshared(&attributes, PTHREAD_PROCESS_SHARED);
+#ifndef __APPLE__
     pthread_mutexattr_setrobust(&attributes, PTHREAD_MUTEX_ROBUST);
+#endif
     pthread_mutex_init(&shared->media_mutex, &attributes);
     pthread_mutexattr_destroy(&attributes);
     atomic_init(&shared->epoch, 1);
     atomic_init(&shared->session, stream->status.generation + 1);
+#ifndef __APPLE__
     fcntl(fd, F_ADD_SEALS, F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL);
+#endif
     stream->fd = fd;
     stream->shared = shared;
     stream->shared_size = shared_size;
@@ -1164,7 +1194,8 @@ int stream_start(CastStream *stream, const Config *cfg, char *error, size_t size
     uint64_t generation = stream->status.generation + 1;
     memset(&stream->status, 0, sizeof(stream->status));
     stream->status.generation = generation;
-    snprintf(stream->status.video_encoder, sizeof(stream->status.video_encoder), "%s", chosen.encoder);
+    snprintf(stream->status.video_encoder, sizeof(stream->status.video_encoder), "%s",
+             chosen.encoder);
     snprintf(stream->status.video_encoder_detail, sizeof(stream->status.video_encoder_detail),
              "%.255s", chosen.detail);
     stream->status.state = STREAM_CONNECTING;
@@ -1287,6 +1318,15 @@ void stream_status(CastStream *stream, StreamSnapshot *status)
 }
 void stream_doctor(const Config *cfg, char *output, size_t size)
 {
+#ifdef __APPLE__
+    (void)cfg;
+    size_t used_macos = strlen(output);
+    if (used_macos < size) {
+        snprintf(output + used_macos, size - used_macos,
+                 "streaming: unsupported on macOS in this release\n");
+    }
+    return;
+#endif
     char error[CAST_ERR] = "";
     int support = local_support(cfg, NULL, error, sizeof(error));
     size_t used = strlen(output);
@@ -1296,8 +1336,7 @@ void stream_doctor(const Config *cfg, char *output, size_t size)
     snprintf(output + used, size - used,
              "Streaming: %s%s; software H.264/AAC, FLV RTMP/RTMPS, TLS verification enabled; no "
              "network probe.\n",
-             support ? "unavailable: " : "local codec/muxer/protocol support available; ",
-             error);
+             support ? "unavailable: " : "local codec/muxer/protocol support available; ", error);
     used = strlen(output);
     if (used >= size) {
         return;
@@ -1356,8 +1395,8 @@ int stream_test_file(const Config *cfg, const char *path)
         if (result < 0) {
             goto finished;
         }
-        int64_t video_due = av_rescale(encoder.video_pts, STREAM_RATE, cfg->fps) +
-                            encoder.sound->initial_padding;
+        int64_t video_due =
+            av_rescale(encoder.video_pts, STREAM_RATE, cfg->fps) + encoder.sound->initial_padding;
         if (video_due <= encoder.audio_pts) {
             result = encode_video(&encoder);
             encoder.video_pts++;
