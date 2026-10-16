@@ -478,6 +478,7 @@ static int block_measure(PresentationText *text, TextFont *font, const char *mes
         TextLine *line = &block->lines[block->count++];
         line->start = s;
         int x = 0, right = 0, descent = 0;
+        bool have_ink = false;
         FT_Face previous_face = NULL;
         FT_UInt previous = 0;
         while (*s && *s != '\n') {
@@ -500,12 +501,17 @@ static int block_measure(PresentationText *text, TextFont *font, const char *mes
             }
             FT_GlyphSlot slot = face->glyph;
             int left = x + slot->bitmap_left;
-            if (left < line->left) {
+            /* Center the visible ink even when the first glyph has a positive
+             * bearing; whitespace advances the pen without extending bounds. */
+            if (slot->bitmap.width && slot->bitmap.rows &&
+                (!have_ink || left < line->left)) {
                 line->left = left;
             }
-            if (left + (int)slot->bitmap.width > right) {
+            if (slot->bitmap.width && slot->bitmap.rows &&
+                (!have_ink || left + (int)slot->bitmap.width > right)) {
                 right = left + (int)slot->bitmap.width;
             }
+            have_ink |= slot->bitmap.width && slot->bitmap.rows;
             if (slot->bitmap_top > line->ascent) {
                 line->ascent = slot->bitmap_top;
             }

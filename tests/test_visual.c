@@ -213,11 +213,11 @@ static void assert_solid(const Frame *frame, uint32_t color)
     }
 }
 
-static void test_styled_text(void)
+static void test_styled_text(const char *font)
 {
     Config cfg = config(320, 180);
-    strcpy(cfg.pause_font, "Noto Sans");
-    strcpy(cfg.blur_font, "Noto Sans");
+    strcpy(cfg.pause_font, font);
+    strcpy(cfg.blur_font, font);
     cfg.pause_foreground = cfg.blur_foreground = 0xffffff;
     cfg.pause_title_size = cfg.blur_title_size = 48;
     cfg.pause_subtitle_size = cfg.blur_subtitle_size = 24;
@@ -1369,7 +1369,10 @@ int main(void)
     test_prepared_logo_and_static_text();
     test_neutral();
     test_text_templates();
-    test_styled_text();
+    test_styled_text("Noto Sans");
+    /* A bundled font keeps positive-bearing centering coverage independent of
+     * installed font packages and Fontconfig's platform-specific fallback. */
+    test_styled_text("Inter:file=assets/fonts/Inter.ttf");
     test_footer_and_gap();
     test_font_replacement();
     test_blurred_frames();
