@@ -45,6 +45,14 @@
         "LICENSE"
       ],
       "hash_evidence": "https://lists.buildroot.org/pipermail/buildroot/2025-October/788645.html"
+    },
+    {
+      "name": "util-linux",
+      "version": "2.39.4",
+      "url": "https://www.kernel.org/pub/linux/utils/util-linux/v2.39/util-linux-2.39.4.tar.xz",
+      "archive": "util-linux-2.39.4.tar.xz",
+      "sha256": "6c4f8723dafd41c39d93ecbf16509fc88c33cd5bd3277880ae5a1d97a014fd0e",
+      "hash_evidence": "https://www.kernel.org/pub/linux/utils/util-linux/v2.39/sha256sums.asc"
     }
   ]
 }

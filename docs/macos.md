@@ -178,6 +178,9 @@ This port does not implement virtual camera, virtual microphone, RTMP streaming,
 window/region selection, or global input annotations/hotkeys. Native preview and
 countdown windows are supported. Unsupported operations report errors. Pro is supported for local development with controlled LGPL media and CPU
 Whisper inference; see the sibling private repository’s docs/development.md.
+Manual cinematic zoom/focus uses the shared Pro renderer. Automatic click zoom,
+cursor following and cursor smoothing still require pointer/input metadata that
+the macOS capture adapter does not yet provide.
 
 Before distributing beyond a local developer build, validate on hardware, bundle
 and audit dylibs/licenses, add a proper app icon and permission onboarding, and

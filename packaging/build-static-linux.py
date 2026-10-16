@@ -57,6 +57,14 @@ def main():
                        str(prefix / 'lib/x86_64-linux-gnu/pkgconfig')]),
                        CMAKE_PREFIX_PATH=str(prefix))
     jobs = '-j' + str(args.jobs)
+    # Ubuntu's libmount-dev contains no static archive. Build its matching
+    # family of mount/blkid/uuid libraries without unrelated system programs.
+    run('./configure', '--prefix=' + str(prefix), '--libdir=' + str(prefix / 'lib'),
+        '--disable-all-programs', '--enable-libmount', '--enable-libblkid',
+        '--enable-libuuid', '--enable-static', '--disable-shared', '--without-selinux',
+        '--disable-nls', cwd=sources['util-linux'], env=environment)
+    run('make', jobs, cwd=sources['util-linux'], env=environment)
+    run('make', 'install', cwd=sources['util-linux'], env=environment)
     # PipeWire upstream explicitly uses shared_library(), ignoring default_library.
     # Build a static counterpart from exactly the same compiled client objects.
     pipewire = sources['pipewire']
@@ -81,6 +89,7 @@ def main():
     for metadata in prefix.rglob('*.pc'):
         text = metadata.read_text().replace('prefix=/usr', 'prefix=' + str(prefix))
         metadata.write_text(text)
+    shutil.copy2(prefix / 'lib/libpipewire-0.3.a', prefix / 'lib/x86_64-linux-gnu/libpipewire-0.3.a')
     run('make', jobs, 'BUILDTYPE=Release', 'libraries', cwd=sources['openh264'], env=environment)
     run('make', 'PREFIX=' + str(prefix), 'install-static', cwd=sources['openh264'], env=environment)
     media = json.loads((ROOT / 'packaging/media-lgpl-lock.json').read_text())
@@ -100,6 +109,7 @@ def main():
             '-DCMAKE_INSTALL_LIBDIR=lib', *options, env=environment)
         run('cmake', '--build', build, '--parallel', args.jobs, env=environment)
         run('cmake', '--install', build, env=environment)
+    run('python3', ROOT / 'tools/check-static-deps.py', '--edition', 'community', env=environment)
     packages = ['fontconfig', 'freetype2', 'libavcodec', 'libavformat', 'libavutil',
                 'libswscale', 'libswresample', 'libpipewire-0.3', 'x11', 'xext', 'xrandr',
                 'xi', 'xfixes', 'xcomposite', 'gio-2.0', 'gio-unix-2.0', 'sdl3', 'sdl3-ttf']

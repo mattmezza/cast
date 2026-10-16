@@ -194,6 +194,7 @@ def main():
             private = args.pro_root / 'pro' if (args.pro_root / 'pro/src').is_dir() else args.pro_root
             shutil.copy2(private / 'LICENSE', resources / 'PRO-LICENSE')
             shutil.copy2(private / 'EULA-DRAFT.md', resources / 'PRO-EULA-DRAFT.md')
+        shutil.copytree(repository / 'licenses', resources / 'license-texts')
         if args.media_root:
             shutil.copytree(args.media_root / 'build-materials/licenses', resources / 'media-licenses')
             shutil.copy2(args.media_root / 'profile.json', resources / 'media-profile.json')
