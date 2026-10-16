@@ -33,7 +33,7 @@ struct CastAudio {
     Config cfg;
     float samples[RING * 2];
     uint64_t begin, end, accept_after, record_after, stream_after;
-    bool tap, silent;
+    bool tap, silent, desktop_ready, desktop_pending;
     char error[CAST_ERR];
 };
 static uint64_t sample_time(uint64_t ns)
@@ -53,7 +53,7 @@ int audio_validate(CastAudio *a, const Config *cfg, char *error, size_t size)
 {
     @synchronized(self) {
     (void)stream; CastAudio *a = self.owner; if (!a) return;
-    pthread_mutex_lock(&a->lock); snprintf(a->error, sizeof a->error, "Desktop capture stopped: %s", error.localizedDescription.UTF8String); pthread_mutex_unlock(&a->lock);
+    pthread_mutex_lock(&a->lock); a->desktop_ready = a->desktop_pending = false; snprintf(a->error, sizeof a->error, "Desktop capture stopped: %s", error.localizedDescription.UTF8String); pthread_mutex_unlock(&a->lock);
     }
 }
 - (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sample ofType:(SCStreamOutputType)type
@@ -96,29 +96,49 @@ int audio_validate(CastAudio *a, const Config *cfg, char *error, size_t size)
 @end
 static int desktop_start(CastAudio *a, char *error, size_t size)
 {
+    (void)error; (void)size;
     if (!a->cfg.desktop) return 0;
-    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-    __block SCShareableContent *content = nil; __block NSError *failure = nil;
-    [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:YES completionHandler:^(SCShareableContent *result, NSError *err) {
-        content = result; failure = err; dispatch_semaphore_signal(sem);
-    }];
-    if (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC))) { snprintf(error, size, "Timed out obtaining desktop audio permission; retry after granting Screen Recording access"); return -1; }
-    if (!content.displays.count) { snprintf(error, size, "Desktop audio requires Screen Recording permission: %s", failure ? failure.localizedDescription.UTF8String : "no display available"); return -1; }
-    SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:content.displays.firstObject excludingWindows:@[]];
-    SCStreamConfiguration *cfg = [SCStreamConfiguration new];
-    cfg.width = 2; cfg.height = 2; cfg.minimumFrameInterval = CMTimeMake(1, 1);
-    cfg.capturesAudio = YES; cfg.sampleRate = RATE; cfg.channelCount = 2; cfg.excludesCurrentProcessAudio = YES;
-    a->desktop_sink = [CastDesktopAudioSink new]; a->desktop_sink.owner = a;
+    /* Each start owns a fresh token. Shutdown retires its owner under the same
+     * monitor used by every completion and sample callback, so callbacks never
+     * keep a raw owner alive after close or revive a previous configuration. */
+    CastDesktopAudioSink *sink = [CastDesktopAudioSink new]; sink.owner = a;
+    a->desktop_sink = sink;
     a->desktop_queue = dispatch_queue_create("cast.desktop.audio", DISPATCH_QUEUE_SERIAL);
-    a->desktop = [[SCStream alloc] initWithFilter:filter configuration:cfg delegate:a->desktop_sink];
-    NSError *err = nil;
-    if (![a->desktop addStreamOutput:a->desktop_sink type:SCStreamOutputTypeAudio sampleHandlerQueue:a->desktop_queue error:&err]) {
-        snprintf(error, size, "Desktop audio output failed: %s", err.localizedDescription.UTF8String); return -1;
-    }
-    failure = nil;
-    [a->desktop startCaptureWithCompletionHandler:^(NSError *err) { failure = err; dispatch_semaphore_signal(sem); }];
-    if (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC))) { snprintf(error, size, "Timed out starting desktop audio capture"); return -1; }
-    if (failure) { snprintf(error, size, "Desktop audio capture failed: %s", failure.localizedDescription.UTF8String); return -1; }
+    pthread_mutex_lock(&a->lock); a->desktop_pending = true; a->desktop_ready = false; pthread_mutex_unlock(&a->lock);
+    [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:YES completionHandler:^(SCShareableContent *content, NSError *failure) {
+        @autoreleasepool { @synchronized(sink) {
+            CastAudio *owner = sink.owner; if (!owner) return;
+            if (failure || !content.displays.count) {
+                pthread_mutex_lock(&owner->lock);
+                owner->desktop_pending = false;
+                snprintf(owner->error, sizeof owner->error, "Desktop audio requires Screen Recording permission: %s", failure ? failure.localizedDescription.UTF8String : "no display available");
+                pthread_mutex_unlock(&owner->lock); return;
+            }
+            SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:content.displays.firstObject excludingWindows:@[]];
+            SCStreamConfiguration *cfg = [SCStreamConfiguration new];
+            cfg.width = 2; cfg.height = 2; cfg.minimumFrameInterval = CMTimeMake(1, 1);
+            cfg.capturesAudio = YES; cfg.sampleRate = RATE; cfg.channelCount = 2; cfg.excludesCurrentProcessAudio = YES;
+            SCStream *stream = [[SCStream alloc] initWithFilter:filter configuration:cfg delegate:sink];
+            NSError *err = nil;
+            if (![stream addStreamOutput:sink type:SCStreamOutputTypeAudio sampleHandlerQueue:owner->desktop_queue error:&err]) {
+                pthread_mutex_lock(&owner->lock); owner->desktop_pending = false;
+                snprintf(owner->error, sizeof owner->error, "Desktop audio output failed: %s", err.localizedDescription.UTF8String);
+                pthread_mutex_unlock(&owner->lock); return;
+            }
+            owner->desktop = stream;
+            __weak SCStream *weakStream = stream;
+            [stream startCaptureWithCompletionHandler:^(NSError *err) {
+                @synchronized(sink) {
+                    CastAudio *current = sink.owner;
+                    if (!current) { [weakStream stopCaptureWithCompletionHandler:^(NSError *ignored) { (void)ignored; }]; return; }
+                    pthread_mutex_lock(&current->lock);
+                    current->desktop_pending = false; current->desktop_ready = err == nil;
+                    if (err) snprintf(current->error, sizeof current->error, "Desktop audio capture failed: %s", err.localizedDescription.UTF8String);
+                    pthread_mutex_unlock(&current->lock);
+                }
+            }];
+        } }
+    }];
     return 0;
 }
 static bool permission(void)
@@ -132,15 +152,18 @@ static bool permission(void)
 }
 static void stop(CastAudio *a)
 {
-    if (a->desktop) {
-        @synchronized(a->desktop_sink) { a->desktop_sink.owner = NULL; }
-        [a->desktop removeStreamOutput:a->desktop_sink type:SCStreamOutputTypeAudio error:NULL];
-        dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-        [a->desktop stopCaptureWithCompletionHandler:^(NSError *err) { (void)err; dispatch_semaphore_signal(sem); }];
-        dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
-        dispatch_sync(a->desktop_queue, ^{});
-        a->desktop_sink.owner = NULL; a->desktop = nil; a->desktop_sink = nil; a->desktop_queue = nil;
+    CastDesktopAudioSink *sink = a->desktop_sink;
+    SCStream *desktop = nil;
+    @synchronized(sink) {
+        sink.owner = NULL;
+        desktop = a->desktop; a->desktop = nil;
+        pthread_mutex_lock(&a->lock); a->desktop_pending = a->desktop_ready = false; pthread_mutex_unlock(&a->lock);
     }
+    if (desktop) {
+        [desktop removeStreamOutput:sink type:SCStreamOutputTypeAudio error:NULL];
+        [desktop stopCaptureWithCompletionHandler:^(NSError *err) { (void)err; (void)sink; }];
+    }
+    a->desktop_sink = nil; a->desktop_queue = nil;
     [a->engine stop];
     if (a->tap) [a->engine.inputNode removeTapOnBus:0];
     @synchronized(a->microphone_token) { a->microphone_token.owner = NULL; }
@@ -149,7 +172,7 @@ static void stop(CastAudio *a)
 }
 static int start(CastAudio *a, char *error, size_t size)
 {
-    a->error[0] = 0;
+    pthread_mutex_lock(&a->lock); a->error[0] = 0; pthread_mutex_unlock(&a->lock);
     if (desktop_start(a, error, size) < 0) return -1;
     if (!a->cfg.mic) return 0;
     if (!permission()) { snprintf(error, size, "Microphone permission required; approve the prompt then enable microphone again, or enable it in System Settings > Privacy & Security > Microphone"); return -1; }
@@ -214,13 +237,18 @@ void audio_close(CastAudio *a)
 int audio_configure(CastAudio *a, const Config *cfg, char *error, size_t size)
 {
     if (audio_validate(a, cfg, error, size) < 0) return -1;
-    if (cfg->mic == a->cfg.mic && cfg->desktop == a->cfg.desktop) { pthread_mutex_lock(&a->lock); a->cfg = *cfg; pthread_mutex_unlock(&a->lock); return 0; }
-    Config old = a->cfg; stop(a);
+    pthread_mutex_lock(&a->lock);
+    bool unchanged = cfg->mic == a->cfg.mic && cfg->desktop == a->cfg.desktop && (!cfg->desktop || a->desktop_pending || a->desktop_ready);
+    Config old = a->cfg;
+    if (unchanged) a->cfg = *cfg;
+    pthread_mutex_unlock(&a->lock);
+    if (unchanged) return 0;
+    stop(a);
     pthread_mutex_lock(&a->lock); a->cfg = *cfg; pthread_mutex_unlock(&a->lock);
     audio_barrier(a, a->silent);
     if (start(a, error, size) == 0) return 0;
-    stop(a); a->cfg = old; char ignored[CAST_ERR];
-    if (start(a, ignored, sizeof ignored) < 0) snprintf(a->error, sizeof a->error, "%s", ignored);
+    stop(a); pthread_mutex_lock(&a->lock); a->cfg = old; pthread_mutex_unlock(&a->lock); char ignored[CAST_ERR];
+    if (start(a, ignored, sizeof ignored) < 0) { pthread_mutex_lock(&a->lock); snprintf(a->error, sizeof a->error, "%s", ignored); pthread_mutex_unlock(&a->lock); }
     return -1;
 }
 void audio_barrier(CastAudio *a, bool silent)
@@ -261,7 +289,8 @@ int audio_read_selection(CastAudio *a, int source, uint64_t ns, float *dst, unsi
     if (!a || !dst || !count || count > 4800 || source < 0 || source > 2) { snprintf(error, size, "Invalid bounded speech audio request"); return -1; }
     memset(dst, 0, count*2*sizeof *dst); pthread_mutex_lock(&a->lock);
     int result = 0;
-    if ((source == 0 && (!a->cfg.mic || !a->engine.running)) || (source == 1 && (!a->cfg.desktop || !a->desktop || a->error[0])) || (source == 2 && ((!a->cfg.mic && !a->cfg.desktop) || (a->cfg.mic && !a->engine.running) || (a->cfg.desktop && (!a->desktop || a->error[0]))))) { snprintf(error, size, "Requested audio source disabled or unavailable; no fallback"); result = -1; }
+    if ((source == 0 && (!a->cfg.mic || !a->engine.running)) || (source == 1 && (!a->cfg.desktop || (!a->desktop_ready && !a->desktop_pending) || a->error[0])) || (source == 2 && ((!a->cfg.mic && !a->cfg.desktop) || (a->cfg.mic && !a->engine.running) || (a->cfg.desktop && ((!a->desktop_ready && !a->desktop_pending) || a->error[0]))))) { snprintf(error, size, "Requested audio source disabled or unavailable; no fallback"); result = -1; }
+    else if (source != 0 && a->cfg.desktop && a->desktop_pending) { snprintf(error, size, "Waiting for desktop audio capture startup"); result = 1; }
     else if (((source != 1 && a->cfg.mic && a->end < sample_time(ns) + count) || (source != 0 && a->cfg.desktop && a->desktop_end < sample_time(ns) + count))) { snprintf(error, size, "Waiting for captured audio"); result = 1; }
     else read_locked(a, ns, dst, count, a->accept_after, source);
     pthread_mutex_unlock(&a->lock); return result;
@@ -269,6 +298,6 @@ int audio_read_selection(CastAudio *a, int source, uint64_t ns, float *dst, unsi
 void audio_list(CastAudio *a, char *out, size_t size)
 { (void)a; snprintf(out, size, "default [microphone] System Settings > Sound input\ndefault [desktop] ScreenCaptureKit system audio; virtual audio unavailable\n"); }
 void audio_status(CastAudio *a, char *out, size_t size)
-{ pthread_mutex_lock(&a->lock); snprintf(out, size, "{\"available\":true,\"mic_ready\":%s,\"desktop_ready\":%s,\"virtual_ready\":false,\"virtual_silent\":%s}", a->engine.running ? "true" : "false", a->desktop && !a->error[0] ? "true" : "false", a->silent ? "true" : "false"); pthread_mutex_unlock(&a->lock); }
+{ pthread_mutex_lock(&a->lock); snprintf(out, size, "{\"available\":true,\"mic_ready\":%s,\"desktop_ready\":%s,\"virtual_ready\":false,\"virtual_silent\":%s}", a->engine.running ? "true" : "false", a->desktop_ready && !a->error[0] ? "true" : "false", a->silent ? "true" : "false"); pthread_mutex_unlock(&a->lock); }
 void audio_error(CastAudio *a, char *out, size_t size)
-{ pthread_mutex_lock(&a->lock); snprintf(out, size, "%s", a->cfg.mic && !a->engine.running ? "Microphone capture unavailable" : a->error); pthread_mutex_unlock(&a->lock); }
+{ pthread_mutex_lock(&a->lock); snprintf(out, size, "%s", a->cfg.mic && !a->engine.running ? "Microphone capture unavailable" : a->error[0] ? a->error : a->desktop_pending ? "Desktop audio starting; waiting for ScreenCaptureKit" : ""); pthread_mutex_unlock(&a->lock); }
