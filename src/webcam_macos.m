@@ -27,7 +27,10 @@ struct CastOutput { int unused; };
     (void)output; (void)connection;
     CastCamera *c = self.owner;
     CVPixelBufferRef pixels = CMSampleBufferGetImageBuffer(sample);
-    if (!c || !pixels) return;
+    if (!c || !pixels || !CMSampleBufferIsValid(sample) ||
+        CVPixelBufferGetPixelFormatType(pixels) != kCVPixelFormatType_32BGRA) return;
+    size_t width = CVPixelBufferGetWidth(pixels), height = CVPixelBufferGetHeight(pixels);
+    if (!width || !height || width > 8192 || height > 8192) return;
     /* AV capture timestamps use the host clock; translate its epoch into cast's
      * CLOCK_MONOTONIC epoch rather than stamping delayed frames as fresh. */
     double age = CMTimeGetSeconds(CMTimeSubtract(CMClockGetTime(CMClockGetHostTimeClock()),
@@ -35,12 +38,16 @@ struct CastOutput { int unused; };
     if (!isfinite(age) || age < -0.05 || age > 0.5) return;
     uint64_t now = cast_now_ns();
     uint64_t ts = age > 0 ? now - (uint64_t)(age * 1e9) : now;
-    CVPixelBufferLockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
+    if (CVPixelBufferLockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) return;
+    const uint8_t *base = CVPixelBufferGetBaseAddress(pixels);
+    size_t stride = CVPixelBufferGetBytesPerRow(pixels);
+    if (!base || stride < width * 4) {
+        CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
+        return;
+    }
     pthread_mutex_lock(&c->lock);
     if (ts >= c->accept_after && frame_alloc(&c->cached, (int)CVPixelBufferGetWidth(pixels),
                                             (int)CVPixelBufferGetHeight(pixels)) == 0) {
-        const uint8_t *base = CVPixelBufferGetBaseAddress(pixels);
-        size_t stride = CVPixelBufferGetBytesPerRow(pixels);
         for (int y = 0; y < c->cached.height; ++y) {
             const uint8_t *s = base + y * stride;
             uint8_t *d = c->cached.data + y * c->cached.stride;
@@ -59,19 +66,18 @@ static bool camera_permission(void)
 {
     AVAuthorizationStatus status = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo];
     if (status == AVAuthorizationStatusNotDetermined) {
-        dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+        /* Never stall the daemon behind an unanswered system permission alert.
+         * Camera can be enabled again after permission has been granted. */
         [AVCaptureDevice requestAccessForMediaType:AVMediaTypeVideo completionHandler:^(BOOL granted) {
-            (void)granted; dispatch_semaphore_signal(sem);
+            (void)granted;
         }];
-        dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
-        status = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo];
     }
     return status == AVAuthorizationStatusAuthorized;
 }
 CastCamera *camera_open(const Config *cfg, char *error, size_t size)
 {
     @autoreleasepool {
-        if (!camera_permission()) { snprintf(error, size, "Camera permission denied; enable it in System Settings > Privacy & Security > Camera"); return NULL; }
+        if (!camera_permission()) { snprintf(error, size, "Camera permission required; grant it in System Settings > Privacy & Security > Camera, then enable the camera again"); return NULL; }
         AVCaptureDevice *device = nil;
         bool defaults = !cfg->camera_device[0] || !strcmp(cfg->camera_device, "default");
         for (AVCaptureDevice *candidate in [AVCaptureDevice devicesWithMediaType:AVMediaTypeVideo]) {
