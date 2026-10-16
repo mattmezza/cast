@@ -331,7 +331,9 @@ int macos_panel_register(Platform *p, char *error, size_t size)
 {
     CastScreenCapture *capture = (__bridge CastScreenCapture *)p;
     /* The panel may have become visible since startup enumeration. Refresh the
-     * application filter before accepting more source frames. */
+     * application filter before accepting more source frames. Source generation
+     * also retires compositor caches that might contain the panel. */
+    capture->generation++;
     [capture begin];
     macos_panel_status(p, error, size);
     return 0;
