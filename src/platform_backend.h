@@ -32,5 +32,7 @@ int macos_capture(Platform *, Frame *, Cursor *, char *, size_t);
 int macos_command(Platform *, Config *, int, char **, char *, size_t);
 int macos_reconfigure(Platform *, const Config *, char *, size_t);
 void macos_doctor(const Config *, char *, size_t);
+void macos_panel_status(Platform *, char *, size_t);
+int macos_panel_register(Platform *, char *, size_t);
 #endif
 #endif

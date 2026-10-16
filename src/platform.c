@@ -353,6 +353,9 @@ int platform_panel_register(Platform *p, uint64_t window, int peer_pid, char *e,
     (void)window;
     (void)peer_pid;
 #endif
+#ifdef WITH_MACOS
+    if (p->backend == MACOS) return macos_panel_register(p->impl, e, n);
+#endif
     /* A native ID belongs to the panel display; other capture backends cannot use it. */
     (void)window;
     (void)peer_pid;
@@ -378,6 +381,9 @@ void platform_panel_status(Platform *p, char *e, size_t n)
     }
 #else
     (void)p;
+#endif
+#ifdef WITH_MACOS
+    if (p->backend == MACOS) { macos_panel_status(p->impl, e, n); return; }
 #endif
     snprintf(e, n, "unsupported: this backend cannot exclude the panel from captured pixels");
 }

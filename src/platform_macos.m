@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 @interface CastScreenCapture : NSObject <SCStreamOutput, SCStreamDelegate> {
 @public
@@ -88,9 +89,12 @@ static int mac_config(const Config *cfg, char *error, size_t size)
     self.stream = nil;
     pthread_mutex_unlock(&lock);
     [old stopCaptureWithCompletionHandler:^(NSError *error) { (void)error; }];
+    __weak CastScreenCapture *weakSelf = self;
     [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:YES
         completionHandler:^(SCShareableContent *content, NSError *error) {
         @autoreleasepool {
+            CastScreenCapture *self = weakSelf;
+            if (!self) return;
             pthread_mutex_lock(&self->lock);
             if (self->closed || request != self->epoch) {
                 pthread_mutex_unlock(&self->lock);
@@ -108,16 +112,28 @@ static int mac_config(const Config *cfg, char *error, size_t size)
                 pthread_mutex_unlock(&self->lock);
                 return;
             }
-            if (!display.width || !display.height || display.width > 8192 || display.height > 8192) {
+            size_t pixelWidth = CGDisplayPixelsWide(display.displayID);
+            size_t pixelHeight = CGDisplayPixelsHigh(display.displayID);
+            if (!pixelWidth || !pixelHeight || pixelWidth > 8192 || pixelHeight > 8192) {
                 self->failed = true;
                 snprintf(self->failure, sizeof self->failure, "macOS display dimensions exceed capture bounds (8192 pixels per axis)");
                 pthread_mutex_unlock(&self->lock);
                 return;
             }
-            SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:display excludingWindows:@[]];
+            /* Exclude every process in our app bundle: the panel and daemon are
+             * separate processes, and a window ID alone does not cover both. */
+            NSString *bundle = NSBundle.mainBundle.bundleIdentifier;
+            NSMutableArray<SCRunningApplication *> *excluded = [NSMutableArray array];
+            for (SCRunningApplication *application in content.applications) {
+                if (application.processID == getpid() ||
+                    (bundle.length && [application.bundleIdentifier isEqualToString:bundle]))
+                    [excluded addObject:application];
+            }
+            SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:display
+                excludingApplications:excluded exceptingWindows:@[]];
             SCStreamConfiguration *settings = [SCStreamConfiguration new];
-            settings.width = display.width;
-            settings.height = display.height;
+            settings.width = pixelWidth;
+            settings.height = pixelHeight;
             settings.pixelFormat = kCVPixelFormatType_32BGRA;
             settings.minimumFrameInterval = CMTimeMake(1, cfg.fps);
             settings.queueDepth = 3;
@@ -133,6 +149,8 @@ static int mac_config(const Config *cfg, char *error, size_t size)
             self.stream = stream;
             pthread_mutex_unlock(&self->lock);
             [stream startCaptureWithCompletionHandler:^(NSError *startError) {
+                CastScreenCapture *self = weakSelf;
+                if (!self) return;
                 pthread_mutex_lock(&self->lock);
                 if (!self->closed && request == self->epoch && startError) {
                     self->failed = true;
@@ -227,8 +245,10 @@ void macos_close(Platform *p)
 Capabilities macos_capabilities(Platform *p)
 {
     (void)p;
-    Capabilities cap = {.capture = true, .embedded_cursor = true};
-    snprintf(cap.description, sizeof cap.description, "ScreenCaptureKit monitor capture; embedded cursor; no global input, selection UI, preview or panel exclusion");
+    bool exclusion = NSBundle.mainBundle.bundleIdentifier.length > 0;
+    Capabilities cap = {.capture = true, .embedded_cursor = true, .panel_exclusion = exclusion};
+    snprintf(cap.description, sizeof cap.description, "ScreenCaptureKit monitor capture; embedded cursor; %s; no global input, selection UI or native preview",
+        exclusion ? "Cast app bundle excluded" : "bundle exclusion unavailable outside .app");
     return cap;
 }
 uint64_t macos_source_generation(Platform *p)
@@ -296,5 +316,23 @@ int macos_command(Platform *p, Config *cfg, int argc, char **argv, char *error, 
 void macos_doctor(const Config *cfg, char *error, size_t size)
 {
     (void)cfg;
-    snprintf(error, size, "capture: ScreenCaptureKit; screen recording permission %s; monitor capture only; no global input/preview/panel exclusion", CGPreflightScreenCaptureAccess() ? "granted" : "required");
+    snprintf(error, size, "capture: ScreenCaptureKit; screen recording permission %s; monitor capture only; Cast .app automatically excluded; no global input/native preview", CGPreflightScreenCaptureAccess() ? "granted" : "required");
+}
+
+void macos_panel_status(Platform *p, char *error, size_t size)
+{
+    (void)p;
+    snprintf(error, size, "%s", NSBundle.mainBundle.bundleIdentifier.length
+        ? "Cast app bundle automatically excluded from screen capture"
+        : "unsupported outside .app: bundle identity required for panel exclusion");
+}
+
+int macos_panel_register(Platform *p, char *error, size_t size)
+{
+    CastScreenCapture *capture = (__bridge CastScreenCapture *)p;
+    /* The panel may have become visible since startup enumeration. Refresh the
+     * application filter before accepting more source frames. */
+    [capture begin];
+    macos_panel_status(p, error, size);
+    return 0;
 }
