@@ -143,7 +143,7 @@ void camera_doctor(const Config *cfg, char *out, size_t size)
 { (void)cfg; snprintf(out, size, "macOS camera: AVFoundation; permission required. Virtual camera unavailable in this build.\n"); }
 CastOutput *output_open(const Config *cfg, char *error, size_t size)
 {
-    if (cfg->virtual_enabled && strcmp(cfg->output_device, "none")) {
+    if (cfg->virtual_enabled) {
         snprintf(error, size, "Virtual camera is not supported on macOS yet; set output.enabled=false or use --no-virtual");
         return NULL;
     }
