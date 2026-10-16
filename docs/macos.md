@@ -116,11 +116,29 @@ bearings, and virtual-camera activation incorrectly succeeding with null output.
 The build now checks dependencies before compiling and invalidates object files
 when dependency versions or flags change.
 
-Hardware validation remains pending the Screen Recording permission grant:
-the daemon correctly refuses capture without it. Display frames, panel exclusion,
-camera, microphone, system audio, physical A/V sync, permission revocation, and
-sleep/wake have not yet been established by these synthetic checks. Linux tests
-have not been rerun on this Mac; Linux's secure-wipe path remains unchanged.
+Hardware checks on the MacBook established display capture, the built-in camera,
+microphone, system audio, MKV recording, and lossless MP4 finalization. The panel
+was kept visible during a camera/microphone test and was absent from the recorded
+desktop. A visible clap and its audio transient aligned within about 100 ms in a
+short recording; this is not a long-duration drift measurement. System audio was
+also tested separately with the microphone off. Privacy pause produced the
+neutral Paused frame and exactly silent decoded audio while a tone was playing;
+resume restored audio. Closing the panel left the daemon alive, and reopening it
+reattached. SIGKILL during a disposable hardware recording left a decodable MKV
+with 179 video frames and audio.
+
+Native testing also found that CGDisplayPixelsWide/High returned logical Retina
+dimensions (1512x982). The capture configuration and screen list now use the
+active display mode's physical pixels (3024x1964), with the existing 8192-pixel
+bound. The fixed build was rebuilt, checked, packaged, granted screen permission,
+and used for another hardware recording. Reapplying microphone settings now
+restarts an engine that has stopped after an interruption.
+
+The daemon correctly refuses capture without a matching permission grant. Live
+permission revocation, sleep/wake, external displays, sustained performance, and
+long-duration A/V drift remain untested. Linux tests have not been rerun on this
+Mac; Linux's secure-wipe path remains unchanged. Homebrew runtime libraries here
+require newer macOS than Cast's nominal source deployment target.
 
 Available adapters: display capture through ScreenCaptureKit, camera through
 AVFoundation, default microphone through AVAudioEngine, system audio through
