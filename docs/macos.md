@@ -138,6 +138,12 @@ executable, a further seven-second MP4 finalized with 210 decoded video frames,
 329 decoded AAC frames, visible camera video, and a captured system test tone.
 Both audio inputs and the camera were disabled after verification.
 
+Subsequent decoded-waveform inspection found intermittent gaps in the recorded
+system test tone, including with the microphone disabled. Audio presence and
+privacy checks passed, but continuous audio quality is not yet validated; this
+macOS issue remains open. The short clap alignment check does not establish
+continuous audio delivery.
+
 The daemon correctly refuses capture without a matching permission grant. Live
 permission revocation, sleep/wake, external displays, sustained performance, and
 long-duration A/V drift remain untested. Linux tests have not been rerun on this
