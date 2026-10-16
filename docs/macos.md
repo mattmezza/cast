@@ -176,8 +176,8 @@ ScreenCaptureKit, composition, recording, and the existing control panel.
 
 This port does not implement virtual camera, virtual microphone, RTMP streaming,
 window/region selection, or global input annotations/hotkeys. Native preview and
-countdown windows are supported. Unsupported operations report errors. Pro is
-not part of this initial build.
+countdown windows are supported. Unsupported operations report errors. Pro is supported for local development with controlled LGPL media and CPU
+Whisper inference; see the sibling private repository’s docs/development.md.
 
 Before distributing beyond a local developer build, validate on hardware, bundle
 and audit dylibs/licenses, add a proper app icon and permission onboarding, and
@@ -187,3 +187,19 @@ Media I/O camera extension; virtual audio also needs a separate device solution.
 References: [ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit),
 [Homebrew SDL3_ttf](https://formulae.brew.sh/formula/sdl3_ttf), and
 [Apple capture authorization](https://developer.apple.com/documentation/avfoundation/requesting-authorization-to-capture-and-save-media).
+
+## Pro development and standalone bundles
+
+The sibling Pro checkout now integrates through `Makefile.macos`. Build the
+controlled SDKs explicitly, then use `make pro-dev` from the private checkout.
+The default macOS development SDK locations are `build/deps-lgpl-macos` and
+`build/deps-stt-macos/profile.json` in the public checkout. System/GPL FFmpeg is
+rejected for Pro, and macOS official Pro distribution remains disabled.
+
+`make macos-app MACOS_STANDALONE=1` copies the complete linked dylib closure,
+rewrites library paths, includes dependency notices, creates the website icon,
+and ad-hoc signs `build/macos/Super Screencast.app`. The app records the highest
+minimum macOS version among its runtime libraries, which can exceed the source
+deployment target. For Pro, pass the same `EDITION=pro MEDIA_PROFILE=lgpl` and
+speech SDK variables as the executable build; its bundle also includes the speech
+helper and controlled CPU module. These apps are not notarized.

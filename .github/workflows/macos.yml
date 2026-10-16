@@ -32,7 +32,7 @@ jobs:
       - name: Run tests without capture permissions
         run: make check-macos
       - name: Archive development bundle
-        run: ditto -c -k --sequesterRsrc --keepParent build/macos/SuperScreencast.app build/macos/SuperScreencast-dev.zip
+        run: ditto -c -k --sequesterRsrc --keepParent "build/macos/Super Screencast.app" build/macos/SuperScreencast-dev.zip
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: superscreencast-macos-development

@@ -10,6 +10,7 @@
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
+static int fail(char *e, size_t n, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
 static int fail(char *e, size_t n, const char *fmt, ...)
 {
     va_list ap;

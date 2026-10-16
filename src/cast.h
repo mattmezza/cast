@@ -5,7 +5,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#define CAST_VERSION "0.10.3"
+#define CAST_VERSION "0.10.4"
 #ifndef CAST_APPLICATION_NAME
 #define CAST_APPLICATION_NAME "cast"
 #endif

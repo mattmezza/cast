@@ -10,7 +10,7 @@ import subprocess
 import tarfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-PUBLIC = ('Makefile', '.clang-format', '.gitignore', 'README.md', 'PRODUCT.md',
+PUBLIC = ('Makefile', 'Makefile.macos', '.clang-format', '.gitignore', 'README.md', 'PRODUCT.md',
           'DESIGN.md', 'LICENSE', 'CONTRIBUTING.md', 'BRANDING.md', 'licenses', 'src',
           'vendor', 'assets', 'completions', 'tests', 'docs', 'examples', 'packaging',
           'tools', '.github')

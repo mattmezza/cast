@@ -95,18 +95,19 @@ def profile(args):
         libraries = data.get('libraries', {})
         if not libraries:
             raise ValueError('media profile has no verified library inventory')
-        actual_files = {str(p.relative_to(base)) for p in (base / 'prefix/lib').glob('*.so*')
+        library_glob = '*.dylib' if data.get('platform') == 'darwin' else '*.so*'
+        actual_files = {str(p.relative_to(base)) for p in (base / 'prefix/lib').glob(library_glob)
                         if p.is_file() and not p.is_symlink()}
         if actual_files != set(libraries):
             raise ValueError('controlled tree contains uncatalogued or missing shared libraries')
-        for link in (base / 'prefix/lib').glob('*.so*'):
+        for link in (base / 'prefix/lib').glob(library_glob):
             if link.is_symlink() and (link.readlink().is_absolute() or '..' in link.readlink().parts or not link.resolve().is_relative_to(base / 'prefix/lib')):
                 raise ValueError('controlled library symlink escapes relocatable media directory')
         for name, sha in libraries.items():
             p = base / name
             if not p.resolve().is_relative_to(base) or not p.is_file() or digest(p) != sha:
                 raise ValueError(f'media profile provenance mismatch: {name}')
-        codec = next((base / 'prefix/lib').glob('libavcodec.so.*'), None)
+        codec = next((base / 'prefix/lib').glob('libavcodec*.dylib' if data.get('platform') == 'darwin' else 'libavcodec.so.*'), None)
         if not codec:
             raise ValueError('controlled libavcodec missing')
         av = ctypes.CDLL(str(codec))

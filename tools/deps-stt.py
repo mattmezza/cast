@@ -52,7 +52,8 @@ def build(args):
                           'source_cache_required': str(args.source_git),
                           'release_eligible': False}, indent=2))
         return
-    if platform.system() != 'Linux' or platform.machine() != 'x86_64':
+    darwin = platform.system() == 'Darwin'
+    if not darwin and (platform.system() != 'Linux' or platform.machine() != 'x86_64'):
         raise ValueError('initial controlled SDK recipe supports Linux x86_64; other platforms require a reviewed recipe')
     if not args.source_git or not args.source_git.is_dir():
         raise ValueError('missing offline whisper.cpp Git source cache; no network fetch is attempted')
@@ -65,7 +66,7 @@ def build(args):
     tree = execute(git + ['ls-tree', '-r', commit])
     if any(line.startswith('160000 ') for line in tree.splitlines()):
         raise ValueError('pinned tree unexpectedly uses unmaterialized submodules')
-    for tool in ('cmake', 'cc', 'c++', 'ar', 'pkg-config', 'ldd', 'readelf'):
+    for tool in ('cmake', 'cc', 'c++', 'ar', 'pkg-config', *(('otool', 'install_name_tool') if darwin else ('ldd', 'readelf'))):
         if not shutil.which(tool):
             raise ValueError(f'missing build-only tool: {tool}')
     target = args.output.resolve()
@@ -127,7 +128,7 @@ def build(args):
     commands = [['cmake', '-S', str(source), '-B', str(build_dir),
                  '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_POSITION_INDEPENDENT_CODE=ON',
                  '-DCMAKE_INSTALL_PREFIX=' + str(prefix), '-DCMAKE_INSTALL_LIBDIR=lib',
-                 '-DCMAKE_INSTALL_RPATH=$ORIGIN', '-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON',
+                 '-DCMAKE_INSTALL_RPATH=' + ('@loader_path' if darwin else '$ORIGIN'), '-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON',
                  '-DFETCHCONTENT_FULLY_DISCONNECTED=ON', '-DFETCHCONTENT_UPDATES_DISCONNECTED=ON',
                  '-DWHISPER_BUILD_COMMIT=' + commit,
                  '-DGGML_BUILD_COMMIT=' + commit]
@@ -141,38 +142,56 @@ def build(args):
             raise ValueError(f'controlled build failed; evidence preserved: {materials}/command-{index}.log')
     cache_text = (build_dir / 'CMakeCache.txt').read_text()
     for name, value in options.items():
-        if f'{name}:BOOL={value}' not in cache_text:
+        if f'{name}:BOOL={value}' not in cache_text and not (name == 'WHISPER_COMMON_FFMPEG' and f'{name}:UNINITIALIZED=OFF' in cache_text):
             raise ValueError(f'required CPU-only build option was not honored: {name}')
     libdir = prefix / 'lib'
+    extension = '.dylib' if darwin else '.so'
     generic = prefix / 'bin/libggml-cpu.so'
-    generic.rename(libdir / 'libggml-cpu-generic.so')
+    generic.rename(libdir / ('libggml-cpu-generic' + extension))
     if args.vulkan:
         (prefix / 'bin/libggml-vulkan.so').rename(libdir / 'libggml-vulkan.so')
-    variant_dir = target / 'compile-avx2'
-    variant_configure = commands[0].copy()
-    variant_configure[variant_configure.index('-B') + 1] = str(variant_dir)
-    variant_configure += [f'-D{name}={value}' for name, value in lock['cpu_variant_options'].items()]
-    variant_commands = [variant_configure,
-                        ['cmake', '--build', str(variant_dir), '--target', 'ggml-cpu', '--parallel', str(args.jobs)]]
-    for index, command in enumerate(variant_commands):
-        result = subprocess.run(command, env=env, text=True, capture_output=True)
-        (materials / f'avx2-command-{index}.log').write_text(result.stdout + result.stderr)
-        if result.returncode:
-            raise ValueError('controlled AVX2 build failed; see preserved build evidence')
-    variant_cache = (variant_dir / 'CMakeCache.txt').read_text()
-    for name, value in {**options, **lock['cpu_variant_options']}.items():
-        if f'{name}:BOOL={value}' not in variant_cache:
-            raise ValueError(f'AVX2 build option was not honored: {name}')
-    shutil.copy2(variant_dir / 'bin/libggml-cpu.so', libdir / 'libggml-cpu-avx2.so')
-    commands += variant_commands
-    shutil.copy2(variant_dir / 'CMakeCache.txt', materials / 'avx2-CMakeCache.txt')
-    shutil.copy2(variant_dir / 'compile_commands.json', materials / 'avx2-compile_commands.json')
+    if not darwin:
+        variant_dir = target / 'compile-avx2'
+        variant_configure = commands[0].copy()
+        variant_configure[variant_configure.index('-B') + 1] = str(variant_dir)
+        variant_configure += [f'-D{name}={value}' for name, value in lock['cpu_variant_options'].items()]
+        variant_commands = [variant_configure,
+                            ['cmake', '--build', str(variant_dir), '--target', 'ggml-cpu', '--parallel', str(args.jobs)]]
+        for index, command in enumerate(variant_commands):
+            result = subprocess.run(command, env=env, text=True, capture_output=True)
+            (materials / f'avx2-command-{index}.log').write_text(result.stdout + result.stderr)
+            if result.returncode:
+                raise ValueError('controlled AVX2 build failed; see preserved build evidence')
+        variant_cache = (variant_dir / 'CMakeCache.txt').read_text()
+        for name, value in {**options, **lock['cpu_variant_options']}.items():
+            if f'{name}:BOOL={value}' not in variant_cache:
+                raise ValueError(f'AVX2 build option was not honored: {name}')
+        shutil.copy2(variant_dir / 'bin/libggml-cpu.so', libdir / 'libggml-cpu-avx2.so')
+        commands += variant_commands
+        shutil.copy2(variant_dir / 'CMakeCache.txt', materials / 'avx2-CMakeCache.txt')
+        shutil.copy2(variant_dir / 'compile_commands.json', materials / 'avx2-compile_commands.json')
     # Parakeet is an unused upstream target; it is not part of our SDK closure.
-    for unused in libdir.glob('libparakeet.so*'):
+    for unused in libdir.glob('libparakeet*'):
         unused.unlink()
+    if darwin:
+        dylibs = list(libdir.glob('*.dylib'))
+        names = {p.name for p in dylibs}
+        for library in dylibs:
+            if library.is_symlink():
+                continue
+            subprocess.run(['install_name_tool', '-id', '@rpath/' + library.name, str(library)], check=True)
+            for line in execute(['otool', '-L', str(library)]).splitlines()[1:]:
+                dep = line.strip().split(' (', 1)[0]
+                if dep == '@rpath/' + library.name:
+                    continue
+                if Path(dep).name in names:
+                    subprocess.run(['install_name_tool', '-change', dep, '@loader_path/' + Path(dep).name, str(library)], check=True)
+                elif not dep.startswith(('/usr/lib/', '/System/Library/')):
+                    raise ValueError('ambient macOS speech dependency: ' + dep)
+            subprocess.run(['codesign', '--force', '--sign', '-', str(library)], check=True)
     inventory = []
-    for library in sorted(libdir.glob('*.so*')):
-        if library.read_bytes()[:4] != b'\x7fELF':
+    for library in sorted(libdir.glob('*.dylib' if darwin else '*.so*')):
+        if not darwin and library.read_bytes()[:4] != b'\x7fELF':
             raise ValueError(f'missing ELF speech library: {library}')
         inventory.append({'path': str(library), 'sha256': sha(library),
                           'package': 'whisper.cpp' if library.name.startswith('libwhisper') else 'ggml',
@@ -185,14 +204,14 @@ def build(args):
     pc.write_text(f'prefix={prefix}\nlibdir=${{prefix}}/lib\nincludedir=${{prefix}}/include\n'
                   f'Name: whisper\nDescription: Cast pinned bundled-ggml CPU SDK\nVersion: {lock["version"]}\n'
                   'Cflags: -I${includedir} -DCAST_GGML_BUNDLED_CPU=1'
-                  + (' -DCAST_GGML_BUNDLED_VULKAN=1' if args.vulkan else '') + '\nLibs: -L${libdir} -lwhisper -lggml -lggml-base -ldl -pthread -lm\n')
+                  + (' -DCAST_GGML_BUNDLED_VULKAN=1' if args.vulkan else '') + '\nLibs: -L${libdir} -lwhisper -lggml -lggml-base ' + ('-Wl,-rpath,${libdir}' if darwin else '-ldl -pthread -lm') + '\n')
     pc_env = {**env, 'PKG_CONFIG_LIBDIR': str(pc.parent)}
     cflags = execute(['pkg-config', '--cflags', 'whisper'], env=pc_env)
     libs = execute(['pkg-config', '--libs', '--static', 'whisper'], env=pc_env)
     smoke = materials / 'cpu-smoke.cpp'
     smoke.write_text('#include "whisper.h"\n#include "ggml-backend.h"\n#include <cstdio>\n'
                      'int main(){ auto p=whisper_context_default_params(); p.use_gpu=false;\n'
-                     f'if(!ggml_backend_load("{libdir}/libggml-cpu-generic.so"))return 3;\n'
+                     f'if(!ggml_backend_load("{libdir}/libggml-cpu-generic{extension}"))return 3;\n'
                      'size_t n=ggml_backend_dev_count(); if(!n)return 1;\n'
                      'for(size_t i=0;i<n;++i)if(ggml_backend_dev_type(ggml_backend_dev_get(i))'
                      '!=GGML_BACKEND_DEVICE_TYPE_CPU)return 2;\n'
@@ -200,16 +219,16 @@ def build(args):
     smoke_bin = materials / 'cpu-smoke'
     compile_smoke = ['c++', '-std=c++17', str(smoke)] + shlex.split(cflags + ' ' + libs) + ['-o', str(smoke_bin)]
     execute(compile_smoke, env=pc_env)
-    for item in inventory:
+    for item in ([] if darwin else inventory):
         dynamic = execute(['readelf', '-d', item['path']], env=env)
         for line in dynamic.splitlines():
             if ('RUNPATH' in line or 'RPATH' in line) and '[$ORIGIN]' not in line:
                 raise ValueError('speech library has a nonrelocatable or ambient runtime search path')
     smoke_env = {**env, 'LD_LIBRARY_PATH': str(libdir)}
     smoke_result = execute([str(smoke_bin)], env=smoke_env)
-    closure = execute(['ldd', str(smoke_bin)], env=smoke_env)
+    closure = execute(['otool', '-L', str(smoke_bin)] if darwin else ['ldd', str(smoke_bin)], env=smoke_env)
     linked_names = re.findall(r'^\s*(\S+)\s+=>', closure, re.MULTILINE)
-    if 'not found' in closure or any(x in name.lower() for name in linked_names for x in ('gomp', 'cuda', 'vulkan', 'opencl')) or any(('libwhisper' in line or 'libggml' in line) and str(libdir) not in line for line in closure.splitlines()):
+    if 'not found' in closure or any(x in name.lower() for name in linked_names for x in ('gomp', 'cuda', 'vulkan', 'opencl')) or (not darwin and any(('libwhisper' in line or 'libggml' in line) and str(libdir) not in line for line in closure.splitlines())):
         raise ValueError('CPU smoke linked an ambient speech/accelerator runtime')
     (materials / 'cpu-smoke-result.txt').write_text(smoke_result + '\n' + closure + '\n')
     commands.append(compile_smoke)
@@ -224,7 +243,7 @@ def build(args):
     shutil.copy2(LOCK, materials / LOCK.name)
     shutil.copy2(__file__, materials / 'deps-stt.py')
     notices = target / 'license-texts'
-    notices.mkdir()
+    notices.mkdir(exist_ok=True)
     # This pinned project root LICENSE credits the ggml authors and applies to
     # its bundled tree. Preserve a separate ggml LICENSE if the pin has one.
     for origin, name in ((source / 'LICENSE', 'whisper-MIT.txt'),
@@ -255,7 +274,8 @@ def build(args):
     profile = {'schema': 1, 'profile': 'cast-pro-speech-vulkan' if args.vulkan else 'cast-pro-speech-cpu', 'cpu_only': not args.vulkan,
                'build_kind': 'controlled-source', 'release_eligible': False,
                'cpu_backend': '', 'backend_loading': 'explicit bundled CPU fallbacks and optional Vulkan; no backend search',
-               'cpu_variant_options': lock['cpu_variant_options'],
+               'platform': 'darwin' if darwin else 'linux',
+               'cpu_variant_options': {} if darwin else lock['cpu_variant_options'],
                'source_commit': commit, 'source_archive_sha256': sha(source_archive),
                'lock_sha256': sha(LOCK), 'recipe_sha256': sha(__file__),
                'whisper_version': lock['version'], 'ggml_version': lock['ggml']['version'],

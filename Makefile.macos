@@ -7,9 +7,64 @@ PANEL ?= 1
 MACOS_MIN ?= 13.0
 CFLAGS ?= -O2 -g
 WARN = -Wall -Wextra -Wformat=2 -Wstrict-prototypes -Wmissing-prototypes
-VERSION = 0.10.3
+VERSION = 0.10.4
+CXX = clang++
+PREFIX ?= /usr/local
+MEDIA_PROFILE ?= system
+PRO_ROOT ?= $(abspath ../cast-pro)
+PRO_DIR = $(if $(wildcard $(PRO_ROOT)/pro/src/pro_provider.c),$(PRO_ROOT)/pro,$(PRO_ROOT))
+PRO_TRUST_HEADER ?= $(PRO_DIR)/src/trusted_keys.h
+LGPL_ROOT ?= $(CURDIR)/build/deps-lgpl
+OFFICIAL_RELEASE ?= 0
+RELEASE_TIMESTAMP ?= 0
+STT ?= 0
+STT_ENGINEERING ?= 0
+STT_GPU_ENGINEERING ?= 0
+STT_PROFILE ?= $(CURDIR)/build/deps-stt/profile.json
+STT_CFLAGS ?= $(shell pkg-config --cflags whisper)
+STT_LIBS ?= $(shell pkg-config --libs whisper)
+STT_CPU_BACKEND ?=
+STT_HELPER_PATH ?= $(PREFIX)/libexec/cast-pro-stt-helper
+BINARY = cast
+APP_NAME = Super Screencast
+PRIVATE_REVISION = not-linked
+ifeq ($(filter $(EDITION),community pro),)
+$(error EDITION must be community or pro)
+endif
+ifeq ($(filter $(MEDIA_PROFILE),system lgpl),)
+$(error MEDIA_PROFILE must be system or lgpl)
+endif
+ifneq ($(filter-out 0 1,$(STT) $(STT_ENGINEERING) $(STT_GPU_ENGINEERING)),)
+$(error STT STT_ENGINEERING STT_GPU_ENGINEERING must be 0 or 1)
+endif
+ifeq ($(OFFICIAL_RELEASE),1)
+$(error macOS builds are local development builds; distribution auditing/signing is not implemented)
+endif
+ifeq ($(STT),1)
+ifneq ($(EDITION),pro)
+$(error STT=1 requires EDITION=pro)
+endif
+endif
+ifeq ($(STT_GPU_ENGINEERING),1)
+$(error macOS Vulkan engineering builds are not supported)
+endif
 ifeq ($(EDITION),pro)
-$(error The macOS port currently supports EDITION=community only)
+BINARY = cast-pro
+APP_NAME = Super Screencast Pro
+ifneq ($(MEDIA_PROFILE),lgpl)
+$(error Pro requires MEDIA_PROFILE=lgpl; system GPL media is forbidden)
+endif
+ifeq ($(wildcard $(PRO_DIR)/src/pro_provider.c),)
+$(error Missing private Pro provider under $(PRO_ROOT))
+endif
+PRO_SOURCES = $(PRO_DIR)/src/pro_provider.c $(PRO_DIR)/src/license_verifier.c $(PRO_DIR)/src/bounded_json.c $(wildcard $(PRO_DIR)/src/cinematic_motion/*.c $(PRO_DIR)/src/speech/*.c $(PRO_DIR)/src/notes/*.c)
+PRIVATE_REVISION = $(shell git -C '$(PRO_ROOT)' rev-parse HEAD)
+CPPFLAGS += -DCAST_EDITION_PRO=1 -DWITH_PRO -I$(PRO_DIR)/src -DCAST_TRUST_HEADER='"$(PRO_TRUST_HEADER)"'
+endif
+ifeq ($(MEDIA_PROFILE),lgpl)
+PKG_CONFIG = env PKG_CONFIG_PATH=$(LGPL_ROOT)/prefix/lib/pkgconfig pkg-config
+CPPFLAGS += -DCAST_MEDIA_PROFILE_LGPL=1
+LDFLAGS += -Wl,-rpath,$(LGPL_ROOT)/prefix/lib
 endif
 ifneq ($(filter-out 0 1,$(PANEL)),)
 $(error PANEL must be 0 or 1)
@@ -18,23 +73,27 @@ PACKAGES = fontconfig freetype2 libavcodec libavformat libavutil libswscale libs
 ifeq ($(PANEL),1)
 PACKAGES += sdl3 sdl3-ttf
 endif
-ifneq ($(MAKECMDGOALS),clean)
+ifeq ($(EDITION),pro)
+PACKAGES += libsodium
+endif
+ifeq ($(filter clean deps-lgpl deps-stt,$(MAKECMDGOALS)),)
 ifeq ($(shell $(PKG_CONFIG) --exists $(PACKAGES) 'libavcodec >= 61.19.100' && echo yes),)
-$(error Missing macOS build dependencies or FFmpeg is too old; run brew install pkgconf ffmpeg fontconfig freetype sdl3 sdl3_ttf and brew upgrade ffmpeg)
+$(error Missing macOS build dependencies or FFmpeg is too old; run brew install pkgconf ffmpeg fontconfig freetype sdl3 sdl3_ttf libsodium; Pro also needs make deps-lgpl)
 endif
 endif
 PKG_CFLAGS := $(shell $(PKG_CONFIG) --cflags $(PACKAGES))
 PKG_LIBS := $(shell $(PKG_CONFIG) --libs $(PACKAGES))
 PKG_VERSIONS := $(shell $(PKG_CONFIG) --modversion $(PACKAGES))
-INTEGRATION_ID := $(shell { printf '%s' 'darwin:$(PANEL):$(MACOS_MIN):$(CC):$(CFLAGS):$(LDFLAGS):$(PKG_CFLAGS):$(PKG_LIBS):$(PKG_VERSIONS)'; cat src/*.[chm] src/*.S Makefile.macos; } | shasum -a 256 | cut -c1-32)
-BUILD = build/macos-p$(PANEL)-$(INTEGRATION_ID)
+INTEGRATION_ID := $(shell { printf '%s' 'darwin:$(EDITION):$(MEDIA_PROFILE):$(PRO_ROOT):$(PRO_TRUST_HEADER):$(STT):$(STT_CFLAGS):$(STT_LIBS):$(STT_CPU_BACKEND):$(STT_HELPER_PATH):$(STT_PROFILE):$(STT_ENGINEERING):$(CPPFLAGS):$(PANEL):$(MACOS_MIN):$(CC):$(CFLAGS):$(LDFLAGS):$(PRIVATE_REVISION):$(RELEASE_TIMESTAMP):$(PKG_CFLAGS):$(PKG_LIBS):$(PKG_VERSIONS)'; cat src/*.[chm] src/*.S Makefile.macos $(PRO_SOURCES) $(if $(filter pro,$(EDITION)),$(wildcard $(PRO_DIR)/src/*.h $(PRO_DIR)/src/*/*.h) $(PRO_TRUST_HEADER)) $(wildcard $(STT_PROFILE)); } | shasum -a 256 | cut -c1-32)
+BUILD = build/macos-$(EDITION)-p$(PANEL)-$(INTEGRATION_ID)
 CPPFLAGS += -Isrc -Ivendor/inih -D_DARWIN_C_SOURCE -DWITH_MACOS \
- -DCAST_APPLICATION_NAME='"cast"' -DCAST_PLATFORM='"macos-$(shell uname -m)"' \
- -DCAST_BUILD_ID='"$(INTEGRATION_ID)"' -DCAST_MEDIA_PROFILE='"system"' \
+ -DCAST_APPLICATION_NAME='"$(BINARY)"' -DCAST_PLATFORM='"macos-$(shell uname -m)"' \
+ -DCAST_BUILD_ID='"$(INTEGRATION_ID)"' -DCAST_MEDIA_PROFILE='"$(MEDIA_PROFILE)"' -DCAST_PRIVATE_REVISION='"$(PRIVATE_REVISION)"' \
  -DCAST_CORE_REVISION='"$(shell git rev-parse HEAD)"' \
  -DINI_HANDLER_LINENO=1 -DINI_CALL_HANDLER_ON_NEW_SECTION=1 -DINI_ALLOW_MULTILINE=0 \
  -DINI_ALLOW_INLINE_COMMENTS=0 -DINI_STOP_ON_FIRST_ERROR=1 -DINI_MAX_LINE=8192
 CFLAGS += -mmacosx-version-min=$(MACOS_MIN)
+LDFLAGS += -Wl,-headerpad_max_install_names
 LDLIBS = -lm -lpthread -framework Foundation -framework AVFoundation \
  -framework ScreenCaptureKit -framework CoreMedia -framework CoreVideo \
  -framework CoreGraphics -framework AudioToolbox -framework CoreAudio -framework AppKit
@@ -43,7 +102,7 @@ SOURCES = src/main.c src/commands.c src/config.c src/config_migrate.c src/state.
  src/media.c src/record.c src/stream.c src/panel_transport.c src/panel_lifecycle.c \
  src/help_commands.c src/update.c src/edition.c src/license_store.c src/edition_extensions.c \
  src/workflow_schema.c src/edition_service.c src/media_codec.c src/app_runtime.c \
- src/os_compat.c vendor/inih/ini.c
+ src/os_compat.c vendor/inih/ini.c $(PRO_SOURCES)
 OBJC_SOURCES = src/platform_macos.m src/audio_macos.m src/webcam_macos.m src/preview_macos.m
 ASSETS = $(BUILD)/src/command_assets.o
 ifeq ($(PANEL),1)
@@ -52,11 +111,20 @@ CPPFLAGS += -DWITH_PANEL -Ivendor/clay
 ASSETS += $(BUILD)/src/panel_font.o
 endif
 OBJECTS = $(SOURCES:%.c=$(BUILD)/%.o) $(OBJC_SOURCES:%.m=$(BUILD)/%.o) $(ASSETS)
+ifeq ($(EDITION):$(STT),pro:1)
+CPPFLAGS += -DCAST_WITH_STT -DCAST_STT_HELPER_PATH='"$(STT_HELPER_PATH)"'
+STT_HELPER = $(BUILD)/cast-pro-stt-helper
+STT_IDENTITY_SOURCES = src/os_compat.c src/edition.c src/license_store.c $(PRO_DIR)/src/license_verifier.c $(PRO_DIR)/src/bounded_json.c
+STT_IDENTITY_OBJECTS = $(STT_IDENTITY_SOURCES:%.c=$(BUILD)/helper/%.o)
+endif
 .PHONY: all FORCE macos-app check check-macos check-unit clean
-all: cast
+all: $(BINARY) $(STT_HELPER)
 FORCE:
-cast: FORCE $(OBJECTS)
+$(BINARY): FORCE $(OBJECTS) $(STT_HELPER)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) $(PKG_LIBS) $(LDLIBS)
+ifeq ($(EDITION),pro)
+	@python3 -c 'import json,subprocess; i=json.loads(subprocess.check_output(["./cast-pro","edition","--json"])); assert i["edition"]=="pro" and i["media_profile"]=="lgpl" and i["extension_api"]==2' || { rm -f cast-pro; exit 1; }
+endif
 $(BUILD)/%.o: %.c src/cast.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -MMD -MP -c $< -o $@
@@ -70,15 +138,15 @@ $(BUILD)/src/panel_font.o: src/panel_font.S assets/fonts/Inter.ttf
 	@mkdir -p $(dir $@)
 	$(CC) -mmacosx-version-min=$(MACOS_MIN) -c $< -o $@
 -include $(OBJECTS:.o=.d)
-macos-app: cast
+macos-app: $(BINARY) $(STT_HELPER)
 ifeq ($(PANEL),1)
-	python3 packaging/macos-app.py --binary ./cast --output build/macos/SuperScreencast.app
+	python3 packaging/macos-app.py --binary ./$(BINARY) --output "build/macos/$(APP_NAME).app" $(if $(STT_HELPER),--stt-helper $(STT_HELPER) --speech-profile $(STT_PROFILE)) $(if $(filter 1,$(MACOS_STANDALONE)),--standalone) $(if $(filter lgpl,$(MEDIA_PROFILE)),--media-root '$(LGPL_ROOT)')
 else
 	@echo 'macos-app requires PANEL=1' >&2; exit 1
 endif
 CORE_SOURCES = src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c \
  src/compositor.c src/composition_assets.c src/presentation_text.c src/config.c src/state.c \
- src/os_compat.c vendor/inih/ini.c
+ src/os_compat.c vendor/inih/ini.c $(PRO_SOURCES)
 $(BUILD)/test_core: tests/test_core.c $(CORE_SOURCES)
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ $^ $(PKG_LIBS) $(LDLIBS)
@@ -98,7 +166,43 @@ check-unit: check-os-compat $(BUILD)/test_core $(BUILD)/test_visual $(BUILD)/tes
 	$(BUILD)/test_core
 	$(BUILD)/test_visual
 	$(BUILD)/test_macos_preview
-check check-macos: cast check-unit
-	python3 tests/test_macos_smoke.py --binary ./cast
+check check-macos: $(BINARY) check-unit
+	python3 tests/test_macos_smoke.py --binary ./$(BINARY)
 clean:
-	rm -rf build/macos-p* build/macos cast
+	rm -rf build/macos-p* build/macos-community-p* build/macos-pro-p* build/macos cast cast-pro
+
+.PHONY: edition-preflight deps-lgpl deps-stt check-pro-cli
+edition-preflight:
+	python3 packaging/audit.py profile --edition $(EDITION) --media-profile $(MEDIA_PROFILE) --lgpl-root '$(LGPL_ROOT)' --pro-root '$(PRO_ROOT)' --trust-header '$(PRO_TRUST_HEADER)' --official 0 --release-timestamp $(RELEASE_TIMESTAMP)
+ifeq ($(EDITION):$(STT),pro:1)
+	python3 packaging/speech-profile.py verify --profile '$(STT_PROFILE)' --official 0 --engineering $(STT_ENGINEERING) --cpu-backend '$(STT_CPU_BACKEND)' --cflags='$(STT_CFLAGS)' --libs='$(STT_LIBS)'
+endif
+$(OBJECTS): | edition-preflight
+deps-lgpl:
+	sh tools/deps-lgpl.sh $(DEPS_ARGS)
+deps-stt:
+	python3 tools/deps-stt.py $(DEPS_ARGS)
+check-pro-cli: $(BINARY)
+	python3 tests/test_pro_cli.py --binary ./$(BINARY) --pro-root '$(PRO_DIR)'
+ifeq ($(EDITION):$(STT),pro:1)
+$(STT_HELPER) $(STT_IDENTITY_OBJECTS) $(BUILD)/helper/whisper_helper.o: | edition-preflight
+$(BUILD)/helper/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -MMD -MP -c $< -o $@
+$(BUILD)/helper/whisper_helper.o: $(PRO_DIR)/src/speech/whisper_helper.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CPPFLAGS) $(STT_CFLAGS) -DCAST_SPEECH_HELPER_EXECUTABLE $(if $(STT_CPU_BACKEND),-DCAST_GGML_CPU_BACKEND_PATH='"$(STT_CPU_BACKEND)"') $(CFLAGS) -Wall -Wextra -Werror -std=c++17 -MMD -MP -c $< -o $@
+$(STT_HELPER): $(BUILD)/helper/whisper_helper.o $(STT_IDENTITY_OBJECTS)
+	@mkdir -p $(dir $@)
+	$(CXX) $(CFLAGS) $(LDFLAGS) -Wl,-dead_strip -o $@ $^ $(STT_LIBS) $(shell pkg-config --libs libsodium) -lpthread -lm
+-include $(STT_IDENTITY_OBJECTS:.o=.d) $(BUILD)/helper/whisper_helper.d
+endif
+
+.PHONY: install
+install: $(BINARY) $(STT_HELPER)
+	install -d '$(DESTDIR)$(PREFIX)/bin'
+	install -m755 $(BINARY) '$(DESTDIR)$(PREFIX)/bin/$(BINARY)'
+ifeq ($(EDITION):$(STT),pro:1)
+	install -d '$(DESTDIR)$(PREFIX)/libexec'
+	install -m755 '$(STT_HELPER)' '$(DESTDIR)$(PREFIX)/libexec/cast-pro-stt-helper'
+endif

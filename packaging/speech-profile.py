@@ -157,8 +157,9 @@ def verify_controlled(data, *, official=False):
     # Official profiles always require the current recipe, and the source kit
     # below must still contain the exact recipe whose hash is recorded.
     recipe_matches = data.get('recipe_sha256') == sha(recipe_path) or (
-        not official and not vulkan and data.get('recipe_sha256') ==
-        '33cd1f1d9acae7a18c3c4850c0e91acb2313a212cbd3c947103a78d6a807962e')
+        not official and not vulkan and data.get('recipe_sha256') in {
+        '33cd1f1d9acae7a18c3c4850c0e91acb2313a212cbd3c947103a78d6a807962e',
+        '4de1237e77301f0fc25915d09ae434747c4747b71973f83235bb72985483e853'})
     if (data.get('source_commit') != lock['commit'] or
             data.get('whisper_version') != lock['version'] or
             data.get('ggml_version') != lock['ggml']['version'] or
@@ -167,17 +168,22 @@ def verify_controlled(data, *, official=False):
             data.get('build_options') != options or
             data.get('cpu_backend') != ''):
         raise ValueError('controlled speech profile differs from its pinned portable backend recipe')
+    darwin = data.get('platform') == 'darwin'
+    if darwin and official:
+        raise ValueError('macOS controlled speech SDK is currently development evidence only')
     entries = data['libraries']
     import re
     expected = {'libwhisper.so', 'libggml.so', 'libggml-base.so',
                 'libggml-cpu-generic.so', 'libggml-cpu-avx2.so'}
+    if darwin:
+        expected = {'libwhisper.dylib', 'libggml.dylib', 'libggml-base.dylib', 'libggml-cpu-generic.dylib'}
     if vulkan:
         expected.add('libggml-vulkan.so')
-    names = {re.sub(r'(?<=\.so)\.[0-9.]+$', '', Path(item['path']).name) for item in entries}
-    if (names != expected or data.get('cpu_variant_options') != lock['cpu_variant_options'] or
+    names = {(re.sub(r'\.[0-9.]+(?=\.dylib$)', '', Path(item['path']).name) if darwin else re.sub(r'(?<=\.so)\.[0-9.]+$', '', Path(item['path']).name)) for item in entries}
+    if (names != expected or data.get('cpu_variant_options') != ({} if darwin else lock['cpu_variant_options']) or
             any(item.get('chosen_license') != 'MIT' or
                 sha(Path(item['path'])) != item.get('sha256') or
-                Path(item['path']).read_bytes()[:4] != b'\x7fELF' for item in entries)):
+                (Path(item['path']).read_bytes()[:4] not in (b'\xcf\xfa\xed\xfe', b'\xce\xfa\xed\xfe') if darwin else Path(item['path']).read_bytes()[:4] != b'\x7fELF') for item in entries)):
         raise ValueError('controlled speech library inventory is incomplete or has ambient libraries')
     kit = Path(data.get('corresponding_sources', ''))
     smoke = Path(data.get('cpu_smoke_result', ''))

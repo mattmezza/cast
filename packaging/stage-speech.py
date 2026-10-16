@@ -14,7 +14,7 @@ profile = json.loads(args.profile.read_text())
 args.destination.mkdir(parents=True, exist_ok=True)
 for item in profile['libraries']:
     source = Path(item['path'])
-    if '.so' not in source.name:
+    if '.so' not in source.name and source.suffix != '.dylib':
         continue
     if hashlib.sha256(source.read_bytes()).hexdigest() != item['sha256']:
         raise ValueError('Speech library changed: ' + str(source))

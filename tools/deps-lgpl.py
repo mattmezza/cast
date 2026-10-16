@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pinned Linux shared media build. Downloads only when explicitly invoked."""
+"""Pinned shared media build for Linux and macOS. Downloads only when explicitly invoked."""
 import argparse
 import hashlib
 import json
@@ -36,6 +36,7 @@ def main():
     args = parser.parse_args()
     if args.jobs < 1 or args.jobs > 128:
         parser.error("jobs must be 1..128")
+    darwin = os.uname().sysname == "Darwin"
     lock = json.loads(LOCK.read_text())
     base, cache = args.root.resolve(), args.cache.resolve()
     prefix = base / "prefix"
@@ -84,7 +85,8 @@ def main():
                        LD_LIBRARY_PATH=str(prefix / "lib"))
     environment.pop("PKG_CONFIG_SYSROOT_DIR", None)
     # Origin-based dependency runpaths retain relocatability and LGPL replacement.
-    environment["LDFLAGS"] = "-Wl,-rpath,'$$ORIGIN'"
+    origin_flags = "-Wl,-rpath,@loader_path" if darwin else "-Wl,-rpath,'$$ORIGIN'"
+    environment["LDFLAGS"] = origin_flags
     for source in lock["sources"]:
         name, version = source["name"], source["version"]
         destination = source_root / f"{name}-{version}"
@@ -112,10 +114,10 @@ def main():
         elif name == "openssl":
             steps = [["./config", "shared", "no-tests", "no-module", "no-comp", "no-zlib",
                       f"--prefix={prefix}", "--libdir=lib", "--openssldir=/etc/ssl",
-                      "-Wl,-rpath,'$$ORIGIN'"], ["make", f"-j{args.jobs}"], ["make", "install_sw"]]
+                      origin_flags], ["make", f"-j{args.jobs}"], ["make", "install_sw"]]
         elif name == "openh264":
             settings = [f"PREFIX={prefix}", "USE_ASM=Yes", "HAVE_GMP_API=No", "HAVE_GTEST=No",
-                        "LDFLAGS=-Wl,-rpath,'$$ORIGIN'"]
+                        "LDFLAGS=" + origin_flags]
             steps = [["make", f"-j{args.jobs}", "libraries", *settings],
                      ["make", "install-shared", *settings]]
         for argv in steps:
@@ -124,6 +126,9 @@ def main():
     ffmpeg = source_root / "ffmpeg-9.0.2"
     flags = [f"--prefix={prefix}", *lock["ffmpeg_flags"],
              f"--extra-cflags=-I{prefix}/include", f"--extra-ldflags=-L{prefix}/lib -Wl,-rpath,'\\$\\$\\$\\$ORIGIN'"]
+    if darwin:
+        flags[-1] = f"--extra-ldflags=-L{prefix}/lib -Wl,-rpath,@loader_path"
+        flags += ["--install-name-dir=@rpath"]
     for argv in [["./configure", *flags], ["make", f"-j{args.jobs}"], ["make", "install"]]:
         commands.append({"source": "ffmpeg", "argv": argv})
         run(argv, ffmpeg, environment, materials / "ffmpeg-build.log")
@@ -137,11 +142,25 @@ def main():
         for source in lock["sources"]:
             tar.add(cache / source["archive"], arcname="upstream/" + source["archive"])
         tar.add(materials, arcname="build-materials")
-    lib_files = [path for path in sorted((prefix / "lib").glob("*.so*"))
+    lib_files = [path for path in sorted((prefix / "lib").glob("*.dylib" if darwin else "*.so*"))
                  if path.is_file() and not path.is_symlink()]
     loader_environment = os.environ.copy()
     loader_environment.pop("LD_LIBRARY_PATH", None)
-    for library in lib_files:
+    if darwin:
+        # Rewrite every controlled edge before auditing. Absolute source prefix
+        # install names would defeat relocation and LGPL library replacement.
+        names = {p.name for p in (prefix / "lib").glob("*.dylib")}
+        for library in lib_files:
+            subprocess.run(["install_name_tool", "-id", "@rpath/" + library.name, str(library)], check=True)
+            dependencies = subprocess.check_output(["otool", "-L", str(library)], text=True).splitlines()[2:]
+            for line in dependencies:
+                dep = line.strip().split(" (", 1)[0]
+                if Path(dep).name in names:
+                    subprocess.run(["install_name_tool", "-change", dep, "@loader_path/" + Path(dep).name, str(library)], check=True)
+                elif not dep.startswith(("/usr/lib/", "/System/Library/")):
+                    raise RuntimeError(f"ambient macOS media dependency: {dep}")
+            subprocess.run(["codesign", "--force", "--sign", "-", str(library)], check=True)
+    for library in ([] if darwin else lib_files):
         dynamic = subprocess.check_output(["readelf", "-d", str(library)], text=True)
         if not any("$ORIGIN" in line and ("RUNPATH" in line or "RPATH" in line)
                    for line in dynamic.splitlines()):
@@ -157,7 +176,7 @@ def main():
                     if not resolved.is_relative_to(prefix / "lib"):
                         raise RuntimeError(f"media dependency escaped controlled tree: {line.strip()}")
     libs = {str(path.relative_to(base)): digest(path) for path in lib_files}
-    profile = {"schema": 1, "profile": "lgpl", "release_eligible": True,
+    profile = {"schema": 1, "profile": "lgpl", "platform": "darwin" if darwin else "linux", "release_eligible": not darwin,
                "configure_flags": flags, "libraries": libs, "sources": lock["sources"],
                "build_materials": "build-materials", "corresponding_sources": bundle.name,
                "corresponding_sources_sha256": digest(bundle), "patches": []}
