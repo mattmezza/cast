@@ -1539,6 +1539,9 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
         if (command_camera(a, &c, ac, av, out, n)) {
             return -1;
         }
+        if (IS(1, "list")) {
+            return 0;
+        }
         change = true;
     } else if (IS(0, "logo") || IS(0, "text")) {
         if (command_layer(&c, IS(0, "text"), ac, av, out, n)) {

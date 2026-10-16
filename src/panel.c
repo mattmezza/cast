@@ -2635,6 +2635,8 @@ static void compose_essentials(Panel *p, int section, bool shown[FIELD_COUNT])
     if (section == 0) {
         source_essentials(p, shown);
     } else if (section == 1) {
+        flow_device_picker(p, "camera.device");
+        mark_compose_field(shown, "camera.device");
         essential_field(p, "camera.visible", shown);
         compose_group("Position");
         flow_anchor_grid(p);
@@ -4730,11 +4732,11 @@ static void flow_discover_devices(Panel *p, int index)
 }
 static void flow_read_devices(Panel *p, const PanelSnapshot *fresh)
 {
-    if (!p->device_request || fresh->command_completed < p->device_request) {
+    if (!p->device_request || fresh->device_reply_id != p->device_request) {
         return;
     }
     p->device_request = 0;
-    if (!p->dropdown || p->dropdown_field < 0 || fresh->command_failed) {
+    if (!p->dropdown || p->dropdown_field < 0 || fresh->device_reply_failed) {
         return;
     }
     const char *key = fields[p->dropdown_field].key;
@@ -4743,7 +4745,7 @@ static void flow_read_devices(Panel *p, const PanelSnapshot *fresh)
         snprintf(p->device_labels[0], sizeof p->device_labels[0], "Default microphone");
         p->device_count = 1;
     }
-    const char *row = fresh->last_reply;
+    const char *row = fresh->device_reply;
     while (*row && p->device_count < 64) {
         const char *end = strchr(row, '\n');
         if (!end) {

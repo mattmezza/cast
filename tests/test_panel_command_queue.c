@@ -7,6 +7,17 @@ int main(void)
 {
     PanelClient client = {0};
     assert(!pthread_mutex_init(&client.mutex, NULL));
+    char devices[2048];
+    memset(devices, 'X', sizeof devices - 1);
+    devices[sizeof devices - 1] = 0;
+    QueuedCommand discovery = {.id = 1, .discovery = true};
+    client_acknowledge(&client, &discovery, 0, devices);
+    QueuedCommand later = {.id = 2};
+    client_acknowledge(&client, &later, -1, "unrelated failure");
+    assert(client.snapshot.device_reply_id == 1 && !client.snapshot.device_reply_failed);
+    assert(!strcmp(client.snapshot.device_reply, devices));
+    assert(!strcmp(client.snapshot.last_reply, "unrelated failure"));
+    client.completed = 0;
     for (unsigned round = 0; round < 5; ++round) {
         uint64_t first = client.completed + 1;
         for (unsigned i = 1; i < PANEL_QUEUE; ++i) {

@@ -534,6 +534,17 @@ int main(int argc, char **argv)
     assert(snapshot.daemon_generation != client_generation && snapshot.state.virtual_paused);
     assert(snapshot.config.radius != 37); /* Session edits were never persisted. */
     assert(send_command(&config, reply.generation, 2, virtual_resume) < 0);
+    /* Discovery must reach the UI intact even when another ack arrives before
+     * the next snapshot. Uses whatever cameras exist; none is also valid. */
+    uint64_t discovery_id = snapshot.command_queued + 1;
+    const char *cameras[] = {"camera", "list"};
+    queue(client, 2, cameras);
+    queue(client, 2, pause);
+    snapshot = wait_client(client, true, discovery_id + 1);
+    assert(snapshot.device_reply_id == discovery_id && !snapshot.device_reply_failed);
+    assert(snapshot.device_reply[0]);
+    assert(strstr(snapshot.device_reply, "/dev/video") ||
+           strstr(snapshot.device_reply, "No accessible V4L2"));
     CMD(&config, true, "quit");
     assert(waitpid(daemon, &status, 0) == daemon && WIFEXITED(status) && !WEXITSTATUS(status));
     panel_client_close(client);

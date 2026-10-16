@@ -7,7 +7,7 @@
 #include <sys/types.h>
 
 /* Private protocol: both ends must come from the same build and struct layout. */
-#define PANEL_PROTOCOL_VERSION 3u
+#define PANEL_PROTOCOL_VERSION 4u
 #define PANEL_PREVIEW_WIDTH 640
 #define PANEL_PREVIEW_HEIGHT 360
 typedef struct {
@@ -26,6 +26,10 @@ typedef struct {
     char current_preset[64];
     char record_encoder[64], record_encoder_detail[256];
     char audio_status[4096], exclusion[256], error[CAST_ERR], last_reply[CAST_ERR];
+    /* Discovery replies survive later command acknowledgements until consumed. */
+    uint64_t device_reply_id;
+    bool device_reply_failed;
+    char device_reply[CAST_IPC_MAX];
 } PanelSnapshot;
 typedef struct PanelClient PanelClient;
 /* Connection/reconnection and acknowledged commands run on a bounded worker. */

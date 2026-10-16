@@ -76,6 +76,8 @@ Background fields change with the selected mode rather than exposing unrelated c
 Per-output click/keystroke visibility appears once as a three-column matrix.
 
 Enums and discovered devices use keyboard-operable, scrollable choice pickers.
+The Camera page shows its device picker above the composition controls; select a
+different camera there to switch immediately without restarting the daemon.
 Color pickers offer swatches, editable #RRGGBB text and **Pick from screen**.
 Swatches apply immediately. Invalid hex stays visible and never reaches the daemon.
 On X11, Pick from screen changes the pointer to a crosshair with a small swatch

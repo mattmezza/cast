@@ -54,6 +54,7 @@ typedef struct {
     uint64_t id;
     int reply_timeout;
     bool privacy_priority;
+    bool discovery;
 } QueuedCommand;
 struct PanelClient {
     Config config;
@@ -597,6 +598,9 @@ static void client_refresh(PanelClient *c)
         snapshot.command_completed = c->completed;
         snapshot.command_failed = c->snapshot.command_failed;
         snprintf(snapshot.last_reply, sizeof snapshot.last_reply, "%s", c->snapshot.last_reply);
+        snapshot.device_reply_id = c->snapshot.device_reply_id;
+        snapshot.device_reply_failed = c->snapshot.device_reply_failed;
+        memcpy(snapshot.device_reply, c->snapshot.device_reply, sizeof snapshot.device_reply);
         c->snapshot = snapshot;
     }
     pthread_mutex_unlock(&c->mutex);
@@ -643,6 +647,11 @@ static void client_acknowledge(PanelClient *c, const QueuedCommand *command, int
     }
     c->snapshot.command_failed = result != 0;
     snprintf(c->snapshot.last_reply, sizeof c->snapshot.last_reply, "%s", reply);
+    if (command->discovery) {
+        c->snapshot.device_reply_id = command->id;
+        c->snapshot.device_reply_failed = result != 0;
+        snprintf(c->snapshot.device_reply, sizeof c->snapshot.device_reply, "%s", reply);
+    }
     pthread_mutex_unlock(&c->mutex);
 }
 static void client_service_privacy(PanelClient *c)
@@ -702,7 +711,7 @@ static void *client_worker(void *data)
         }
         pthread_mutex_unlock(&c->mutex);
         if (have_command) {
-            char reply[CAST_ERR];
+            char reply[CAST_IPC_MAX];
             int result = client_execute(c, &command, reply, sizeof reply);
             client_acknowledge(c, &command, result, reply);
         }
@@ -782,6 +791,9 @@ bool panel_client_snapshot(PanelClient *c, PanelSnapshot *snapshot)
         fresh.daemon_generation == c->generation) {
         fresh.command_failed = c->snapshot.command_failed;
         snprintf(fresh.last_reply, sizeof fresh.last_reply, "%s", c->snapshot.last_reply);
+        fresh.device_reply_id = c->snapshot.device_reply_id;
+        fresh.device_reply_failed = c->snapshot.device_reply_failed;
+        memcpy(fresh.device_reply, c->snapshot.device_reply, sizeof fresh.device_reply);
         *snapshot = fresh;
     } else {
         *snapshot = c->snapshot;
@@ -861,6 +873,9 @@ int panel_client_command(PanelClient *c, int argc, const char *const *argv, char
                              .reply_timeout =
                                  cast_command_reply_timeout(argc, argv, c->config.ipc_timeout_ms),
                              .privacy_priority = cast_command_privacy_priority(argc, argv)};
+    command.discovery = argc == 2 && !strcmp(argv[1], "list") &&
+                        (!strcmp(argv[0], "camera") || !strcmp(argv[0], "screen") ||
+                         !strcmp(argv[0], "audio"));
     memcpy(command.packet, "CASTG1\0", 8);
     cast_command_header_write(command.packet + 16);
     for (int i = 0; i < argc; i++) {
@@ -871,9 +886,7 @@ int panel_client_command(PanelClient *c, int argc, const char *const *argv, char
         memcpy(command.packet + command.size, argv[i], size);
         command.size += size;
     }
-    if (pthread_mutex_trylock(&c->mutex)) {
-        return app_error(error, n, "panel busy; retry");
-    }
+    pthread_mutex_lock(&c->mutex);
     /* Reserve the final outstanding slot for privacy while a model prepares. */
     unsigned limit = command.privacy_priority ? PANEL_QUEUE : PANEL_QUEUE - 1;
     if (!c->snapshot.connected || c->count == PANEL_QUEUE || c->queued - c->completed >= limit) {

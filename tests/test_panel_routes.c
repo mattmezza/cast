@@ -16,11 +16,21 @@ static int route_setting(PanelClient *, const char *, const char *, char *, size
 #undef panel_client_setting
 
 static unsigned route_calls;
+static bool route_fake_camera;
+static char route_selected_camera[256];
 
 static int route_command(PanelClient *client, int argc, const char *const *args, char *error,
                          size_t size)
 {
     route_calls++;
+    if (route_fake_camera && argc >= 2 && !strcmp(args[0], "camera")) {
+        assert(!strcmp(args[1], "list") || !strcmp(args[1], "device"));
+        if (argc == 3) {
+            snprintf(route_selected_camera, sizeof route_selected_camera, "%s", args[2]);
+        }
+        error[0] = 0;
+        return 0;
+    }
     char *argv[CAST_MAX_ARGS];
     for (int i = 0; i < argc; i++) {
         argv[i] = (char *)args[i];
@@ -230,6 +240,53 @@ static void check_license_layout(void)
     assert(panel->view == VIEW_SETUP);
     key_event(panel, &escape);
     assert(panel->view == VIEW_OPERATE);
+    navigate_view(panel, VIEW_SECTION, 1);
+    layout(panel);
+    layout(panel); /* Settle the restored scroll position before a pointer click. */
+    int camera_index = find_field("camera.device");
+    uint32_t camera_id = 1000 + (uint32_t)camera_index * 3;
+    Widget *camera_picker = find_widget(panel, camera_id);
+    assert(camera_picker && camera_picker->enabled && camera_picker->type == W_SELECT);
+    assert(!panel->all_settings[1]);
+    route_fake_camera = true;
+    click_event(panel, camera_picker->box.x + 8, camera_picker->box.y + 8);
+    assert(panel->dropdown == camera_id && panel->device_request);
+    layout(panel);
+    assert(panel->dropdown == camera_id && flow_option_count(panel) == 0);
+    snprintf(panel->edit[camera_index].value, sizeof panel->edit[camera_index].value,
+             "/dev/video2");
+    PanelSnapshot *devices = calloc(1, sizeof *devices);
+    assert(devices);
+    devices->command_completed = panel->device_request + 1;
+    snprintf(devices->last_reply, sizeof devices->last_reply, "unrelated command reply");
+    /* A previous request must not populate this popup. */
+    flow_read_devices(panel, devices);
+    assert(panel->device_request && flow_option_count(panel) == 0);
+    devices->device_reply_id = panel->device_request;
+    /* Long format lists must not truncate the second camera out of the reply. */
+    int prefix = snprintf(devices->device_reply, sizeof devices->device_reply,
+                          "/dev/video0 Built-in Camera formats: ");
+    memset(devices->device_reply + prefix, 'X', 1200);
+    snprintf(devices->device_reply + prefix + 1200,
+             sizeof devices->device_reply - prefix - 1200,
+             "\n/dev/video2 USB Camera formats: MJPG YUYV\n");
+    flow_read_devices(panel, devices);
+    assert(flow_option_count(panel) == 2 && panel->dropdown_choice == 1);
+    char selected_camera[256];
+    flow_option_value(panel, 1, selected_camera, sizeof selected_camera);
+    assert(!strcmp(selected_camera, "/dev/video2"));
+    layout(panel);
+    Widget *second_camera = find_widget(panel, 401);
+    assert(second_camera && second_camera->enabled);
+    assert(!strcmp(second_camera->value, "/dev/video2"));
+    panel->snapshot.command_completed = panel->snapshot.command_queued;
+    click_event(panel, second_camera->box.x + 8, second_camera->box.y + 8);
+    assert(!panel->dropdown);
+    assert(!strcmp(route_selected_camera, "/dev/video2"));
+    route_fake_camera = false;
+    free(devices);
+    panel->dropdown = 0;
+    navigate_view(panel, VIEW_OPERATE, -1);
     char lock_path[4096];
     snprintf(lock_path, sizeof lock_path, "%s/.license.json.lock", directory);
     unlink(lock_path);
