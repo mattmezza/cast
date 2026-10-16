@@ -6,7 +6,8 @@
 enum Backend {
     SYNTHETIC,
     XORG,
-    WAYLAND
+    WAYLAND,
+    MACOS
 };
 struct Platform {
     enum Backend backend;
@@ -29,7 +30,11 @@ Platform *platform_open(const Config *cfg, char *e, size_t n)
     p->height = cfg->height;
     const char *backend = cfg->backend;
     if (!strcmp(backend, "auto")) {
+#ifdef WITH_MACOS
+        backend = "macos";
+#else
         backend = getenv("WAYLAND_DISPLAY") && *getenv("WAYLAND_DISPLAY") ? "wayland" : "x11";
+#endif
     }
     if (!strcmp(backend, "synthetic")) {
         p->backend = SYNTHETIC;
@@ -49,8 +54,15 @@ Platform *platform_open(const Config *cfg, char *e, size_t n)
 #else
         error(e, n, "Wayland backend was not built; rebuild with WAYLAND=1");
 #endif
+    } else if (!strcmp(backend, "macos")) {
+#ifdef WITH_MACOS
+        p->backend = MACOS;
+        p->impl = macos_open(cfg, e, n);
+#else
+        error(e, n, "macOS backend was not built");
+#endif
     } else {
-        error(e, n, "unknown capture backend; choose auto, x11, wayland or synthetic (tests)");
+        error(e, n, "unknown capture backend; choose auto, x11, wayland, macos or synthetic (tests)");
     }
     if (!p->impl) {
         free(p);
@@ -73,6 +85,9 @@ void platform_close(Platform *p)
         wayland_close(p->impl);
     }
 #endif
+#ifdef WITH_MACOS
+    if (p->backend == MACOS) macos_close(p->impl);
+#endif
     free(p);
 }
 Capabilities platform_capabilities(Platform *p)
@@ -87,6 +102,9 @@ Capabilities platform_capabilities(Platform *p)
     if (p->backend == WAYLAND) {
         return wayland_capabilities(p->impl);
     }
+#endif
+#ifdef WITH_MACOS
+    if (p->backend == MACOS) return macos_capabilities(p->impl);
 #endif
     Capabilities cap = {.capture = true, .cursor_metadata = true};
     snprintf(cap.description, sizeof(cap.description),
@@ -106,6 +124,9 @@ uint64_t platform_source_generation(Platform *p)
         return wayland_source_generation(p->impl);
     }
 #endif
+#ifdef WITH_MACOS
+    if (p->backend == MACOS) return macos_source_generation(p->impl);
+#endif
     return 1;
 }
 int platform_capture(Platform *p, Frame *f, Cursor *c, char *e, size_t n)
@@ -119,6 +140,9 @@ int platform_capture(Platform *p, Frame *f, Cursor *c, char *e, size_t n)
     if (p->backend == WAYLAND) {
         return wayland_capture(p->impl, f, c, e, n);
     }
+#endif
+#ifdef WITH_MACOS
+    if (p->backend == MACOS) return macos_capture(p->impl, f, c, e, n);
 #endif
     if (frame_alloc(f, p->width, p->height) < 0) {
         return error(e, n, "cannot allocate synthetic test frame");
@@ -184,6 +208,9 @@ int platform_command(Platform *p, Config *cfg, int argc, char **argv, char *e, s
         return wayland_command(p->impl, cfg, argc, argv, e, n);
     }
 #endif
+#ifdef WITH_MACOS
+    if (p->backend == MACOS) return macos_command(p->impl, cfg, argc, argv, e, n);
+#endif
     if (argc == 2 && !strcmp(argv[0], "screen") && !strcmp(argv[1], "list")) {
         snprintf(e, n, "synthetic: %dx%d (test source)", p->width, p->height);
         return 0;
@@ -204,6 +231,9 @@ int platform_reconfigure(Platform *p, const Config *cfg, char *e, size_t n)
     if (p->backend == WAYLAND) {
         return wayland_reconfigure(p->impl, cfg, e, n);
     }
+#endif
+#ifdef WITH_MACOS
+    if (p->backend == MACOS) return macos_reconfigure(p->impl, cfg, e, n);
 #endif
     p->width = cfg->width;
     p->height = cfg->height;
@@ -285,7 +315,11 @@ void platform_doctor(const Config *cfg, char *e, size_t n)
 {
     const char *backend = cfg->backend;
     if (!strcmp(backend, "auto")) {
+#ifdef WITH_MACOS
+        backend = "macos";
+#else
         backend = getenv("WAYLAND_DISPLAY") && *getenv("WAYLAND_DISPLAY") ? "wayland" : "x11";
+#endif
     }
 #ifdef WITH_X11
     if (!strcmp(backend, "x11") || !strcmp(backend, "xorg")) {
@@ -298,6 +332,9 @@ void platform_doctor(const Config *cfg, char *e, size_t n)
         wayland_doctor(cfg, e, n);
         return;
     }
+#endif
+#ifdef WITH_MACOS
+    if (!strcmp(backend, "macos")) { macos_doctor(cfg, e, n); return; }
 #endif
     snprintf(e, n,
              !strcmp(backend, "synthetic") ? "capture: synthetic test source (hardware not checked)"
