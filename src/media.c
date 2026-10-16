@@ -89,7 +89,11 @@ int media_camera(Media *m, Frame *f, char *e, size_t n)
         snprintf(e, n, "%s",
                  m->camera_error[0]
                      ? m->camera_error
+#ifdef __APPLE__
+                     : "camera unavailable; select a device ID from cast camera list");
+#else
                      : "camera unavailable; select a device with cast camera device /dev/videoN");
+#endif
         frame_free(f);
         return -1;
     }
@@ -348,9 +352,13 @@ int media_audio_command(Media *m, Config *cfg, int argc, char **argv, char *repl
     } else if (!strcmp(argv[2], "source")) {
         char *v = desktop ? candidate.desktop_source : candidate.mic_source;
         if (!argv[3][0] || strlen(argv[3]) >= 256) {
+#ifdef __APPLE__
+            snprintf(reply, n, "macOS audio source must be default (system-selected input or system audio)");
+#else
             snprintf(reply, n,
                      "audio source must be a nonempty name or PipeWire node id/serial, at most 255 "
                      "bytes");
+#endif
             return -1;
         }
         snprintf(v, 256, "%s", argv[3]);
@@ -467,14 +475,24 @@ void media_doctor(const Config *cfg, char *out, size_t n)
     if (a) {
         char sources[2048];
         audio_list(a, sources, sizeof(sources));
+#ifdef __APPLE__
+        snprintf(out + used, n - used,
+                 "macOS audio sources (read-only enumeration):\n%s\nMicrophone uses the input selected in System Settings > Sound. "
+                 "Desktop captures system audio through ScreenCaptureKit and requires Screen Recording permission.\n", sources);
+#else
         snprintf(out + used, n - used,
                  "PipeWire sources (read-only enumeration):\n%s\nDesktop sinks include any call "
                  "audio routed to that sink. Stream/Output/Audio selects one application; no "
                  "source fallback.\n",
                  sources);
+#endif
         audio_close(a);
     } else {
+#ifdef __APPLE__
+        snprintf(out + used, n - used, "macOS audio probe failed: %s\n", e);
+#else
         snprintf(out + used, n - used, "PipeWire probe failed: %s\n", e);
+#endif
     }
 }
 #ifdef CAST_TEST
