@@ -12,6 +12,11 @@
 #include <string.h>
 #define RATE 48000
 #define RING 96000
+@interface CastMicrophoneToken : NSObject
+@property(nonatomic, assign) CastAudio *owner;
+@end
+@implementation CastMicrophoneToken
+@end
 @interface CastDesktopAudioSink : NSObject <SCStreamOutput, SCStreamDelegate>
 @property(nonatomic, assign) CastAudio *owner;
 @end
@@ -22,6 +27,7 @@ struct CastAudio {
     float desktop_samples[RING * 2];
     uint64_t desktop_begin, desktop_end;
     AVAudioEngine *engine;
+    CastMicrophoneToken *microphone_token;
     SwrContext *resampler;
     pthread_mutex_t lock;
     Config cfg;
@@ -45,11 +51,14 @@ int audio_validate(CastAudio *a, const Config *cfg, char *error, size_t size)
 @implementation CastDesktopAudioSink
 - (void)stream:(SCStream *)stream didStopWithError:(NSError *)error
 {
+    @synchronized(self) {
     (void)stream; CastAudio *a = self.owner; if (!a) return;
     pthread_mutex_lock(&a->lock); snprintf(a->error, sizeof a->error, "Desktop capture stopped: %s", error.localizedDescription.UTF8String); pthread_mutex_unlock(&a->lock);
+    }
 }
 - (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sample ofType:(SCStreamOutputType)type
 {
+    @synchronized(self) {
     (void)stream; CastAudio *a = self.owner;
     if (!a || type != SCStreamOutputTypeAudio || !CMSampleBufferDataIsReady(sample)) return;
     const AudioStreamBasicDescription *format = CMAudioFormatDescriptionGetStreamBasicDescription(CMSampleBufferGetFormatDescription(sample));
@@ -80,6 +89,7 @@ int audio_validate(CastAudio *a, const Config *cfg, char *error, size_t size)
         }
     }
     if (retained) CFRelease(retained); if (buffers != &list) free(buffers);
+    }
 }
 @end
 static int desktop_start(CastAudio *a, char *error, size_t size)
@@ -90,7 +100,7 @@ static int desktop_start(CastAudio *a, char *error, size_t size)
     [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:YES completionHandler:^(SCShareableContent *result, NSError *err) {
         content = result; failure = err; dispatch_semaphore_signal(sem);
     }];
-    dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+    if (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC))) { snprintf(error, size, "Timed out obtaining desktop audio permission; retry after granting Screen Recording access"); return -1; }
     if (!content.displays.count) { snprintf(error, size, "Desktop audio requires Screen Recording permission: %s", failure ? failure.localizedDescription.UTF8String : "no display available"); return -1; }
     SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:content.displays.firstObject excludingWindows:@[]];
     SCStreamConfiguration *cfg = [SCStreamConfiguration new];
@@ -105,7 +115,7 @@ static int desktop_start(CastAudio *a, char *error, size_t size)
     }
     failure = nil;
     [a->desktop startCaptureWithCompletionHandler:^(NSError *err) { failure = err; dispatch_semaphore_signal(sem); }];
-    dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+    if (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC))) { snprintf(error, size, "Timed out starting desktop audio capture"); return -1; }
     if (failure) { snprintf(error, size, "Desktop audio capture failed: %s", failure.localizedDescription.UTF8String); return -1; }
     return 0;
 }
@@ -117,7 +127,7 @@ static bool permission(void)
         [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio completionHandler:^(BOOL granted) {
             (void)granted; dispatch_semaphore_signal(sem);
         }];
-        dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+        if (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 60 * NSEC_PER_SEC))) return false;
         status = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
     }
     return status == AVAuthorizationStatusAuthorized;
@@ -125,15 +135,18 @@ static bool permission(void)
 static void stop(CastAudio *a)
 {
     if (a->desktop) {
+        @synchronized(a->desktop_sink) { a->desktop_sink.owner = NULL; }
+        [a->desktop removeStreamOutput:a->desktop_sink type:SCStreamOutputTypeAudio error:NULL];
         dispatch_semaphore_t sem = dispatch_semaphore_create(0);
         [a->desktop stopCaptureWithCompletionHandler:^(NSError *err) { (void)err; dispatch_semaphore_signal(sem); }];
-        dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+        dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
         dispatch_sync(a->desktop_queue, ^{});
         a->desktop_sink.owner = NULL; a->desktop = nil; a->desktop_sink = nil; a->desktop_queue = nil;
     }
     [a->engine stop];
     if (a->tap) [a->engine.inputNode removeTapOnBus:0];
-    a->tap = false; a->engine = nil;
+    @synchronized(a->microphone_token) { a->microphone_token.owner = NULL; }
+    a->microphone_token = nil; a->tap = false; a->engine = nil;
     swr_free(&a->resampler);
 }
 static int start(CastAudio *a, char *error, size_t size)
@@ -154,8 +167,10 @@ static int start(CastAudio *a, char *error, size_t size)
                                &inLayout, AV_SAMPLE_FMT_FLTP, (int)format.sampleRate, 0, NULL);
     av_channel_layout_uninit(&inLayout);
     if (rc < 0 || swr_init(a->resampler) < 0) { snprintf(error, size, "Microphone resampler initialization failed"); stop(a); return -1; }
+    CastMicrophoneToken *token = [CastMicrophoneToken new]; token.owner = a; a->microphone_token = token;
     [input installTapOnBus:0 bufferSize:1024 format:format block:^(AVAudioPCMBuffer *buffer, AVAudioTime *when) {
-        @autoreleasepool {
+        @autoreleasepool { @synchronized(token) {
+            CastAudio *a = token.owner; if (!a) return;
             if (!when.hostTimeValid || !buffer.floatChannelData) return;
             double age = [AVAudioTime secondsForHostTime:mach_absolute_time()] - [AVAudioTime secondsForHostTime:when.hostTime];
             if (!isfinite(age) || age < -0.05 || age > 1) return;
@@ -179,7 +194,7 @@ static int start(CastAudio *a, char *error, size_t size)
             a->end = at + (uint64_t)count;
             if (a->end > RING && a->begin < a->end - RING) a->begin = a->end - RING;
             pthread_mutex_unlock(&a->lock);
-        }
+        } }
     }];
     a->tap = true;
     NSError *err = nil;
