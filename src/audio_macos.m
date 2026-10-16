@@ -65,7 +65,7 @@ int audio_validate(CastAudio *a, const Config *cfg, char *error, size_t size)
     if (!format || format->mFormatID != kAudioFormatLinearPCM || format->mSampleRate != RATE || format->mChannelsPerFrame != 2 || !(format->mFormatFlags & kAudioFormatFlagIsFloat) || format->mBitsPerChannel != 32) return;
     AudioBufferList list; size_t required = 0; CMBlockBufferRef retained = NULL;
     CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sample, &required, NULL, 0, NULL, NULL, 0, NULL);
-    if (!required) return;
+    if (!required || required > 65536) return;
     AudioBufferList *buffers = required <= sizeof list ? &list : malloc(required);
     if (!buffers) return;
     OSStatus rc = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sample, NULL, buffers, required, NULL, NULL, kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, &retained);
@@ -73,8 +73,9 @@ int audio_validate(CastAudio *a, const Config *cfg, char *error, size_t size)
     if (rc == noErr && isfinite(age) && age >= -0.05 && age < 1) {
         uint64_t now = cast_now_ns(); uint64_t at = sample_time(age > 0 ? now - (uint64_t)(age * 1e9) : now);
         size_t count = (size_t)CMSampleBufferGetNumSamples(sample);
+        if (count > RING) { if (retained) CFRelease(retained); if (buffers != &list) free(buffers); return; }
         bool planar = (format->mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0;
-        if (buffers->mNumberBuffers >= (planar ? 2u : 1u) &&
+        if (buffers->mNumberBuffers >= (planar ? 2u : 1u) && buffers->mBuffers[0].mData && (!planar || buffers->mBuffers[1].mData) &&
             buffers->mBuffers[0].mDataByteSize >= count * sizeof(float) * (planar ? 1 : 2) &&
             (!planar || buffers->mBuffers[1].mDataByteSize >= count * sizeof(float))) {
             pthread_mutex_lock(&a->lock);
@@ -124,12 +125,8 @@ static bool permission(void)
 {
     AVAuthorizationStatus status = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
     if (status == AVAuthorizationStatusNotDetermined) {
-        dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-        [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio completionHandler:^(BOOL granted) {
-            (void)granted; dispatch_semaphore_signal(sem);
-        }];
-        if (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 60 * NSEC_PER_SEC))) return false;
-        status = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
+        [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio completionHandler:^(BOOL granted) { (void)granted; }];
+        return false; /* Let the daemon continue handling privacy commands while consent is shown. */
     }
     return status == AVAuthorizationStatusAuthorized;
 }
@@ -155,7 +152,7 @@ static int start(CastAudio *a, char *error, size_t size)
     a->error[0] = 0;
     if (desktop_start(a, error, size) < 0) return -1;
     if (!a->cfg.mic) return 0;
-    if (!permission()) { snprintf(error, size, "Microphone permission denied; enable it in System Settings > Privacy & Security > Microphone"); return -1; }
+    if (!permission()) { snprintf(error, size, "Microphone permission required; approve the prompt then enable microphone again, or enable it in System Settings > Privacy & Security > Microphone"); return -1; }
     a->engine = [AVAudioEngine new];
     AVAudioInputNode *input = a->engine.inputNode;
     AVAudioFormat *format = [input outputFormatForBus:0];
