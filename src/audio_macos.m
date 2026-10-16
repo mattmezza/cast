@@ -247,14 +247,14 @@ int audio_read_selection(CastAudio *a, int source, uint64_t ns, float *dst, unsi
     if (!a || !dst || !count || count > 4800 || source < 0 || source > 2) { snprintf(error, size, "Invalid bounded speech audio request"); return -1; }
     memset(dst, 0, count*2*sizeof *dst); pthread_mutex_lock(&a->lock);
     int result = 0;
-    if ((source == 0 && (!a->cfg.mic || !a->engine.running)) || (source == 1 && (!a->cfg.desktop || !a->desktop)) || (source == 2 && !a->cfg.mic && !a->cfg.desktop)) { snprintf(error, size, "Requested audio source disabled or unavailable; no fallback"); result = -1; }
-    else if (((source != 1 && a->cfg.mic && a->end < sample_time(ns) + count) || (source != 0 && a->cfg.desktop && a->desktop_end < sample_time(ns) + count))) { snprintf(error, size, "Waiting for captured microphone audio"); result = 1; }
+    if ((source == 0 && (!a->cfg.mic || !a->engine.running)) || (source == 1 && (!a->cfg.desktop || !a->desktop || a->error[0])) || (source == 2 && ((!a->cfg.mic && !a->cfg.desktop) || (a->cfg.mic && !a->engine.running) || (a->cfg.desktop && (!a->desktop || a->error[0]))))) { snprintf(error, size, "Requested audio source disabled or unavailable; no fallback"); result = -1; }
+    else if (((source != 1 && a->cfg.mic && a->end < sample_time(ns) + count) || (source != 0 && a->cfg.desktop && a->desktop_end < sample_time(ns) + count))) { snprintf(error, size, "Waiting for captured audio"); result = 1; }
     else read_locked(a, ns, dst, count, a->accept_after, source);
     pthread_mutex_unlock(&a->lock); return result;
 }
 void audio_list(CastAudio *a, char *out, size_t size)
 { (void)a; snprintf(out, size, "default [microphone] System Settings > Sound input\ndefault [desktop] ScreenCaptureKit system audio; virtual audio unavailable\n"); }
 void audio_status(CastAudio *a, char *out, size_t size)
-{ snprintf(out, size, "{\"available\":true,\"mic_ready\":%s,\"desktop_ready\":%s,\"virtual_ready\":false,\"virtual_silent\":%s}", a->engine.running ? "true" : "false", a->desktop && !a->error[0] ? "true" : "false", a->silent ? "true" : "false"); }
+{ pthread_mutex_lock(&a->lock); snprintf(out, size, "{\"available\":true,\"mic_ready\":%s,\"desktop_ready\":%s,\"virtual_ready\":false,\"virtual_silent\":%s}", a->engine.running ? "true" : "false", a->desktop && !a->error[0] ? "true" : "false", a->silent ? "true" : "false"); pthread_mutex_unlock(&a->lock); }
 void audio_error(CastAudio *a, char *out, size_t size)
-{ snprintf(out, size, "%s", a->cfg.mic && !a->engine.running ? "Microphone capture unavailable" : a->error); }
+{ pthread_mutex_lock(&a->lock); snprintf(out, size, "%s", a->cfg.mic && !a->engine.running ? "Microphone capture unavailable" : a->error); pthread_mutex_unlock(&a->lock); }
