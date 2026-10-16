@@ -5,6 +5,8 @@
 #import <Foundation/Foundation.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <CoreMedia/CoreMedia.h>
+#import <CoreVideo/CoreVideo.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,6 +42,10 @@ static int mac_config(const Config *cfg, char *error, size_t size)
         if (!id || !end || *end || id > UINT32_MAX)
             return mac_error(error, size, "macOS monitor must be main or a numeric display ID from screen list");
     }
+    CGDirectDisplayID display = (!cfg->monitor[0] || !strcmp(cfg->monitor, "main"))
+        ? CGMainDisplayID() : (CGDirectDisplayID)strtoul(cfg->monitor, NULL, 10);
+    if (!CGDisplayIsActive(display))
+        return mac_error(error, size, "selected macOS display is unavailable; use screen list");
     return 0;
 }
 @implementation CastScreenCapture
@@ -99,6 +105,12 @@ static int mac_config(const Config *cfg, char *error, size_t size)
                 self->failed = true;
                 snprintf(self->failure, sizeof self->failure, "macOS capture: %s",
                     error ? error.localizedDescription.UTF8String : "selected display unavailable");
+                pthread_mutex_unlock(&self->lock);
+                return;
+            }
+            if (!display.width || !display.height || display.width > 8192 || display.height > 8192) {
+                self->failed = true;
+                snprintf(self->failure, sizeof self->failure, "macOS display dimensions exceed capture bounds (8192 pixels per axis)");
                 pthread_mutex_unlock(&self->lock);
                 return;
             }
@@ -257,6 +269,7 @@ int macos_command(Platform *p, Config *cfg, int argc, char **argv, char *error, 
         if (CGGetActiveDisplayList(64, displays, &count) != kCGErrorSuccess)
             return mac_error(error, size, "cannot enumerate macOS displays");
         size_t used = 0;
+        if (size) error[0] = 0;
         for (uint32_t i = 0; i < count && used < size; i++) {
             int n = snprintf(error + used, size - used, "%u%s: %zux%zu\n", displays[i],
                 displays[i] == CGMainDisplayID() ? " (main)" : "", CGDisplayPixelsWide(displays[i]), CGDisplayPixelsHigh(displays[i]));
