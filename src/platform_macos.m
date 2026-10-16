@@ -265,8 +265,8 @@ Capabilities macos_capabilities(Platform *p)
 {
     (void)p;
     bool exclusion = NSBundle.mainBundle.bundleIdentifier.length > 0;
-    Capabilities cap = {.capture = true, .embedded_cursor = true, .panel_exclusion = exclusion};
-    snprintf(cap.description, sizeof cap.description, "ScreenCaptureKit monitor capture; embedded cursor; %s; no global input, selection UI or native preview",
+    Capabilities cap = {.capture = true, .embedded_cursor = true, .preview = true, .panel_exclusion = exclusion};
+    snprintf(cap.description, sizeof cap.description, "ScreenCaptureKit monitor capture; embedded cursor; %s; native preview; no global input or selection UI",
         exclusion ? "Cast app bundle excluded" : "bundle exclusion unavailable outside .app");
     return cap;
 }
@@ -344,7 +344,7 @@ int macos_command(Platform *p, Config *cfg, int argc, char **argv, char *error, 
 void macos_doctor(const Config *cfg, char *error, size_t size)
 {
     (void)cfg;
-    snprintf(error, size, "capture: ScreenCaptureKit; screen recording permission %s; monitor capture only; Cast .app automatically excluded; no global input/native preview", CGPreflightScreenCaptureAccess() ? "granted" : "required");
+    snprintf(error, size, "capture: ScreenCaptureKit; screen recording permission %s; monitor capture only; Cast .app automatically excluded; native preview available; no global input", CGPreflightScreenCaptureAccess() ? "granted" : "required");
 }
 
 void macos_panel_status(Platform *p, char *error, size_t size)

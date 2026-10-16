@@ -81,7 +81,11 @@ static const char help[] =
     "  record blur on|off|toggle; cut resume reuses the file with the configured countdown\n"
     "  audio list; audio mic|desktop|virtual on|off|toggle\n"
     "  audio mic|desktop source NAME; audio mic|desktop gain PERCENT%\n"
-    "  preset NAME|next|prev; preview on|off|toggle; preview target virtual|record|stream\n"
+    "  preset NAME|next|prev; preview on|off|toggle; preview target "
+#ifdef WITH_MACOS
+    "composition|"
+#endif
+    "virtual|record|stream\n"
     "  stream start|stop|pause|resume|toggle|freeze|unfreeze|unblur\n"
     "  stream blur [on|off|toggle]; stream status [--json]\n"
     "  status [--json]; doctor; config check [PATH] [--availability]; config defaults; config "
@@ -561,6 +565,11 @@ static void tick(App *a)
                           a->state.stream_frozen || a->state.stream_blurred);
     platform_events(a->platform, a->compositor, &a->config, input_private);
     int preview_target = platform_preview_target(a->platform);
+#ifdef WITH_MACOS
+    if (preview_target == -2) a->config.preview = false;
+    if (preview_target == 3)
+        snprintf(a->config.preview_target, sizeof a->config.preview_target, "composition");
+#endif
     if (preview_target >= 0 && preview_target <= 2) {
         const char *targets[] = {"virtual", "record", "stream"};
         snprintf(a->config.preview_target, sizeof a->config.preview_target, "%s",
@@ -651,14 +660,27 @@ static void tick(App *a)
     panel_transport_publish(a->panel, a, virtual,
                             (write_record || a->countdown) ? record : &a->neutral);
     if (a->config.preview || platform_capabilities(a->platform).preview) {
+        Frame local_preview = {0};
         const Frame *target = !strcmp(a->config.preview_target, "record")
                                   ? (write_record ? record : &a->neutral)
                               : !strcmp(a->config.preview_target, "stream")
                                   ? (a->stream.data ? &a->stream : &a->neutral)
                                   : virtual;
+#ifdef WITH_MACOS
+        /* Explicit local composition mode is independent of output lanes. A
+         * group privacy pause and capture failure still produce neutral pixels. */
+        if (!strcmp(a->config.preview_target, "composition")) {
+            target = &a->neutral;
+            if (a->config.preview && !a->state.group_paused && composition_ok &&
+                !compositor_render(a->compositor, &a->config, &a->screen,
+                    camera_ok ? &a->camera : NULL, &a->cursor, true, &local_preview, e, sizeof e))
+                target = &local_preview;
+        }
+#endif
         if (platform_preview(a->platform, target, &a->state, &a->config, e, sizeof e)) {
             remember_error(a, e);
         }
+        frame_free(&local_preview);
     }
 }
 

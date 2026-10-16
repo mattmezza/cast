@@ -1035,9 +1035,11 @@ int app_countdown_guide(App *a, uint64_t remaining_ns, char *error, size_t n)
                                      &a->config, error, n)) {
             return -1;
         }
+#ifndef WITH_MACOS
         if (platform_capabilities(a->platform).preview) {
             a->countdown_preview = true;
         }
+#endif
     }
     int result = platform_countdown(a->platform, remaining_ns, error, n);
     if (!remaining_ns && a->countdown_preview) {
@@ -1569,7 +1571,11 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
             snprintf(out, n, "%s: %s", key, av[2]);
             return 0;
         } else if (IS(0, "preview") && ac == 3 && IS(1, "target")) {
+#ifdef WITH_MACOS
+            ENUM(c.preview_target, av[2], "composition,virtual,record,stream");
+#else
             ENUM(c.preview_target, av[2], "virtual,record,stream");
+#endif
             change = true;
         } else {
             if (platform_command(a->platform, &a->config, ac, av, out, n)) {

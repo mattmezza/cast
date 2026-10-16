@@ -62,8 +62,8 @@ with no response-time commitment.
 
 An initial macOS recorder port reuses the control panel and composition engine,
 with ScreenCaptureKit display/system-audio capture and AVFoundation camera/mic
-adapters. Virtual devices and streaming are not included. Build and hardware
-validation on a Mac are still required; see [macOS setup](docs/macos.md).
+adapters. It includes a native Composition/Recording preview window. Virtual
+devices and streaming are not included; see [macOS setup and validation](docs/macos.md).
 
 ## Build and run
 

@@ -119,7 +119,11 @@ static void test_stream_configuration_and_restore(void)
     Config config;
     config_defaults(&config);
     char error[CAST_ERR];
+#ifdef __APPLE__
+    assert(!strcmp(config.preview_target, "composition"));
+#else
     assert(!strcmp(config.preview_target, "virtual"));
+#endif
     assert(config.stream.video_bitrate_kbps == 2500 && config.stream.audio_bitrate_kbps == 128);
     load_test("[stream]\nservice=twitch\nserver_url=rtmps://ingest.example.invalid/app\n"
               "key_file=/tmp/cast-test-key\nvideo_bitrate_kbps=4500\n"

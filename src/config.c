@@ -228,7 +228,11 @@ static const Setting settings[] = {
     B("annotations", "stream_keys", annotations_stream_keys, "true"),
     B("annotations", "stream_clicks", annotations_stream_clicks, "true"),
     B("preview", "enabled", preview, "false"),
+#ifdef __APPLE__
+    E("preview", "target", preview_target, "composition,virtual,record,stream", "composition"),
+#else
     E("preview", "target", preview_target, "virtual,record,stream", "virtual"),
+#endif
     S("ipc", "socket", socket_path, ""),
     I("ipc", "timeout_ms", ipc_timeout_ms, 100, 30000, "5000"),
     S("licensing", "file", licensing_file, ""),

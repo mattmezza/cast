@@ -1,4 +1,7 @@
 #include "platform_backend.h"
+#ifdef WITH_MACOS
+#include "preview_macos.h"
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +16,9 @@ struct Platform {
     enum Backend backend;
     Platform *impl;
     int width, height;
+#ifdef WITH_MACOS
+    CastMacPreview *preview;
+#endif
 };
 static int error(char *e, size_t n, const char *s)
 {
@@ -86,6 +92,7 @@ void platform_close(Platform *p)
     }
 #endif
 #ifdef WITH_MACOS
+    mac_preview_close(p->preview);
     if (p->backend == MACOS) macos_close(p->impl);
 #endif
     free(p);
@@ -107,6 +114,9 @@ Capabilities platform_capabilities(Platform *p)
     if (p->backend == MACOS) return macos_capabilities(p->impl);
 #endif
     Capabilities cap = {.capture = true, .cursor_metadata = true};
+#ifdef WITH_MACOS
+    cap.preview = true;
+#endif
     snprintf(cap.description, sizeof(cap.description),
              "synthetic test frames; no desktop, global input or presentation UI");
     return cap;
@@ -175,7 +185,11 @@ int platform_command(Platform *p, Config *cfg, int argc, char **argv, char *e, s
     if (argc >= 2 && !strcmp(argv[0], "preview")) {
         if (argc == 3 && !strcmp(argv[1], "target")) {
             if (strcmp(argv[2], "virtual") && strcmp(argv[2], "record") &&
-                strcmp(argv[2], "stream")) {
+                strcmp(argv[2], "stream")
+#ifdef WITH_MACOS
+                && strcmp(argv[2], "composition")
+#endif
+                ) {
                 return error(e, n, "usage: cast preview target virtual|record|stream");
             }
             snprintf(cfg->preview_target, sizeof(cfg->preview_target), "%s", argv[2]);
@@ -241,6 +255,9 @@ int platform_reconfigure(Platform *p, const Config *cfg, char *e, size_t n)
 }
 void platform_events(Platform *p, Compositor *comp, const Config *cfg, bool privacy)
 {
+#ifdef WITH_MACOS
+    mac_preview_events(p->preview);
+#endif
 #ifdef WITH_X11
     if (p->backend == XORG) {
         x11_events(p->impl, comp, cfg, privacy);
@@ -254,6 +271,9 @@ void platform_events(Platform *p, Compositor *comp, const Config *cfg, bool priv
 }
 int platform_countdown(Platform *p, uint64_t remaining_ns, char *e, size_t n)
 {
+#ifdef WITH_MACOS
+    if (p) return mac_preview_countdown(p->preview, remaining_ns, e, n);
+#endif
 #ifdef WITH_X11
     if (p && p->backend == XORG) {
         return x11_countdown(p->impl, remaining_ns, e, n);
@@ -269,6 +289,16 @@ int platform_countdown(Platform *p, uint64_t remaining_ns, char *e, size_t n)
 int platform_countdown_frame(Platform *p, const Frame *frame, const Config *config, char *e,
                              size_t n)
 {
+#ifdef WITH_MACOS
+    if (p) {
+        bool created = !p->preview;
+        if (!p->preview) p->preview = mac_preview_open();
+        int result = mac_preview_countdown_frame(p->preview, frame, config, e, n);
+        if (!result && created && p->backend == MACOS)
+            result = macos_panel_register(p->impl, e, n);
+        return result;
+    }
+#endif
 #ifdef WITH_X11
     if (p && p->backend == XORG) {
         return x11_countdown_frame(p->impl, frame, config, e, n);
@@ -283,6 +313,9 @@ int platform_countdown_frame(Platform *p, const Frame *frame, const Config *conf
 }
 int platform_preview_target(Platform *p)
 {
+#ifdef WITH_MACOS
+    return mac_preview_target(p->preview);
+#endif
 #ifdef WITH_X11
     if (p->backend == XORG) {
         return x11_preview_target(p->impl);
@@ -295,6 +328,17 @@ int platform_preview_target(Platform *p)
 int platform_preview(Platform *p, const Frame *f, const State *s, const Config *cfg, char *e,
                      size_t n)
 {
+#ifdef WITH_MACOS
+    if (!p->preview && !cfg->preview) return 0;
+    bool created = !p->preview;
+    if (!p->preview) p->preview = mac_preview_open();
+    int result = mac_preview_frame(p->preview, f, s, cfg, e, n);
+    /* AppKit can register the daemon as a new application when its first window
+     * appears. Refresh exclusions before accepting another capture sample. */
+    if (!result && created && p->backend == MACOS)
+        result = macos_panel_register(p->impl, e, n);
+    return result;
+#endif
 #ifdef WITH_X11
     if (p->backend == XORG) {
         return x11_preview(p->impl, f, s, cfg, e, n);

@@ -84,6 +84,26 @@ must be empty or `default`. System audio uses `desktop_source=default`.
 
 ## Verify on the MacBook
 
+### Preview window
+
+Click **Preview off** in the panel to open the native, resizable preview window,
+or run `cast preview on`. On macOS the default target is **Composition**: an
+explicit local view for framing before recording starts. It does not start a
+recording or enable a virtual output. Group privacy pause replaces it with the
+neutral Paused frame. **Recording** selects the actual recording lane, including
+its stopped, paused, frozen, and blurred states; it stays neutral when stopped.
+Use the two controls in the preview window, or `cast preview target composition`
+and `cast preview target record`, to select the mode. Closing the window turns
+preview off, and the panel button opens it again. Countdown uses the same window
+temporarily; closing it cancels countdown. A preview enabled before countdown
+stays enabled afterward. Preview windows are excluded with the app's other
+windows when using the bundle.
+
+`make check-macos` includes native AppKit tests for copied frame ownership,
+RGBA orientation, letterboxing, privacy replacement, target selection,
+close/reopen, and countdown. Synthetic daemon checks exercise preview commands
+and recording countdown without requesting hardware permissions.
+
 1. Run `make check-macos`; preserve its output if a build or check fails.
 2. Open the app, grant screen permission, and verify its composition preview.
 3. Record a display to MKV and to MP4. Stop and wait for finalization, then open
@@ -155,10 +175,9 @@ AVFoundation, default microphone through AVAudioEngine, system audio through
 ScreenCaptureKit, composition, recording, and the existing control panel.
 
 This port does not implement virtual camera, virtual microphone, RTMP streaming,
-window/region selection, global input annotations/hotkeys, or the separate native
-preview/countdown overlay. The control panel's composition preview is separate
-from that overlay. Unsupported operations report errors. Pro is not part of this
-initial build.
+window/region selection, or global input annotations/hotkeys. Native preview and
+countdown windows are supported. Unsupported operations report errors. Pro is
+not part of this initial build.
 
 Before distributing beyond a local developer build, validate on hardware, bundle
 and audit dylibs/licenses, add a proper app icon and permission onboarding, and

@@ -60,6 +60,13 @@ def main():
                         assert time.monotonic() < deadline, (root / 'daemon.log').read_text()
                         time.sleep(.05)
                 assert initial['record']['state'] == 'stopped'
+                if os.uname().sysname == 'Darwin':
+                    command('preview', 'target', 'composition')
+                    command('preview', 'on')
+                    command('pause')
+                    command('resume')
+                    command('preview', 'target', 'record')
+                    command('preview', 'off')
                 target = root / 'smoke.mp4'
                 command('record', 'start', target)
                 time.sleep(.6)
@@ -83,6 +90,18 @@ def main():
                 time.sleep(.6)
                 command('record', 'stop')
                 probe_recording(mkv)
+                if os.uname().sysname == 'Darwin':
+                    command('settings', 'record.countdown', '1')
+                    command('preview', 'target', 'composition')
+                    command('preview', 'on')
+                    countdown = root / 'countdown.mkv'
+                    command('record', 'start', countdown)
+                    time.sleep(1.6)
+                    assert status()['record']['state'] == 'recording'
+                    command('record', 'stop')
+                    command('preview', 'off')
+                    probe_recording(countdown)
+                    command('settings', 'record.countdown', '0')
                 command('settings', 'record.container', 'mp4')
                 if os.uname().sysname == 'Darwin':
                     command('virtual', 'start', success=False)

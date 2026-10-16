@@ -161,7 +161,7 @@ int platform_capture(Platform *, Frame *, Cursor *, char *, size_t);
 int platform_command(Platform *, Config *, int, char **, char *, size_t);
 int platform_reconfigure(Platform *, const Config *, char *, size_t);
 void platform_events(Platform *, Compositor *, const Config *, bool privacy);
-/* Native target selectors return a pending lane index, or -1 when unchanged. */
+/* Native target selectors: lane 0/1/2, composition 3 (macOS), -2 closed, -1 unchanged. */
 int platform_preview_target(Platform *);
 int platform_preview(Platform *, const Frame *, const State *, const Config *, char *, size_t);
 /* Transient local countdown; remaining_ns=0 hides it, return 1 cancels, -1 errors. */
