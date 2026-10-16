@@ -1,6 +1,9 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
+#ifdef __APPLE__
+#define __STDC_WANT_LIB_EXT1__ 1
+#endif
 #include "stream.h"
 #include "media_codec.h"
 #include "media_internal.h"
@@ -114,7 +117,12 @@ static uint64_t samples_at(uint64_t ns)
 }
 static void wipe(void *memory, size_t size)
 {
+#ifdef __APPLE__
+    /* Annex K guarantees this erase survives dead-store optimization. */
+    (void)memset_s(memory, size, 0, size);
+#else
     explicit_bzero(memory, size);
+#endif
 }
 static void lock_media(struct StreamShared *shared)
 {
