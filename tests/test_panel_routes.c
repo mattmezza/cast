@@ -611,6 +611,19 @@ int main(void)
             assert(flow_slider_step(&fields[i]) > 0);
         }
     }
+    if (cast_edition_identity()->pro) {
+        size_t count;
+        const CastExtensionSetting *schema = cast_shared_extension_schema(&count);
+        for (size_t i = 0; i < count; ++i) {
+            char key[128];
+            snprintf(key, sizeof key, "%s.%s", schema[i].section, schema[i].key);
+            int index = find_field(key);
+            assert(index >= 0);
+            const char *unit = schema[i].unit ? schema[i].unit : "";
+            assert(field_is_pixels(&fields[index]) == !strcmp(unit, "px"));
+            assert(!strcmp(flow_slider_unit(&fields[index]), unit));
+        }
+    }
     assert(field_is_pixels(&fields[find_field("capture.width")]));
     assert(field_is_pixels(&fields[find_field("camera.crop_x")]));
     assert(field_is_pixels(&fields[find_field("output.width")]));

@@ -1397,8 +1397,22 @@ static bool field_is_numeric(const FieldSpec *field)
 {
     return field->type == FIELD_INT || field->type == FIELD_DOUBLE;
 }
+/* Extension fields retain schema order during initialize_fields. Their unit is
+ * authoritative, including pixel classification and the slider's value label. */
+static const char *field_extension_unit(const FieldSpec *field)
+{
+    if (!(field->flags & EXTENSION_FIELD)) return NULL;
+    size_t count;
+    const CastExtensionSetting *schema = cast_shared_extension_schema(&count);
+    if (count > CAST_MAX_EXTENSION_SETTINGS) count = CAST_MAX_EXTENSION_SETTINGS;
+    for (size_t i = 0; i < count; ++i)
+        if (!strcmp(field->key, extension_keys[i])) return schema[i].unit ? schema[i].unit : "";
+    return "";
+}
 static bool field_is_pixels(const FieldSpec *field)
 {
+    const char *unit = field_extension_unit(field);
+    if (unit) return !strcmp(unit, "px");
     static const char *const keys[] = {
         "capture.x",
         "capture.y",
@@ -1522,6 +1536,8 @@ static double flow_slider_step(const FieldSpec *field)
 }
 static const char *flow_slider_unit(const FieldSpec *field)
 {
+    const char *extension_unit = field_extension_unit(field);
+    if (extension_unit) return extension_unit;
     const char *key = field->key;
     if (field_is_pixels(field)) {
         return "px";
