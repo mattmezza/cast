@@ -95,7 +95,7 @@ def profile(args):
         libraries = data.get('libraries', {})
         if not libraries:
             raise ValueError('media profile has no verified library inventory')
-        library_glob = '*.dylib' if data.get('platform') == 'darwin' else '*.so*'
+        library_glob = '*.a' if data.get('linkage') == 'static' else '*.dylib' if data.get('platform') == 'darwin' else '*.so*'
         actual_files = {str(p.relative_to(base)) for p in (base / 'prefix/lib').glob(library_glob)
                         if p.is_file() and not p.is_symlink()}
         if actual_files != set(libraries):
@@ -107,16 +107,27 @@ def profile(args):
             p = base / name
             if not p.resolve().is_relative_to(base) or not p.is_file() or digest(p) != sha:
                 raise ValueError(f'media profile provenance mismatch: {name}')
-        codec = next((base / 'prefix/lib').glob('libavcodec*.dylib' if data.get('platform') == 'darwin' else 'libavcodec.so.*'), None)
-        if not codec:
-            raise ValueError('controlled libavcodec missing')
-        av = ctypes.CDLL(str(codec))
-        av.avcodec_configuration.restype = ctypes.c_char_p
-        av.avcodec_license.restype = ctypes.c_char_p
-        actual_configuration = av.avcodec_configuration().decode('utf-8')
-        actual_license = av.avcodec_license().decode('utf-8')
-        if '--enable-gpl' in actual_configuration or '--enable-nonfree' in actual_configuration or 'LGPL' not in actual_license:
-            raise ValueError('controlled profile actually loaded GPL/nonfree FFmpeg')
+        if data.get('linkage') == 'static':
+            if args.official:
+                raise ValueError('static Pro profiles require separate release qualification')
+            for name in libraries:
+                if (base / name).read_bytes()[:8] != b'!<arch>\n':
+                    raise ValueError('static profile contains a nonarchive input')
+            codec = base / 'prefix/lib/libavcodec.a'
+            strings = run('strings', str(codec))
+            if '--enable-gpl' in strings or '--enable-nonfree' in strings or '--disable-gpl' not in strings:
+                raise ValueError('static codec configuration is not controlled LGPL')
+        else:
+            codec = next((base / 'prefix/lib').glob('libavcodec*.dylib' if data.get('platform') == 'darwin' else 'libavcodec.so.*'), None)
+            if not codec:
+                raise ValueError('controlled libavcodec missing')
+            av = ctypes.CDLL(str(codec))
+            av.avcodec_configuration.restype = ctypes.c_char_p
+            av.avcodec_license.restype = ctypes.c_char_p
+            actual_configuration = av.avcodec_configuration().decode('utf-8')
+            actual_license = av.avcodec_license().decode('utf-8')
+            if '--enable-gpl' in actual_configuration or '--enable-nonfree' in actual_configuration or 'LGPL' not in actual_license:
+                raise ValueError('controlled profile actually loaded GPL/nonfree FFmpeg')
         for family in MEDIA:
             path = run('env', f'PKG_CONFIG_PATH={base}/prefix/lib/pkgconfig', 'pkg-config', '--variable=libdir', family).strip()
             if pathlib.Path(path).resolve() != base / 'prefix/lib':

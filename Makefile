@@ -441,7 +441,7 @@ $(BUILD)/helper/whisper_helper.o: $(PRO_DIR)/src/speech/whisper_helper.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CPPFLAGS) $(STT_CFLAGS) -DCAST_SPEECH_HELPER_EXECUTABLE $(if $(filter 1,$(STT_GPU_ENGINEERING)),-DCAST_SPEECH_VULKAN_DEV=1) $(if $(STT_CPU_BACKEND),-DCAST_GGML_CPU_BACKEND_PATH='"$(STT_CPU_BACKEND)"') $(CFLAGS) -Wall -Wextra -Werror -std=c++17 -ffunction-sections -fdata-sections -c $< -o $@
 $(STT_HELPER): $(BUILD)/helper/whisper_helper.o $(STT_IDENTITY_OBJECTS)
-	$(CXX) $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../lib/cast-pro/speech' -Wl,--gc-sections -o $@ $^ $(STT_LIBS) $(shell pkg-config --libs libsodium) -lpthread -lm
+	$(CXX) $(LDFLAGS) $(STT_LDFLAGS) -Wl,-rpath,'$$ORIGIN/../lib/cast-pro/speech' -Wl,--gc-sections -o $@ $^ $(STT_LIBS) $(shell pkg-config --libs libsodium) -lpthread -lm
 endif
 
 $(BUILD)/test_panel_command_queue: tests/test_panel_command_queue.c src/panel_transport.c src/ipc_identity.h src/edition.c src/commands.c src/os_compat.c

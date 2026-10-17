@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicit glibc static Community build; requires the workflow's Ubuntu SDK inputs."""
+"""Explicit glibc static Linux build; requires the workflow's Ubuntu SDK inputs."""
 import argparse
 import hashlib
 import json
@@ -23,7 +23,12 @@ def main():
     parser.add_argument('--jobs', type=int, default=4)
     parser.add_argument('--reuse-sdk', action='store_true', help='reuse only a matching locked SDK/toolchain')
     parser.add_argument('--sdk-only', action='store_true', help='prepare dependencies without application/tests')
+    parser.add_argument('--edition', choices=('community', 'pro'), default='community')
+    parser.add_argument('--pro-root', type=Path)
+    parser.add_argument('--stt-profile', type=Path)
     args = parser.parse_args()
+    if args.edition == 'pro' and (not args.pro_root or not args.stt_profile):
+        parser.error('Pro requires --pro-root and --stt-profile')
     if os.uname().sysname != 'Linux' or os.uname().machine != 'x86_64':
         parser.error('requires native Linux x86_64 with glibc')
     if not 1 <= args.jobs <= 32:
@@ -126,24 +131,40 @@ def main():
     run('python3', ROOT / 'tools/check-static-deps.py', '--edition', 'community', env=environment)
     if args.sdk_only:
         return
+    if args.edition == 'pro':
+        media = json.loads((ROOT / 'packaging/media-lgpl-lock.json').read_text())
+        libraries = {str(p.relative_to(base)): hashlib.sha256(p.read_bytes()).hexdigest()
+                     for p in (prefix / 'lib').glob('*.a')}
+        (base / 'profile.json').write_text(json.dumps({'schema': 1, 'profile': 'lgpl',
+            'linkage': 'static', 'release_eligible': False, 'libraries': libraries,
+            'configure_flags': [x for x in media['ffmpeg_flags'] if x not in ('--enable-shared', '--disable-static')] + ['--enable-static', '--disable-shared']}))
     packages = ['fontconfig', 'freetype2', 'libavcodec', 'libavformat', 'libavutil',
                 'libswscale', 'libswresample', 'libpipewire-0.3', 'x11', 'xext', 'xrandr',
                 'xi', 'xfixes', 'xcomposite', 'gio-2.0', 'gio-unix-2.0', 'sdl3', 'sdl3-ttf']
+    if args.edition == 'pro':
+        packages.append('libsodium')
     libs = subprocess.check_output(['pkg-config', '--libs', '--static', *packages],
                                    env=environment, text=True).strip()
     # A linker group resolves cycles between all static media/UI dependencies.
     libs = '-Wl,--start-group -L' + str(prefix / 'lib') + ' ' + libs + ' -lstdc++ -Wl,--end-group'
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
-    variables = ['EDITION=community', 'X11=1', 'WAYLAND=1', 'PANEL=1', 'STT=0',
+    variables = ['EDITION=' + args.edition, 'X11=1', 'WAYLAND=1', 'PANEL=1', 'STT=0',
                  'SOURCE_COMMIT=' + commit, 'OFFICIAL_RELEASE=1', 'TEST_LINK_DNS=1',
                  'PKG_LIBS=' + libs, 'PANEL_LIBS=', 'LDFLAGS=-static -no-pie -Wl,-Map,' + str(base / 'cast.map')]
+    if args.edition == 'pro':
+        profile = json.loads(args.stt_profile.read_text())
+        variables += ['MEDIA_PROFILE=lgpl', 'PRO_ROOT=' + str(args.pro_root.resolve()),
+            'LGPL_ROOT=' + str(base), 'OFFICIAL_RELEASE=0', 'STT=1', 'STT_ENGINEERING=1',
+            'STT_PROFILE=' + str(args.stt_profile.resolve()), 'STT_CFLAGS=' + profile['cflags'],
+            'STT_LIBS=' + profile['libs'], 'STT_CPU_BACKEND=',
+            'STT_LDFLAGS=-Wl,-Map,' + str(base / 'helper.map')]
     run('make', jobs, *variables, 'all', env=environment)
     environment['CAST_TEST_LINK_DNS'] = '1'
     for suite in ('check', 'check-xorg', 'check-panel'):
         run('make', jobs, *variables, suite, env=environment)
     # Each test executable also consumes LDFLAGS. Relink the release executable
     # last, with its own map, so source collection audits the actual payload.
-    program = ROOT / 'cast'
+    program = ROOT / ('cast-pro' if args.edition == 'pro' else 'cast')
     program.unlink()
     run('make', jobs, *variables, 'all', env=environment)
     headers = subprocess.check_output(['readelf', '-l', program], text=True)
@@ -152,7 +173,16 @@ def main():
         raise ValueError('result is not fully statically linked')
     run(program, '--version')
     run(program, '--help')
-    shutil.copy2(program, base / 'cast')
+    shutil.copy2(program, base / program.name)
+    if args.edition == 'pro':
+        helpers = sorted((ROOT / 'build').glob('pro-*/cast-pro-stt-helper'), key=lambda p: p.stat().st_mtime)
+        helper = helpers[-1]
+        for option in ('-l', '-d'):
+            result = subprocess.check_output(['readelf', option, helper], text=True)
+            if 'INTERP' in result or '(NEEDED)' in result:
+                raise ValueError('speech helper is not static')
+        shutil.copy2(helper, base / helper.name)
+
     (base / 'build-info.json').write_text(json.dumps({
         'source_commit': commit, 'make_variables': variables, 'sources': lock['sources'],
         'linkage': 'static glibc; no PT_INTERP or DT_NEEDED',

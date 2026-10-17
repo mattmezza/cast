@@ -17,10 +17,11 @@ shutil.copy2(build / 'cast.map', output)
 ubuntu = output / 'ubuntu'
 ubuntu.mkdir(exist_ok=True)
 packages = {}
-archives = sorted(set(re.findall(r'(/[^\s()]+\.a)(?:\(|\s)', (build / 'cast.map').read_text())))
+maps = [build / 'cast.map'] + ([build / 'helper.map'] if (build / 'helper.map').exists() else [])
+archives = sorted(set(re.findall(r'(/[^\s()]+\.a)(?:\(|\s)', '\n'.join(p.read_text() for p in maps))))
 for archive in archives:
     path = Path(archive).resolve()
-    if path.is_relative_to(build):
+    if path.is_relative_to(build) or path.is_relative_to(root / 'build/static-speech'):
         continue
     # Linker maps retain GCC search paths containing ../..; dpkg stores
     # canonical install paths. Try the original path too for usrmerge aliases.
