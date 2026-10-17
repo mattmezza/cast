@@ -301,7 +301,7 @@ briefs stay on the developer's laptop and are excluded from public source archiv
 The separate private Pro monorepo contains desktop code in `pro/` and only a future
 Go service placeholder in `server/`. [Static delivery](docs/static-delivery.md) describes the Community Linux x86_64
 static build pipeline and its validation requirements. It retains the native panel,
-X11, and Wayland; desktop services and dynamically loaded host modules remain
-runtime requirements. Arch packages use shared libraries. The private repository
+X11, and Wayland; desktop services, fonts and keyboard-layout data remain runtime
+requirements. Arch packages use shared libraries. The private repository
 also has a separate Pro static acceptance workflow with a CPU speech helper,
 production license trust, and library relinking materials.
