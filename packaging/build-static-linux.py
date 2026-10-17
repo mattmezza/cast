@@ -117,7 +117,7 @@ def main():
     loader = base / 'static-loader.o'
     run('cc', '-O2', '-ffunction-sections', '-fdata-sections', '-Wall', '-Wextra',
         '-Werror', '-c', ROOT / 'packaging/static-loader.c', '-o', loader)
-    loader_flags = str(loader) + ' -Wl,--wrap=dlopen,--wrap=dlsym,--wrap=dlclose,--wrap=dlerror'
+    loader_flags = str(loader) + ' -Wl,--wrap=dlopen,--wrap=dlsym,--wrap=dlclose,--wrap=dlerror ' + libs
     variables = ['EDITION=' + args.edition, 'X11=1', 'WAYLAND=1', 'PANEL=1', 'STT=0',
                  'STATIC_PANEL_X11=1', 'SOURCE_COMMIT=' + commit, 'OFFICIAL_RELEASE=1', 'TEST_LINK_DNS=1',
                  'PKG_LIBS=' + libs, 'PANEL_LIBS=', 'LDFLAGS=-static -no-pie ' + loader_flags + ' -Wl,-Map,' + str(base / 'cast.map')]
