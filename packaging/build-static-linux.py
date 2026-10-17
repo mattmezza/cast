@@ -42,12 +42,16 @@ def main():
     spec = importlib.util.spec_from_file_location('static_pipewire', ROOT / 'packaging/static-pipewire.py')
     static_pipewire = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(static_pipewire)
+    desktop_spec = importlib.util.spec_from_file_location('static_desktop', ROOT / 'packaging/static-desktop-sdk.py')
+    static_desktop = importlib.util.module_from_spec(desktop_spec)
+    desktop_spec.loader.exec_module(static_desktop)
     lock_path = ROOT / 'packaging/static-linux-lock.json'
     lock = json.loads(lock_path.read_text())
     toolchain = subprocess.check_output(['dpkg-query', '-W', '-f=${binary:Package}=${Version}\n'])
     identity = hashlib.sha256(lock_path.read_bytes() +
                               (ROOT / 'packaging/media-lgpl-lock.json').read_bytes() +
-                              Path(__file__).read_bytes() + (ROOT / 'packaging/static-pipewire.py').read_bytes() + toolchain).hexdigest()
+                              Path(__file__).read_bytes() + (ROOT / 'packaging/static-pipewire.py').read_bytes() +
+                              (ROOT / 'packaging/static-desktop-sdk.py').read_bytes() + toolchain).hexdigest()
     marker = base / 'sdk.identity'
     reuse = args.reuse_sdk and marker.is_file() and marker.read_text().strip() == identity
 
@@ -78,6 +82,7 @@ def main():
                        CMAKE_PREFIX_PATH=str(prefix))
     jobs = '-j' + str(args.jobs)
     if not reuse:
+        static_desktop.build(base, prefix, args.jobs, environment)
         # Ubuntu's libmount-dev contains no static archive. Build its matching
         # family of mount/blkid/uuid libraries without unrelated system programs.
         run('./configure', '--prefix=' + str(prefix), '--libdir=' + str(prefix / 'lib'),
@@ -119,7 +124,12 @@ def main():
         run('make', 'install', cwd=sources['ffmpeg'], env=environment)
         for name, options in [
             ('SDL', ['-DSDL_SHARED=OFF', '-DSDL_STATIC=ON', '-DSDL_TESTS=OFF',
-                     '-DSDL_TEST_LIBRARY=OFF', '-DSDL_X11=ON', '-DSDL_WAYLAND=ON']),
+                     '-DSDL_TEST_LIBRARY=OFF', '-DSDL_X11=ON', '-DSDL_WAYLAND=ON',
+                     '-DSDL_DEPS_SHARED=OFF', '-DSDL_X11_SHARED=OFF', '-DSDL_WAYLAND_SHARED=OFF',
+                     '-DSDL_WAYLAND_LIBDECOR=OFF', '-DSDL_OPENGL=OFF', '-DSDL_OPENGLES=OFF',
+                     '-DSDL_VULKAN=OFF', '-DSDL_RENDER_GPU=OFF', '-DSDL_GPU=OFF', '-DSDL_AUDIO=OFF',
+                     '-DSDL_LIBUDEV=OFF', '-DSDL_JOYSTICK=OFF', '-DSDL_HAPTIC=OFF', '-DSDL_SENSOR=OFF',
+                     '-DSDL_HIDAPI=OFF', '-DSDL_HIDAPI_LIBUSB=OFF', '-DSDL_DBUS=OFF', '-DSDL_IBUS=OFF']),
             ('SDL_ttf', ['-DBUILD_SHARED_LIBS=OFF', '-DSDLTTF_SAMPLES=OFF', '-DSDLTTF_HARFBUZZ=OFF',
                          '-DSDLTTF_PLUTOSVG=OFF'])]:
             build = base / (name + '-build')
@@ -172,7 +182,10 @@ def main():
         if (private / 'pro/src/trusted_keys.h').is_file():
             private /= 'pro'
         test_variables.append('PRODUCTION_LICENSE_ACCEPTANCE=0')
-        test_variables.append('PRO_TRUST_HEADER=' + str(private / 'src/trusted_keys.h'))
+        test_header = private / 'tests/generated/trusted_keys.h'
+        if not test_header.is_file():
+            raise ValueError('Pro static tests require explicit private verifier fixtures')
+        test_variables.append('PRO_TRUST_HEADER=' + str(test_header))
     environment['CAST_TEST_LINK_DNS'] = '1'
     for suite in ('check', 'check-xorg', 'check-panel'):
         run('make', jobs, *test_variables, suite, env=environment)

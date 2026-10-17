@@ -68,27 +68,46 @@ struct builtin { const char *name; void *module, *factory, *topics; };
 static struct builtin builtins[] = {
 ''' + ',\n'.join(entries) + '''
 };
+static _Thread_local const char *loader_error;
+static struct builtin *lookup_handle(void *handle) {
+    for (size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++)
+        if (handle == &builtins[i]) return &builtins[i];
+    return NULL;
+}
 void *cast_pw_static_open(const char *path, int flags) {
     (void)flags;
-    if (!path) return NULL;
+    loader_error = NULL;
+    if (!path) { loader_error = "null static module path"; return NULL; }
     const char *name = strrchr(path, '/');
     name = name ? name + 1 : path;
     size_t length = strlen(name);
     if (length > 3 && !strcmp(name + length - 3, ".so")) length -= 3;
     for (size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++)
         if (strlen(builtins[i].name) == length && !strncmp(name, builtins[i].name, length)) return &builtins[i];
+    loader_error = "module is not built into the static PipeWire client";
     return NULL;
 }
 void *cast_pw_static_symbol(void *handle, const char *name) {
-    struct builtin *entry = handle;
-    if (!entry) return NULL;
-    if (!strcmp(name, "pipewire__module_init")) return entry->module;
-    if (!strcmp(name, "spa_handle_factory_enum")) return entry->factory;
-    if (!strcmp(name, "spa_log_topic_enum")) return entry->topics;
-    return NULL;
+    struct builtin *entry = lookup_handle(handle);
+    void *symbol = NULL;
+    loader_error = NULL;
+    if (!entry || !name) { loader_error = "invalid static module lookup"; return NULL; }
+    if (!strcmp(name, "pipewire__module_init")) symbol = entry->module;
+    if (!strcmp(name, "spa_handle_factory_enum")) symbol = entry->factory;
+    if (!strcmp(name, "spa_log_topic_enum")) symbol = entry->topics;
+    if (!symbol) loader_error = "symbol is not exported by the static PipeWire module";
+    return symbol;
 }
-int cast_pw_static_close(void *handle) { (void)handle; return 0; }
-char *cast_pw_static_error(void) { return "module is not built into the static PipeWire client"; }
+int cast_pw_static_close(void *handle) {
+    loader_error = NULL;
+    if (!lookup_handle(handle)) { loader_error = "invalid static module handle"; return -1; }
+    return 0;
+}
+char *cast_pw_static_error(void) {
+    const char *error = loader_error;
+    loader_error = NULL;
+    return (char *)error;
+}
 ''')
     loader = output / 'loader.o'
     subprocess.run(['cc', '-O2', '-c', source, '-o', loader], env=environment, check=True)
