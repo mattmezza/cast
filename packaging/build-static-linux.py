@@ -142,7 +142,18 @@ def main():
         test_variables.append('PRO_TRUST_HEADER=' + str(test_header))
     environment['CAST_TEST_LINK_DNS'] = '1'
     for suite in ('check', 'check-xorg', 'check-panel'):
-        run('make', jobs, *test_variables, suite, env=environment)
+        try:
+            run('make', jobs, *test_variables, suite, env=environment)
+        except subprocess.CalledProcessError:
+            if suite == 'check-xorg' and os.environ.get('GITHUB_ACTIONS') == 'true':
+                # Preserve a real remote crash stack without adding debugger
+                # packages to the dependency SDK/toolchain cache identity.
+                run('sudo', 'apt-get', 'install', '-y', 'gdb')
+                smoke = max((ROOT / 'build').glob('*/test_xorg'), key=lambda p: p.stat().st_mtime)
+                run('xvfb-run', '-a', '-s', '-screen 0 800x600x24',
+                    'gdb', '--batch', '-ex', 'run', '-ex', 'thread apply all bt',
+                    '--args', smoke, '--exercise', env=environment)
+            raise
     # Each test executable also consumes LDFLAGS. Relink the release executable
     # last, with its own map, so source collection audits the actual payload.
     program = ROOT / ('cast-pro' if args.edition == 'pro' else 'cast')
