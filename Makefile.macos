@@ -182,7 +182,13 @@ check-macos-panel: $(BUILD)/test_macos_panel
 $(BUILD)/test_macos_pointer: tests/test_macos_pointer.c src/macos_pointer.h src/cast.h
 	@mkdir -p $(BUILD)
 	$(CC) -Isrc $(CFLAGS) $(WARN) -Werror -std=gnu11 -o $@ tests/test_macos_pointer.c
-check-unit: check-os-compat check-macos-panel $(BUILD)/test_core $(BUILD)/test_visual $(BUILD)/test_macos_preview $(BUILD)/test_macos_pointer
+$(BUILD)/test_macos_audio: tests/test_macos_audio.m src/audio_macos.m src/media_internal.h src/cast.h
+	@mkdir -p $(BUILD)
+	$(CC) -Isrc $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -DCAST_TEST -fobjc-arc -fblocks -o $@ tests/test_macos_audio.m src/audio_macos.m $(PKG_LIBS) -framework AVFoundation -framework ScreenCaptureKit -framework CoreMedia -framework Foundation
+.PHONY: check-macos-audio
+check-macos-audio: $(BUILD)/test_macos_audio
+	$(BUILD)/test_macos_audio
+check-unit: check-os-compat check-macos-panel check-macos-audio $(BUILD)/test_core $(BUILD)/test_visual $(BUILD)/test_macos_preview $(BUILD)/test_macos_pointer
 	$(BUILD)/test_core
 	$(BUILD)/test_visual
 	$(BUILD)/test_macos_preview

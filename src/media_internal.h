@@ -26,6 +26,9 @@ void audio_record_privacy(CastAudio *);
 void audio_stream_privacy(CastAudio *);
 void audio_stream_read(CastAudio *, uint64_t, float *, int);
 void audio_read(CastAudio *, uint64_t, float *, int);
+/* True only while enabled capture may still deliver this recording window.
+ * Bounded by capture time, so unavailable sources eventually become silence. */
+bool audio_record_pending(CastAudio *, uint64_t, int);
 /* 0: captured window, 1: not captured yet (retry), -1: disabled/unavailable. */
 int audio_read_selection(CastAudio *, int source, uint64_t, float *, unsigned, char *, size_t);
 void audio_list(CastAudio *, char *, size_t);

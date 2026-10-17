@@ -283,7 +283,7 @@ static int setup_audio(CastRecorder *r)
     return 0;
 }
 static int fill_audio(CastRecorder *r, int64_t goal, uint64_t segment_ns, uint64_t segment_sample,
-                      bool silence)
+                      bool silence, bool drain)
 {
     /* Audio uses the same active monotonic timeline as video. Read each active
      * segment from its original capture time; silence replaces absent data. */
@@ -301,6 +301,14 @@ static int fill_audio(CastRecorder *r, int64_t goal, uint64_t segment_ns, uint64
         if (silence || atomic_load(&r->silent)) {
             memset(mix, 0, (size_t)n * 2 * sizeof(float));
         } else {
+            if (audio_record_pending(r->audio, ns, n)) {
+                if (!drain) return 0; /* Retry next worker tick, without advancing. */
+                /* Stop drains the last capture batch on the original timeline.
+                 * The source's bounded deadline also covers a stalled device. */
+                struct timespec delay = {.tv_nsec = 5000000};
+                nanosleep(&delay, NULL);
+                continue;
+            }
             audio_read(r->audio, ns, mix, n);
         }
         uint8_t **converted = NULL;
@@ -550,7 +558,7 @@ static int finish_encoder(CastRecorder *r, bool failed, uint64_t elapsed, uint64
     char original[CAST_ERR];
     snprintf(original, sizeof(original), "%s", r->codec_error);
     if (!failed && r->sound) {
-        if (fill_audio(r, (int64_t)ns_to_samples(elapsed), segment, segment_sample, false) < 0) {
+        if (fill_audio(r, (int64_t)ns_to_samples(elapsed), segment, segment_sample, false, true) < 0) {
             rc = -1;
         }
         int pending = av_audio_fifo_size(r->fifo);
@@ -683,7 +691,7 @@ static void *worker(void *data)
             if (goal > r->audio_produced + RATE / 10) {
                 goal = r->audio_produced + RATE / 10;
             }
-            rc = fill_audio(r, goal, segment, segment_sample, false);
+            rc = fill_audio(r, goal, segment, segment_sample, false, false);
         }
         if (rc < 0) {
             fail_recording(r);
@@ -1007,7 +1015,7 @@ int recorder_pause(CastRecorder *r, bool paused, char *reply, size_t n)
     int rc = 0;
     if (paused) {
         zero_pending_audio(r);
-        rc = fill_audio(r, (int64_t)ns_to_samples(elapsed), segment, segment_sample, true);
+        rc = fill_audio(r, (int64_t)ns_to_samples(elapsed), segment, segment_sample, true, false);
     }
     pthread_mutex_lock(&r->mutex);
     if (rc < 0) {

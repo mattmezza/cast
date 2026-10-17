@@ -282,6 +282,23 @@ static void read_locked(CastAudio *a, uint64_t ns, float *dst, unsigned count, u
         }
     }
 }
+bool audio_record_pending(CastAudio *a, uint64_t ns, int count)
+{
+    if (!a || count <= 0) return false;
+    /* AVAudioEngine may deliver 100 ms batches despite bufferSize:1024. Never
+     * commit silence merely because the recording worker beat that callback.
+     * A stopped/stalled source still advances after 250 ms; no clock shift or
+     * destructive ring read is needed. Privacy-retired windows need no wait. */
+    uint64_t now = cast_now_ns();
+    if (now > ns && now - ns >= 250000000ULL) return false;
+    uint64_t end = sample_time(ns) + (unsigned)count;
+    pthread_mutex_lock(&a->lock);
+    bool pending = end > a->accept_after && end > a->record_after &&
+        ((a->cfg.mic && a->end < end) ||
+         (a->cfg.desktop && !a->error[0] && a->desktop_end < end));
+    pthread_mutex_unlock(&a->lock);
+    return pending;
+}
 void audio_read(CastAudio *a, uint64_t ns, float *dst, int count)
 { if (count <= 0) return; pthread_mutex_lock(&a->lock); read_locked(a, ns, dst, (unsigned)count, a->record_after, 2); pthread_mutex_unlock(&a->lock); }
 void audio_stream_read(CastAudio *a, uint64_t ns, float *dst, int count)
@@ -303,3 +320,30 @@ void audio_status(CastAudio *a, char *out, size_t size)
 { pthread_mutex_lock(&a->lock); snprintf(out, size, "{\"available\":true,\"mic_ready\":%s,\"desktop_ready\":%s,\"virtual_ready\":false,\"virtual_silent\":%s}", a->engine.running ? "true" : "false", a->desktop_ready && !a->error[0] ? "true" : "false", a->silent ? "true" : "false"); pthread_mutex_unlock(&a->lock); }
 void audio_error(CastAudio *a, char *out, size_t size)
 { pthread_mutex_lock(&a->lock); snprintf(out, size, "%s", a->cfg.mic && !a->engine.running ? "Microphone capture unavailable" : a->error[0] ? a->error : a->desktop_pending ? "Desktop audio starting; waiting for ScreenCaptureKit" : ""); pthread_mutex_unlock(&a->lock); }
+
+#ifdef CAST_TEST
+CastAudio *audio_test_open(const Config *cfg)
+{
+    CastAudio *a = calloc(1, sizeof *a);
+    if (a) { pthread_mutex_init(&a->lock, NULL); a->cfg = *cfg; }
+    return a;
+}
+void audio_test_push(CastAudio *a, int source, uint64_t ns, const float *samples, int count)
+{
+    pthread_mutex_lock(&a->lock);
+    uint64_t at = sample_time(ns);
+    float *ring = source == 0 ? a->samples : a->desktop_samples;
+    uint64_t *begin = source == 0 ? &a->begin : &a->desktop_begin;
+    uint64_t *end = source == 0 ? &a->end : &a->desktop_end;
+    if (!*end) *begin = at;
+    for (int i = 0; i < count; ++i) {
+        uint64_t p = at + (unsigned)i;
+        if (p < a->accept_after) continue;
+        ring[(p % RING)*2] = samples[i*2];
+        ring[(p % RING)*2+1] = samples[i*2+1];
+    }
+    *end = at + (unsigned)count;
+    if (*end > RING && *begin < *end - RING) *begin = *end - RING;
+    pthread_mutex_unlock(&a->lock);
+}
+#endif

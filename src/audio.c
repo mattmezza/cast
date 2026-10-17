@@ -769,6 +769,11 @@ void audio_record_privacy(CastAudio *a)
         pw_thread_loop_unlock(a->loop);
     }
 }
+bool audio_record_pending(CastAudio *a, uint64_t ns, int count)
+{
+    /* PipeWire capture retains the existing graph scheduling horizon. */
+    (void)a; (void)ns; (void)count; return false;
+}
 void audio_read(CastAudio *a, uint64_t ns, float *dst, int count)
 {
     if (a->started) {
