@@ -119,6 +119,11 @@ static void press(Display *d, KeySym symbol, bool down)
                            ? CAST_PRO_DISPLAY_NAME " output preview" \
                            : CAST_DISPLAY_NAME " output preview")
 
+#define PREVIEW_CLASS (!strcmp(CAST_APPLICATION_NAME, "cast-pro") ? "CastProPreview" : "CastPreview")
+#define PREVIEW_NAME (!strcmp(CAST_APPLICATION_NAME, "cast-pro") ? "cast-pro-preview" : "cast-preview")
+#define PANEL_CLASS (!strcmp(CAST_APPLICATION_NAME, "cast-pro") ? "CastProPanel" : "CastPanel")
+#define PANEL_NAME (!strcmp(CAST_APPLICATION_NAME, "cast-pro") ? "cast-pro-panel" : "cast-panel")
+
 static Window named_window(Display *d, const char *title)
 {
     Window root, parent, *children = NULL, result = None;
@@ -202,7 +207,7 @@ static void preview_tests(Display *d, Platform *p, Config *cfg, Compositor *c)
     assert(attr.y == (DisplayHeight(d, DefaultScreen(d)) - attr.height) / 2);
     XClassHint hint;
     assert(XGetClassHint(d, preview, &hint));
-    assert(!strcmp(hint.res_name, "cast-preview") && !strcmp(hint.res_class, "CastPreview"));
+    assert(!strcmp(hint.res_name, PREVIEW_NAME) && !strcmp(hint.res_class, PREVIEW_CLASS));
     XFree(hint.res_name);
     XFree(hint.res_class);
     XImage *header = XGetImage(d, preview, 0, attr.height - 32, 32, 32, AllPlanes, ZPixmap);
@@ -357,7 +362,7 @@ static void panel_tests(Display *d, Platform *p, Config *cfg, Compositor *comp)
     Window root = DefaultRootWindow(d);
     Window frame = XCreateSimpleWindow(d, root, 60, 70, 230, 150, 3, 0x123456, 0x456789);
     Window panel = XCreateSimpleWindow(d, frame, 10, 25, 210, 115, 0, 0, 0xff3377);
-    XClassHint hint = {.res_name = "cast-panel", .res_class = "CastPanel"};
+    XClassHint hint = {.res_name = PANEL_NAME, .res_class = PANEL_CLASS};
     XSetClassHint(d, panel, &hint);
     Atom pid_atom = XInternAtom(d, "_NET_WM_PID", false);
     Atom type_atom = XInternAtom(d, "_NET_WM_WINDOW_TYPE", false);
@@ -375,7 +380,7 @@ static void panel_tests(Display *d, Platform *p, Config *cfg, Compositor *comp)
     XSetClassHint(d, panel, &hint);
     XSync(d, false);
     assert(platform_panel_register(p, panel, (int)pid, error, sizeof(error)) < 0);
-    hint.res_class = "CastPanel";
+    hint.res_class = PANEL_CLASS;
     XSetClassHint(d, panel, &hint);
     Atom dock = XInternAtom(d, "_NET_WM_WINDOW_TYPE_DOCK", false);
     XChangeProperty(d, panel, type_atom, XA_ATOM, 32, PropModeReplace, (unsigned char *)&dock, 1);
@@ -555,7 +560,7 @@ static void countdown_tests(Display *d, Platform *p, Config *cfg, Compositor *co
     assert_utility(d, window);
     XClassHint hint;
     assert(XGetClassHint(d, window, &hint));
-    assert(!strcmp(hint.res_class, "CastPreview"));
+    assert(!strcmp(hint.res_class, PREVIEW_CLASS));
     XFree(hint.res_name);
     XFree(hint.res_class);
     XImage *image =
