@@ -73,7 +73,7 @@ CPPFLAGS += $(shell $(PKG_CONFIG) --cflags libsodium)
 endif
 ifeq ($(MEDIA_PROFILE),lgpl)
 CPPFLAGS += -DCAST_MEDIA_PROFILE_LGPL=1
-PKG_CONFIG = env PKG_CONFIG_PATH=$(LGPL_ROOT)/prefix/lib/pkgconfig pkg-config
+PKG_CONFIG = env PKG_CONFIG_PATH=$(LGPL_ROOT)/prefix/lib/pkgconfig:$(LGPL_ROOT)/prefix/lib/x86_64-linux-gnu/pkgconfig pkg-config
 override LDFLAGS += -Wl,-rpath,'$$ORIGIN/../lib/$(BINARY)/media'
 ifeq ($(OFFICIAL_RELEASE),0)
 # Local SDK lookup is restricted to visibly nonproduction development binaries.
