@@ -3,8 +3,10 @@
 Community has a Linux x86_64 static build pipeline in
 [release-static-linux.yml](../.github/workflows/release-static-linux.yml). It keeps
 `X11=1`, `WAYLAND=1`, and `PANEL=1`; normal Arch packages use shared libraries.
-The new static pipeline is undergoing release validation;
-its existence alone does not establish that a release artifact passed its checks.
+The [0.10.4 acceptance run](https://github.com/mattmezza/cast/actions/runs/39021760723)
+passed the unit and CLI suites, actual X11 capture, panel rendering, and PipeWire
+audio capture with runtime shared-library loading rejected. Published assets are
+rebuilt and checked from their exact release tag.
 
 ## What the Linux static executable contains
 
