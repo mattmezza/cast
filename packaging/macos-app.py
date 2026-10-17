@@ -194,6 +194,15 @@ def main():
                 parser.error('Pro packaging requires --pro-root for its license notices')
             private = args.pro_root / 'pro' if (args.pro_root / 'pro/src').is_dir() else args.pro_root
             shutil.copy2(private / 'LICENSE', resources / 'PRO-LICENSE')
+            shutil.copy2(private / 'tools/speech-assets.py', resources / 'cast-pro-model.py')
+            (resources / 'SPEECH-MODELS.txt').write_text(
+                'Speech models are optional and are never downloaded at startup.\n'
+                'Install Python 3, then run in Terminal:\n'
+                'python3 "/Applications/Super Screencast Pro.app/Contents/Resources/cast-pro-model.py" --list\n'
+                'python3 "/Applications/Super Screencast Pro.app/Contents/Resources/cast-pro-model.py" tiny-q5_1 --download\n'
+                'The installer verifies the pinned SHA256 and size, preserves existing models, and prints the absolute model path.\n'
+                'Select that path under Audio > Speech recognition. Use --output /absolute/path/model.bin to choose another location.\n'
+                'No model is required for recording, camera, zoom or manual notes.\n')
             shutil.copy2(args.pro_eula if args.pro_eula else private / 'EULA-DRAFT.md',
                          resources / ('PRO-EULA.md' if args.pro_eula else 'PRO-EULA-DRAFT.md'))
         shutil.copytree(repository / 'licenses', resources / 'license-texts')
