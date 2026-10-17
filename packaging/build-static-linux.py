@@ -128,7 +128,7 @@ def main():
         variables += ['MEDIA_PROFILE=lgpl', 'PRO_ROOT=' + str(args.pro_root.resolve()),
             'LGPL_ROOT=' + str(base), 'OFFICIAL_RELEASE=0', 'STT=1', 'STT_ENGINEERING=1',
             'RELEASE_TIMESTAMP=' + str(timestamp), 'PRODUCTION_LICENSE_ACCEPTANCE=1', 'STT_HELPER_SIBLING=1', 'STT_PROFILE=' + str(args.stt_profile.resolve()), 'STT_CFLAGS=' + profile['cflags'],
-            'STT_LIBS=' + profile['libs'] + ' ' + libs, 'STT_CPU_BACKEND=',
+            'STT_LIBS=' + profile['libs'], 'STT_CPU_BACKEND=',
             'STT_LDFLAGS=-Wl,-Map,' + str(base / 'helper.map')]
     run('make', jobs, *variables, 'all', env=environment)
     helper = None
