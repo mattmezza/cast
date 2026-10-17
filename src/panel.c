@@ -276,7 +276,8 @@ static const FieldSpec core_fields[] = {
     FT("record.directory", "Recording directory", record_dir, TAB_SETTINGS, 0, RECORD_LOCK),
     FI("record.countdown", "Recording countdown (s)", record_countdown, 0, 60, TAB_SETTINGS, 0,
        RECORD_LOCK),
-    FT("record.container", "Container", record_container, TAB_SETTINGS, 1, RECORD_LOCK),
+    FE("record.container", "Recording format", record_container, "mp4,matroska,webm", TAB_SETTINGS,
+       1, RECORD_LOCK),
     FT("record.video_codec", "Video codec", video_codec, TAB_SETTINGS, 1, RECORD_LOCK),
     FT("record.audio_codec", "Audio codec", audio_codec, TAB_SETTINGS, 1, RECORD_LOCK),
     FE("record.rate_control", "Video rate control", record_rate_control, "auto,bitrate,crf",
@@ -2292,6 +2293,10 @@ static void lane_body(Panel *p, int lane)
             effect_buttons(p, lane);
         }
     } else if (lane == 1) {
+        text_wrapped(format(p, "Applied format: %s", s->config.record_container), secondary);
+        if (!strcmp(s->config.record_container, "mp4")) {
+            text_wrapped("Records to a recoverable MKV, then creates MP4 when stopped.", muted);
+        }
         if (s->record_encoder[0]) {
             text_wrapped(format(p, "Encoder: %s", s->record_encoder), secondary);
             if (s->record_encoder_detail[0]) {
