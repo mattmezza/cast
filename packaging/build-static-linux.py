@@ -28,6 +28,7 @@ def main():
     parser.add_argument('--pro-root', type=Path)
     parser.add_argument('--stt-profile', type=Path)
     parser.add_argument('--pro-trust-header', type=Path)
+    parser.add_argument('--release-timestamp', type=int, help='positive exact public core commit UTC timestamp')
     args = parser.parse_args()
     if args.edition == 'pro' and (not args.pro_root or not args.stt_profile):
         parser.error('Pro requires --pro-root and --stt-profile')
@@ -110,6 +111,9 @@ def main():
     # A linker group resolves cycles between all static media/UI dependencies.
     libs = '-Wl,--start-group -L' + str(prefix / 'lib') + ' ' + libs + ' -lstdc++ -Wl,--end-group'
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+    timestamp = int(subprocess.check_output(['git', 'show', '-s', '--format=%ct', commit], cwd=ROOT, text=True))
+    if args.release_timestamp is not None and (args.release_timestamp <= 0 or args.release_timestamp != timestamp):
+        parser.error('release timestamp must equal the positive exact public core commit UTC timestamp')
     variables = ['EDITION=' + args.edition, 'X11=1', 'WAYLAND=1', 'PANEL=1', 'STT=0',
                  'STATIC_PANEL_X11=1', 'SOURCE_COMMIT=' + commit, 'OFFICIAL_RELEASE=1', 'TEST_LINK_DNS=1',
                  'PKG_LIBS=' + libs, 'PANEL_LIBS=', 'LDFLAGS=-static -no-pie -Wl,-Map,' + str(base / 'cast.map')]
@@ -119,7 +123,7 @@ def main():
             variables.append('PRO_TRUST_HEADER=' + str(args.pro_trust_header.resolve()))
         variables += ['MEDIA_PROFILE=lgpl', 'PRO_ROOT=' + str(args.pro_root.resolve()),
             'LGPL_ROOT=' + str(base), 'OFFICIAL_RELEASE=0', 'STT=1', 'STT_ENGINEERING=1',
-            'PRODUCTION_LICENSE_ACCEPTANCE=1', 'STT_HELPER_SIBLING=1', 'STT_PROFILE=' + str(args.stt_profile.resolve()), 'STT_CFLAGS=' + profile['cflags'],
+            'RELEASE_TIMESTAMP=' + str(timestamp), 'PRODUCTION_LICENSE_ACCEPTANCE=1', 'STT_HELPER_SIBLING=1', 'STT_PROFILE=' + str(args.stt_profile.resolve()), 'STT_CFLAGS=' + profile['cflags'],
             'STT_LIBS=' + profile['libs'], 'STT_CPU_BACKEND=',
             'STT_LDFLAGS=-Wl,-Map,' + str(base / 'helper.map')]
     run('make', jobs, *variables, 'all', env=environment)
@@ -131,6 +135,7 @@ def main():
         if (private / 'pro/src/trusted_keys.h').is_file():
             private /= 'pro'
         test_variables.append('PRODUCTION_LICENSE_ACCEPTANCE=0')
+        test_variables.append('RELEASE_TIMESTAMP=0')
         test_header = private / 'tests/generated/trusted_keys.h'
         if not test_header.is_file():
             raise ValueError('Pro static tests require explicit private verifier fixtures')
