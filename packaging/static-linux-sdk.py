@@ -53,10 +53,16 @@ def build(args, base, prefix, sources, environment, jobs, ROOT, run, static_desk
     if content.count(original) != 1:
         raise ValueError('SDL Wayland dependency recipe changed')
     checks.write_text(content.replace(original, replacement))
+    dynapi = sources['SDL'] / 'src/dynapi/SDL_dynapi.h'
+    content = dynapi.read_text()
+    original = '#define SDL_DYNAMIC_API 1'
+    if content.count(original) != 1:
+        raise ValueError('SDL dynamic API master switch changed')
+    dynapi.write_text(content.replace(original, '#define SDL_DYNAMIC_API 0 /* Cast static delivery: no replaceable shared SDL API. */'))
     for name, options in [
         ('SDL', ['-DSDL_SHARED=OFF', '-DSDL_STATIC=ON', '-DSDL_TESTS=OFF',
                  '-DSDL_TEST_LIBRARY=OFF', '-DSDL_X11=ON', '-DSDL_WAYLAND=ON',
-                 '-DSDL_LOADSO=OFF', '-DCMAKE_C_FLAGS=-DSDL_DYNAMIC_API=0', '-DSDL_DEPS_SHARED=OFF', '-DSDL_X11_SHARED=OFF', '-DSDL_WAYLAND_SHARED=OFF',
+                 '-DSDL_LOADSO=OFF', '-DSDL_DEPS_SHARED=OFF', '-DSDL_X11_SHARED=OFF', '-DSDL_WAYLAND_SHARED=OFF',
                  '-DSDL_WAYLAND_LIBDECOR=OFF', '-DSDL_OPENGL=OFF', '-DSDL_OPENGLES=OFF',
                  '-DSDL_VULKAN=OFF', '-DSDL_RENDER_GPU=OFF', '-DSDL_GPU=OFF', '-DSDL_AUDIO=OFF',
                  '-DSDL_LIBUDEV=OFF', '-DSDL_JOYSTICK=OFF', '-DSDL_HAPTIC=OFF', '-DSDL_SENSOR=OFF',
