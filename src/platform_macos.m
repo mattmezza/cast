@@ -104,7 +104,12 @@ static void *input_run(void *context)
         bool closed = capture->closed;
         pthread_mutex_unlock(&capture->lock);
         CFRunLoopAddSource(loop, source, kCFRunLoopCommonModes);
-        if (!closed) CFRunLoopRun();
+        while (!closed) {
+            CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.1, false);
+            pthread_mutex_lock(&capture->lock);
+            closed = capture->closed;
+            pthread_mutex_unlock(&capture->lock);
+        }
         CFRunLoopRemoveSource(loop, source, kCFRunLoopCommonModes);
         CFRelease(source);
     }
