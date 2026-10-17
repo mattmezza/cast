@@ -13,6 +13,7 @@ PREFIX ?= /usr/local
 MEDIA_PROFILE ?= system
 PRO_ROOT ?= $(abspath ../cast-pro)
 PRO_DIR = $(if $(wildcard $(PRO_ROOT)/pro/src/pro_provider.c),$(PRO_ROOT)/pro,$(PRO_ROOT))
+PRODUCTION_LICENSE_ACCEPTANCE ?= 0
 PRO_TRUST_HEADER ?= $(PRO_DIR)/src/trusted_keys.h
 LGPL_ROOT ?= $(CURDIR)/build/deps-lgpl
 OFFICIAL_RELEASE ?= 0
@@ -47,6 +48,15 @@ endif
 endif
 ifeq ($(STT_GPU_ENGINEERING),1)
 $(error macOS Vulkan engineering builds are not supported)
+endif
+ifneq ($(filter-out 0 1,$(PRODUCTION_LICENSE_ACCEPTANCE)),)
+$(error PRODUCTION_LICENSE_ACCEPTANCE must be 0 or 1)
+endif
+ifeq ($(PRODUCTION_LICENSE_ACCEPTANCE),1)
+ifneq ($(EDITION),pro)
+$(error production license acceptance requires Pro)
+endif
+CPPFLAGS += -DCAST_PRODUCTION_LICENSE_ACCEPTANCE=1
 endif
 ifeq ($(EDITION),pro)
 BINARY = cast-pro
