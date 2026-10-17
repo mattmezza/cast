@@ -628,6 +628,9 @@ void app_runtime_captions(App *a, int lane, Frame *frame)
 }
 void app_runtime_recording_finished(App *a)
 {
+    /* MP4 finalization replaces the recoverable MKV path. Sidecars must follow
+     * the final media file, including completion during daemon shutdown. */
+    media_record_path(a->media, a->state.record_path, sizeof a->state.record_path);
     const CastRuntimeHooks *hooks = cast_runtime_hooks();
     if (a->runtime && hooks && hooks->recording_finished) {
         hooks->recording_finished(a->state.record_path, media_record_duration(a->media));

@@ -505,6 +505,7 @@ static void tick(App *a)
     media_status(a->media, &running, &paused, &dropped, e, sizeof e);
     bool finalizing = media_record_finalizing(a->media);
     if (a->record_finalizing && !finalizing) {
+        media_record_path(a->media, a->state.record_path, sizeof a->state.record_path);
         char recording_error[CAST_ERR];
         media_record_error(a->media, recording_error, sizeof recording_error);
         fprintf(stderr, "cast: %s%s\n",
@@ -1073,6 +1074,7 @@ cleanup:
                 nanosleep(&delay, NULL);
             }
             e[0] = 0;
+            media_record_path(a->media, a->state.record_path, sizeof a->state.record_path);
             media_record_error(a->media, e, sizeof e);
             fprintf(stderr, "cast: %s%s\n",
                     e[0] ? "finalization failed: " : "recording finalized: ",

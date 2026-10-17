@@ -222,6 +222,7 @@ static int stream_status_reply(App *a, bool json, char *out, size_t n)
 }
 static int status(App *a, bool json, char *out, size_t n)
 {
+    media_record_path(a->media, a->state.record_path, sizeof a->state.record_path);
     State *s = &a->state;
     Config *c = &a->config;
     Capabilities cap = platform_capabilities(a->platform);
