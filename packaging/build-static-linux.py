@@ -103,7 +103,7 @@ def main():
             'configure_flags': [x for x in media['ffmpeg_flags'] if x not in ('--enable-shared', '--disable-static')] + ['--enable-static', '--disable-shared']}))
     packages = ['fontconfig', 'freetype2', 'libavcodec', 'libavformat', 'libavutil',
                 'libswscale', 'libswresample', 'libpipewire-0.3', 'x11', 'xext', 'xrandr',
-                'xi', 'xfixes', 'xcomposite', 'gio-2.0', 'gio-unix-2.0', 'sdl3', 'sdl3-ttf']
+                'xi', 'xfixes', 'xcomposite', 'gio-2.0', 'gio-unix-2.0', 'sdl3', 'sdl3-ttf', 'xcursor']
     if args.edition == 'pro':
         packages.append('libsodium')
     libs = subprocess.check_output(['pkg-config', '--libs', '--static', *packages],
@@ -114,9 +114,13 @@ def main():
     timestamp = int(subprocess.check_output(['git', 'show', '-s', '--format=%ct', commit], cwd=ROOT, text=True))
     if args.release_timestamp is not None and (args.release_timestamp <= 0 or args.release_timestamp != timestamp):
         parser.error('release timestamp must equal the positive exact public core commit UTC timestamp')
+    loader = base / 'static-loader.o'
+    run('cc', '-O2', '-ffunction-sections', '-fdata-sections', '-Wall', '-Wextra',
+        '-Werror', '-c', ROOT / 'packaging/static-loader.c', '-o', loader)
+    loader_flags = str(loader) + ' -Wl,--wrap=dlopen,--wrap=dlsym,--wrap=dlclose,--wrap=dlerror'
     variables = ['EDITION=' + args.edition, 'X11=1', 'WAYLAND=1', 'PANEL=1', 'STT=0',
                  'STATIC_PANEL_X11=1', 'SOURCE_COMMIT=' + commit, 'OFFICIAL_RELEASE=1', 'TEST_LINK_DNS=1',
-                 'PKG_LIBS=' + libs, 'PANEL_LIBS=', 'LDFLAGS=-static -no-pie -Wl,-Map,' + str(base / 'cast.map')]
+                 'PKG_LIBS=' + libs, 'PANEL_LIBS=', 'LDFLAGS=-static -no-pie ' + loader_flags + ' -Wl,-Map,' + str(base / 'cast.map')]
     if args.edition == 'pro':
         profile = json.loads(args.stt_profile.read_text())
         if args.pro_trust_header:
@@ -124,7 +128,7 @@ def main():
         variables += ['MEDIA_PROFILE=lgpl', 'PRO_ROOT=' + str(args.pro_root.resolve()),
             'LGPL_ROOT=' + str(base), 'OFFICIAL_RELEASE=0', 'STT=1', 'STT_ENGINEERING=1',
             'RELEASE_TIMESTAMP=' + str(timestamp), 'PRODUCTION_LICENSE_ACCEPTANCE=1', 'STT_HELPER_SIBLING=1', 'STT_PROFILE=' + str(args.stt_profile.resolve()), 'STT_CFLAGS=' + profile['cflags'],
-            'STT_LIBS=' + profile['libs'], 'STT_CPU_BACKEND=',
+            'STT_LIBS=' + profile['libs'] + ' ' + libs, 'STT_CPU_BACKEND=',
             'STT_LDFLAGS=-Wl,-Map,' + str(base / 'helper.map')]
     run('make', jobs, *variables, 'all', env=environment)
     helper = None
