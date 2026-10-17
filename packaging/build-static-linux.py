@@ -166,9 +166,10 @@ def main():
         'helper_path': str(helper.relative_to(ROOT)) if helper else None,
         'source_commit': commit, 'make_variables': variables, 'sources': lock['sources'],
         'linkage': 'static glibc; no PT_INTERP or DT_NEEDED',
-        'runtime_requirements': ['compatible glibc for dynamically loaded desktop modules',
-                                 'PipeWire client SPA/modules/configuration and server',
-                                 'X11/Wayland display and portal', 'fonts', 'TLS trust store'],
+        'runtime_requirements': ['PipeWire configuration and server (client modules and SPA factories are built in)',
+                                 'X11 or XWayland for the software panel',
+                                 'Wayland display and portal for Wayland capture',
+                                 'fonts', 'TLS trust store'],
     }, indent=2) + '\n')
 
 
