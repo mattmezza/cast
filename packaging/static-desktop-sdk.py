@@ -11,7 +11,8 @@ def build(base, prefix, jobs, environment):
     for package, name, options in [
         ('libwayland-client0', 'wayland', ['-Ddocumentation=false', '-Dtests=false', '-Dscanner=false']),
         ('libxkbcommon0', 'xkbcommon', ['-Denable-wayland=false', '-Denable-x11=false',
-            '-Denable-xkbregistry=false', '-Denable-tools=false', '-Denable-docs=false'])]:
+            '-Denable-xkbregistry=false', '-Denable-tools=false', '-Denable-docs=false', '-Dxkb-config-root=/usr/share/X11/xkb',
+            '-Dxkb-config-extra-path=/etc/xkb', '-Dx-locale-root=/usr/share/X11/locale'])]:
         source, version = subprocess.check_output(['dpkg-query', '-W',
             '-f=${source:Package}\t${source:Version}', package], text=True).split('\t')
         subprocess.run(['apt-get', 'source', '--download-only', source + '=' + version], cwd=cache, check=True)
