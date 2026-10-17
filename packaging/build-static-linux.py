@@ -152,6 +152,7 @@ def main():
                 smoke = max((ROOT / 'build').glob('*/test_xorg'), key=lambda p: p.stat().st_mtime)
                 run('xvfb-run', '-a', '-s', '-screen 0 800x600x24',
                     'gdb', '--batch', '-ex', 'run', '-ex', 'thread apply all bt',
+                    '-ex', 'info sharedlibrary', '-ex', 'frame 8', '-ex', 'x/20i $pc-48',
                     '--args', smoke, '--exercise', env=environment)
             raise
     # Each test executable also consumes LDFLAGS. Relink the release executable
