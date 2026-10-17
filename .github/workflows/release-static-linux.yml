@@ -144,6 +144,7 @@ jobs:
       - name: Verify static audio and reject runtime shared-library loads
         run: |
           sudo apt-get install -y strace
+          python3 packaging/test-static-panel.py
           dbus-run-session -- python3 packaging/test-static-audio.py --trace
       - name: Preserve exact linked dependency sources
         run: python3 packaging/static-linux-sources.py
