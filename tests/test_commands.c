@@ -689,25 +689,35 @@ int main(void)
     COMMAND(app, true, "record", "pause");
     assert(!app->countdown && !app->state.recording);
 
+    /* Exercise the recorder-owned path, which status refreshes after finalization. */
+    char escaped_recording_path[PATH_MAX];
+    snprintf(escaped_recording_path, sizeof escaped_recording_path,
+             "%s/capture \"é\" \\ newline\n byte\xff.mkv", directory);
+    app->config.record_countdown = 0;
+    COMMAND(app, true, "record", "start", escaped_recording_path);
+    tick(app);
+    COMMAND(app, true, "record", "stop");
+    wait_finalization(app);
+
     /* Valid UTF-8 remains intact; arbitrary filename bytes remain valid JSON. */
     strcpy(app->config.mic_source, "mic \"quoted\" \\ route\n");
     strcpy(app->config.desktop_source, "desktop café");
     strcpy(app->config.virtual_name, "cast\tvirtual");
-    strcpy(app->state.record_path, "capture \"é\" \\ newline\n byte\xff");
     strcpy(app->state.last_error, "diagnostic\twith\rcontrols");
     COMMAND(app, true, "status", "--json");
     assert(strstr(response, "\\u00ff") && strstr(response, "\\u000a") &&
            strstr(response, "desktop café"));
     puts(response); /* check-unit parses this artifact with the standard JSON parser. */
-    memset(app->state.record_path, 1, sizeof app->state.record_path - 1);
-    app->state.record_path[sizeof app->state.record_path - 1] = 0;
-    COMMAND(app, false, "status", "--json");
-    assert(strstr(response, "IPC limit"));
+    char limited_reply[128];
+    char *status_args[] = {"status", "--json"};
+    assert(app_command(app, 2, status_args, limited_reply, sizeof limited_reply) != 0);
+    assert(strstr(limited_reply, "IPC limit"));
     COMMAND(app, true, "virtual", "resume");
     COMMAND(app, true, "quit");
     assert(app->state.virtual_paused && !app->state.virtual_frozen && !app->state.recording);
     free_app(app);
     unlink(recording_path);
+    unlink(escaped_recording_path);
     unlink(configuration);
     rmdir(directory);
     fputs("production command, privacy, toggle, reload, countdown and status tests passed\n",
