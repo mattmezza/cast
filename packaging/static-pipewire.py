@@ -53,7 +53,10 @@ def build(pwbuild, prefix, environment):
             target = output / (str(len(objects)) + '.o')
             shutil.copy2(original, target)
             symbols = subprocess.check_output(['nm', '-g', '--defined-only', target], text=True)
-            replacements = []
+            # Each upstream shared module owns this global log-topic pointer.
+            # Rename both definitions and references within its object group.
+            replacements = ['--redefine-sym',
+                            'mod_topic=cast_pw_builtin_' + str(index) + '_mod_topic']
             for symbol in ('pipewire__module_init', 'spa_handle_factory_enum', 'spa_log_topic_enum'):
                 if any(line.split()[-1:] == [symbol] for line in symbols.splitlines()):
                     replacement = 'cast_pw_builtin_' + str(index) + '_' + symbol
