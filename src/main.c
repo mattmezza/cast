@@ -1126,6 +1126,14 @@ cleanup:
 }
 int main(int argc, char **argv)
 {
+#ifdef CAST_PANEL_STATIC_X11
+    /* The daemon also owns Pro Notes windows; keep every SDL window on the
+     * static software X11 driver, including children started from a panel. */
+    const char *video_driver = getenv("SDL_VIDEODRIVER");
+    if (!video_driver || strcmp(video_driver, "dummy")) {
+        setenv("SDL_VIDEODRIVER", "x11", 1);
+    }
+#endif
     if (cast_edition_identity()->pro && !cast_edition_extensions()) {
         return fprintf(stderr, "cast-pro: incompatible private extension API/provider; rebuild "
                                "matching sources\n"),
