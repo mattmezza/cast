@@ -70,13 +70,17 @@ neither download dependencies nor prove runtime completeness.
 ## Pro distribution materials
 
 The private Pro implementation remains separate from the MIT Community sources.
-The Community static pipeline does not build or qualify static Pro artifacts.
+The Community release workflow does not publish private Pro artifacts. The private
+repository has a separate static acceptance workflow using the same verified
+media SDK, production public license trust, and a statically linked CPU Whisper
+helper. Pro acceptance and release qualification remain separate.
 Pro speech processing also uses a separate structured helper and explicitly
 selected model/VAD assets; static desktop linkage would not embed those inputs.
 
-A future static Pro build using LGPL libraries needs corresponding library sources
-and application materials allowing users to relink with a modified library. These
-can include application object files without publishing private source. The
-existing shared-library source bundle does not replace those relinking materials.
+The private static kit includes corresponding library sources and application
+object files, library archives, and relinking commands for the application and
+helper. The builder verifies that relinking reproduces the delivered executables.
+Private source is not included in public Community archives. A shared-library
+source bundle does not replace the static kit's relinking materials.
 See the [GNU LGPL static-linking explanation](https://www.gnu.org/licenses/gpl-faq.en.html#LGPLStaticVsDynamic)
 and the [LGPLv3 combined-work requirements](https://www.gnu.org/licences/lgpl.html).
