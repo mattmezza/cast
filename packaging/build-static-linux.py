@@ -2,6 +2,7 @@
 """Explicit glibc static Linux build; requires the workflow's Ubuntu SDK inputs."""
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -38,12 +39,15 @@ def main():
     prefix, cache = base / 'prefix', base / 'upstream'
     cache.mkdir(parents=True, exist_ok=True)
     prefix.mkdir(exist_ok=True)
+    spec = importlib.util.spec_from_file_location('static_pipewire', ROOT / 'packaging/static-pipewire.py')
+    static_pipewire = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(static_pipewire)
     lock_path = ROOT / 'packaging/static-linux-lock.json'
     lock = json.loads(lock_path.read_text())
     toolchain = subprocess.check_output(['dpkg-query', '-W', '-f=${binary:Package}=${Version}\n'])
     identity = hashlib.sha256(lock_path.read_bytes() +
                               (ROOT / 'packaging/media-lgpl-lock.json').read_bytes() +
-                              Path(__file__).read_bytes() + toolchain).hexdigest()
+                              Path(__file__).read_bytes() + (ROOT / 'packaging/static-pipewire.py').read_bytes() + toolchain).hexdigest()
     marker = base / 'sdk.identity'
     reuse = args.reuse_sdk and marker.is_file() and marker.read_text().strip() == identity
 
@@ -85,6 +89,7 @@ def main():
         # PipeWire upstream explicitly uses shared_library(), ignoring default_library.
         # Build a static counterpart from exactly the same compiled client objects.
         pipewire = sources['pipewire']
+        static_pipewire.prepare(pipewire)
         pwbuild = base / 'pipewire-build'
         if pwbuild.exists():
             shutil.rmtree(pwbuild)
@@ -93,11 +98,8 @@ def main():
             '-Dspa-plugins=enabled', '-Dsupport=enabled', '-Daudioconvert=enabled',
             '-Daudiomixer=enabled', '-Dpipewire-jack=disabled', '-Dpipewire-v4l2=disabled', env=environment)
         run('ninja', '-C', pwbuild, jobs, env=environment)
-        objects = sorted(pwbuild.glob('src/pipewire/libpipewire-0.3.so*.p/*.o'))
-        if not objects:
-            raise ValueError('PipeWire client objects missing')
         (prefix / 'lib').mkdir(exist_ok=True)
-        run('ar', 'rcs', prefix / 'lib/libpipewire-0.3.a', *objects)
+        static_pipewire.build(pwbuild, prefix, environment)
         # Install the same build's public/generated headers and pkg-config files.
         # Distro headers can describe an older ABI and must never drive this build.
         pwstage = base / 'pipewire-install'
