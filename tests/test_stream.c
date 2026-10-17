@@ -100,7 +100,28 @@ static pid_t ingest_start(unsigned port, const char *output)
                          "flv",    (char *)output, NULL};
     pid_t child;
     assert(posix_spawnp(&child, "ffmpeg", NULL, NULL, arguments, environ) == 0);
-    wait_ms(250);
+    /* Probe the listening bind without consuming ffmpeg's one RTMP client.
+     * Static CI links several large test binaries concurrently; a fixed sleep
+     * can expire before the receiver has even reached listen(). */
+    uint64_t deadline = cast_now_ns() + 5000000000ULL;
+    while (cast_now_ns() < deadline) {
+        assert(waitpid(child, NULL, WNOHANG) == 0);
+        int probe = socket(AF_INET, SOCK_STREAM, 0);
+        assert(probe >= 0);
+        int reuse = 1;
+        assert(setsockopt(probe, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) == 0);
+        struct sockaddr_in address = {.sin_family = AF_INET,
+            .sin_addr.s_addr = htonl(INADDR_LOOPBACK), .sin_port = htons(port)};
+        int result = bind(probe, (struct sockaddr *)&address, sizeof(address));
+        int failure = errno;
+        close(probe);
+        if (result < 0 && failure == EADDRINUSE) {
+            return child;
+        }
+        assert(result == 0);
+        wait_ms(10);
+    }
+    assert(!"RTMP fixture did not start listening");
     return child;
 }
 struct Tone {
