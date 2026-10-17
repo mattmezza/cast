@@ -61,6 +61,10 @@ def build(args, base, prefix, sources, environment, jobs, ROOT, run, static_desk
             '--pkg-config-flags=--static', *flags, cwd=sources['ffmpeg'], env=environment)
         run('make', jobs, cwd=sources['ffmpeg'], env=environment)
         run('make', 'install', cwd=sources['ffmpeg'], env=environment)
+    def model_https():
+        # Only Pro links this archive; the shared SDK also serves Community.
+        run('python3', ROOT / 'packaging/static-model-https.py', '--prefix', prefix,
+            '--source', sources['curl'], '--jobs', args.jobs, env=environment)
     def sdl():
         main_cmake = sources['SDL'] / 'CMakeLists.txt'
         content = main_cmake.read_text()
@@ -106,7 +110,8 @@ def build(args, base, prefix, sources, environment, jobs, ROOT, run, static_desk
     previous = b''
     for name, step, helper in [
         ('desktop', desktop, 'static-desktop-sdk.py'), ('util-linux', util_linux, None),
-        ('pipewire', pipewire, 'static-pipewire.py'), ('media', media, None), ('sdl', sdl, None)]:
+        ('pipewire', pipewire, 'static-pipewire.py'), ('media', media, None),
+        ('sdl', sdl, None), ('model-https', model_https, 'static-model-https.py')]:
         extra = (ROOT / 'packaging' / helper).read_bytes() if helper else b''
         identity = hashlib.sha256(common + inspect.getsource(step).encode() + extra + previous).hexdigest()
         run_stage(step, prefix / '.cast-static-stamps' / name, identity)

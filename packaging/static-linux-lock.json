@@ -53,6 +53,18 @@
       "archive": "util-linux-2.39.4.tar.xz",
       "sha256": "6c4f8723dafd41c39d93ecbf16509fc88c33cd5bd3277880ae5a1d97a014fd0e",
       "hash_evidence": "https://www.kernel.org/pub/linux/utils/util-linux/v2.39/sha256sums.asc"
+    },
+    {
+      "name": "curl",
+      "version": "8.23.0",
+      "archive": "curl-8.23.0.tar.xz",
+      "url": "https://curl.se/download/curl-8.23.0.tar.xz",
+      "sha256": "8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5",
+      "license": "curl",
+      "license_files": [
+        "COPYING"
+      ],
+      "hash_evidence": "SHA256 of original upstream HTTPS source archive, verified 2026-10-17; https://curl.se/download.html"
     }
   ]
 }

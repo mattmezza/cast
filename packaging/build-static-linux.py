@@ -55,7 +55,8 @@ def main():
     identity = hashlib.sha256(lock_path.read_bytes() +
                               (ROOT / 'packaging/media-lgpl-lock.json').read_bytes() +
                               (ROOT / 'packaging/static-linux-sdk.py').read_bytes() + (ROOT / 'packaging/static-pipewire.py').read_bytes() +
-                              (ROOT / 'packaging/static-desktop-sdk.py').read_bytes() + toolchain).hexdigest()
+                              (ROOT / 'packaging/static-desktop-sdk.py').read_bytes() +
+                              (ROOT / 'packaging/static-model-https.py').read_bytes() + toolchain).hexdigest()
     marker = base / 'sdk.identity'
     reuse = args.reuse_sdk and marker.is_file() and marker.read_text().strip() == identity
 
@@ -105,7 +106,7 @@ def main():
                 'libswscale', 'libswresample', 'libpipewire-0.3', 'x11', 'xext', 'xrandr',
                 'xi', 'xfixes', 'xcomposite', 'gio-2.0', 'gio-unix-2.0', 'sdl3', 'sdl3-ttf', 'xcursor']
     if args.edition == 'pro':
-        packages.append('libsodium')
+        packages += ['libsodium', 'libcurl']
     libs = subprocess.check_output(['pkg-config', '--libs', '--static', *packages],
                                    env=environment, text=True).strip()
     # A linker group resolves cycles between all static media/UI dependencies.

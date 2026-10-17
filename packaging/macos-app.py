@@ -177,6 +177,7 @@ def main():
             'CFBundleShortVersionString': match.group(1),
             'CFBundleVersion': match.group(1),
             'LSMinimumSystemVersion': '13.0',
+            'LSMultipleInstancesProhibited': True,
             'NSHighResolutionCapable': True,
             'NSScreenCaptureUsageDescription': 'Capture your selected display for recordings.',
             'NSAudioCaptureUsageDescription': 'Include system audio in recordings when enabled.',

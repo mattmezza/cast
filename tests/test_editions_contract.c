@@ -123,6 +123,22 @@ static void check_config(Config *config, const char *directory)
     char path[4096], error[256];
     snprintf(path, sizeof path, "%s/config.ini", directory);
     config_defaults(config);
+    assert(!strcmp(config_extension_value(config, "transcription", "model_path"), ""));
+    /* Model setup is opt-in. Loading old or custom paths must never rewrite a
+     * user selection, even when it currently points at a missing model. */
+    write_config(path, "[transcription]\nmodel_path=/usr/share/cast-pro/speech/small-q5_1.bin\n");
+    assert(!config_load(config, path, true, error, sizeof error));
+    assert(!strcmp(config_extension_value(config, "transcription", "model_path"),
+                   "/usr/share/cast-pro/speech/small-q5_1.bin"));
+    char model[4096], contents[8192];
+    snprintf(model, sizeof model, "%s/custom-model.bin", directory);
+    write_config(model, "test local model bytes");
+    snprintf(contents, sizeof contents, "[transcription]\nmodel_path=%s\n", model);
+    write_config(path, contents);
+    assert(!config_load(config, path, true, error, sizeof error));
+    assert(!strcmp(config_extension_value(config, "transcription", "model_path"), model));
+    assert(!unlink(model));
+    config_defaults(config);
     assert(!config_validate(config, error, sizeof error));
     assert(!config_set_value(config, "future_test.mode", "dormant", error, sizeof error));
     assert(!strcmp(config_extension_value(config, "future_test", "mode"), "dormant"));

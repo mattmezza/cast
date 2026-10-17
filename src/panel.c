@@ -4,6 +4,12 @@
 #include "panel_color_pick.h"
 #include "panel_lifecycle.h"
 #include "panel_transport.h"
+#ifdef WITH_PRO
+#include "model_install.h"
+#endif
+#ifdef WITH_MACOS
+#include "panel_macos.h"
+#endif
 #define CLAY_IMPLEMENTATION
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmissing-prototypes"
@@ -18,6 +24,7 @@
 #include <X11/Xutil.h>
 #undef Cursor
 #endif
+#include "os_compat.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
@@ -32,7 +39,6 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
-#include "os_compat.h"
 
 /* Small immediate widgets share Clay's layout, clipping, and pointer geometry.
  * The worker transports bounded requests; no socket operation runs on this thread. */
@@ -408,7 +414,13 @@ typedef enum {
     A_NOTES_ADVANCED,
     A_SPEECH_ADVANCED,
     A_SPEECH_SETUP,
-    A_FILE_PICK
+    A_FILE_PICK,
+    A_MODEL_CATALOG,
+    A_MODEL_CHOOSE,
+    A_MODEL_DOWNLOAD,
+    A_MODEL_VERIFY,
+    A_MODEL_CANCEL,
+    A_MODEL_USE
 } Action;
 typedef enum {
     ICON_NONE,
@@ -498,6 +510,12 @@ typedef struct {
     int dropdown_field, dropdown_choice;
     bool all_settings[6];
     bool speech_all_settings, notes_all_settings;
+#ifdef WITH_PRO
+    bool model_catalog_open;
+    size_t model_choice;
+    CastSpeechModelInstall *model_install;
+    CastSpeechModelProgress model_progress;
+#endif
     bool drawing_priority_command;
     int open_menu;
     int menu_start, menu_end, dropdown_start, dropdown_end, color_start, color_end;
@@ -1358,6 +1376,96 @@ static void flow_note(Panel *p, size_t index)
         text_wrapped("Disconnect streaming to change this setting.", secondary);
     }
 }
+/* Model downloads are explicit, asynchronous, and independent of applying settings.
+ * A verified result becomes a draft only when the user chooses Use verified model. */
+#ifdef WITH_PRO
+static void speech_model_setup(Panel *p)
+{
+    int field = find_field("transcription.model_path");
+    if (field < 0) {
+        return;
+    }
+    const char *path = flow_value(p, (size_t)field);
+    struct stat info;
+    bool present = *path && !stat(path, &info) && S_ISREG(info.st_mode) && access(path, R_OK) == 0;
+    if (!*path) {
+        text_wrapped("No speech model selected. Choose a model below to download, or use Choose "
+                     "file for an existing local GGML model.",
+                     secondary);
+    } else if (!present) {
+        text_wrapped(format(p,
+                            "Selected model is missing or unreadable: %s. Choose a local file "
+                            "or download a model below, then Apply the new selection.",
+                            path),
+                     danger);
+    } else {
+        text_wrapped("Selected local model is available. Compatibility is checked when speech "
+                     "starts. Downloaded catalog models are verified before selection.",
+                     muted);
+    }
+    button(p, 9450, p->model_catalog_open ? "Hide model catalog" : "Choose downloadable model…",
+           true, p->model_catalog_open, A_MODEL_CATALOG, 0);
+    if (!p->model_catalog_open && !p->model_progress.busy && !p->model_progress.done) {
+        return;
+    }
+    size_t count = 0;
+    const CastSpeechModel *models = cast_speech_models(&count);
+    bool busy = p->model_progress.busy;
+    if (p->model_catalog_open) {
+        char directory[4096];
+        if (!cast_speech_model_directory(directory, sizeof directory)) {
+            text_wrapped(format(p, "Model folder: %s", directory), muted);
+        } else {
+            text_wrapped("A per-user model folder requires an absolute HOME or XDG_DATA_HOME.",
+                         danger);
+        }
+        text_wrapped(
+            "Models run locally. Downloads need an internet connection; model sizes are "
+            "download sizes, and speech also needs working memory. All models use the MIT license.",
+            muted);
+        for (size_t i = 0; i < count; i++) {
+            button(p, 9460 + (uint32_t)i,
+                   format(p, "%s · %.1f MB · %s", models[i].label,
+                          (double)models[i].bytes / 1000000., models[i].languages),
+                   !busy, p->model_choice == i, A_MODEL_CHOOSE, (int)i);
+            if (p->model_choice == i) {
+                text_wrapped(models[i].description, secondary);
+            }
+        }
+        if (p->model_choice < count) {
+            button(p, 9480, "Download and verify", !busy, false, A_MODEL_DOWNLOAD, 0);
+            button(p, 9481, "Verify installed copy", !busy, false, A_MODEL_VERIFY, 0);
+            text_wrapped(
+                "Download installs into the model folder. Existing files are never replaced. "
+                "Verify installed copy checks a model already in that folder without a download.",
+                muted);
+        }
+    }
+    const CastSpeechModelProgress *progress = &p->model_progress;
+    if (busy) {
+        text_wrapped(
+            progress->downloaded
+                ? format(p, "Downloading / verifying: %.1f of %.1f MB (%.0f%%)",
+                         (double)progress->downloaded / 1000000.,
+                         (double)progress->total / 1000000.,
+                         progress->total ? 100. * progress->downloaded / progress->total : 0.)
+                : "Preparing / verifying local model…",
+            secondary);
+        button(p, 9482, "Cancel model operation", true, false, A_MODEL_CANCEL, 0);
+    } else if (progress->done && progress->verified) {
+        text_wrapped(format(p, "Verified model ready: %s", progress->path), secondary);
+        button(p, 9483, "Use verified model", flow_enabled(p, (size_t)field), false, A_MODEL_USE,
+               0);
+        text_wrapped(
+            "Use stages the model path. Apply saves it; Revert keeps your current selection.",
+            muted);
+    } else if (progress->cancelled) {
+        text_wrapped("Model operation cancelled. You can choose a model and try again.", muted);
+    } else if (progress->error[0]) {
+        text_wrapped(progress->error, danger);
+    }
+}
+#endif
 static void flow_choice(Panel *p, uint32_t id, const char *text, size_t index, const char *value,
                         bool selected, float width, float height, WidgetType type)
 {
@@ -1401,18 +1509,27 @@ static bool field_is_numeric(const FieldSpec *field)
  * authoritative, including pixel classification and the slider's value label. */
 static const char *field_extension_unit(const FieldSpec *field)
 {
-    if (!(field->flags & EXTENSION_FIELD)) return NULL;
+    if (!(field->flags & EXTENSION_FIELD)) {
+        return NULL;
+    }
     size_t count;
     const CastExtensionSetting *schema = cast_shared_extension_schema(&count);
-    if (count > CAST_MAX_EXTENSION_SETTINGS) count = CAST_MAX_EXTENSION_SETTINGS;
-    for (size_t i = 0; i < count; ++i)
-        if (!strcmp(field->key, extension_keys[i])) return schema[i].unit ? schema[i].unit : "";
+    if (count > CAST_MAX_EXTENSION_SETTINGS) {
+        count = CAST_MAX_EXTENSION_SETTINGS;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        if (!strcmp(field->key, extension_keys[i])) {
+            return schema[i].unit ? schema[i].unit : "";
+        }
+    }
     return "";
 }
 static bool field_is_pixels(const FieldSpec *field)
 {
     const char *unit = field_extension_unit(field);
-    if (unit) return !strcmp(unit, "px");
+    if (unit) {
+        return !strcmp(unit, "px");
+    }
     static const char *const keys[] = {
         "capture.x",
         "capture.y",
@@ -1537,7 +1654,9 @@ static double flow_slider_step(const FieldSpec *field)
 static const char *flow_slider_unit(const FieldSpec *field)
 {
     const char *extension_unit = field_extension_unit(field);
-    if (extension_unit) return extension_unit;
+    if (extension_unit) {
+        return extension_unit;
+    }
     const char *key = field->key;
     if (field_is_pixels(field)) {
         return "px";
@@ -2374,6 +2493,9 @@ static void lane_menu_body(Panel *p, int lane)
             text_wrapped("The selected speech source applies to captions. Speaker notes always "
                          "use the permitted microphone.",
                          muted);
+#ifdef WITH_PRO
+            speech_model_setup(p);
+#endif
             for (size_t i = 0; i < FIELD_COUNT; i++) {
                 if ((fields[i].flags & EXTENSION_FIELD) && fields[i].tab == TAB_AUDIO &&
                     (fields[i].group != 2 || p->speech_all_settings)) {
@@ -4890,7 +5012,8 @@ static void activate(Panel *p, Widget *w)
         char diagnostic[1024];
         snprintf(
             diagnostic, sizeof diagnostic,
-            CAST_DISPLAY_NAME " %s %s; license=%s; kind=%s; ID=%s; release=%lld; updates_until=%lld; "
+            CAST_DISPLAY_NAME
+            " %s %s; license=%s; kind=%s; ID=%s; release=%lld; updates_until=%lld; "
             "pending_downgrade=%s; platform=%s; media=%s; API=%u; "
             "status=%s",
             identity->edition, identity->version, cast_license_state_name(edition->license.state),
@@ -4972,7 +5095,14 @@ static void activate(Panel *p, Widget *w)
         }
         break;
     case A_CLOSE:
+#ifdef WITH_MACOS
+        panel_color_pick_cancel(p->color_pick);
+        p->picking_color = false;
+        p->mouse_down = false;
+        SDL_HideWindow(p->window);
+#else
         p->quit = true;
+#endif
         break;
     case A_QUIT_APP:
         cancel_editing(p);
@@ -5132,6 +5262,57 @@ static void activate(Panel *p, Widget *w)
         p->open_menu = 4; /* Existing Audio card's one-level options. */
         p->dropdown = p->color_popup = 0;
         break;
+#ifdef WITH_PRO
+    case A_MODEL_CATALOG:
+        stop_editing(p);
+        p->model_catalog_open = !p->model_catalog_open;
+        break;
+    case A_MODEL_CHOOSE: {
+        size_t count;
+        cast_speech_models(&count);
+        if (!p->model_progress.busy && w->index >= 0 && (size_t)w->index < count &&
+            p->model_choice != (size_t)w->index) {
+            cast_speech_model_install_destroy(p->model_install);
+            p->model_install = NULL;
+            memset(&p->model_progress, 0, sizeof p->model_progress);
+            p->model_choice = (size_t)w->index;
+        }
+        break;
+    }
+    case A_MODEL_DOWNLOAD:
+    case A_MODEL_VERIFY:
+        if (!p->model_progress.busy) {
+            cast_speech_model_install_destroy(p->model_install);
+            p->model_install =
+                cast_speech_model_install_start(p->model_choice, w->action == A_MODEL_DOWNLOAD);
+            memset(&p->model_progress, 0, sizeof p->model_progress);
+            if (!p->model_install) {
+                snprintf(p->model_progress.error, sizeof p->model_progress.error,
+                         "Cannot start model worker. Try again after freeing system resources.");
+                p->model_progress.done = 1;
+            } else {
+                cast_speech_model_install_poll(p->model_install, &p->model_progress);
+            }
+        }
+        break;
+    case A_MODEL_CANCEL:
+        cast_speech_model_install_cancel(p->model_install);
+        break;
+    case A_MODEL_USE:
+        if (p->model_progress.verified && !p->model_progress.busy) {
+            int field = find_field("transcription.model_path");
+            stage_field(p, field, p->model_progress.path);
+        }
+        break;
+#else
+    case A_MODEL_CATALOG:
+    case A_MODEL_CHOOSE:
+    case A_MODEL_DOWNLOAD:
+    case A_MODEL_VERIFY:
+    case A_MODEL_CANCEL:
+    case A_MODEL_USE:
+        break;
+#endif
     case A_FILE_PICK: {
         if (p->file_pick_pending || w->index < 0 || (size_t)w->index >= FIELD_COUNT) {
             break;
@@ -5583,8 +5764,15 @@ static void event(Panel *p, const SDL_Event *e)
         return;
     }
     switch (e->type) {
-    case SDL_EVENT_QUIT:
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+#ifdef WITH_MACOS
+        panel_color_pick_cancel(p->color_pick);
+        p->picking_color = false;
+        p->mouse_down = false;
+        SDL_HideWindow(p->window);
+        break;
+#endif
+    case SDL_EVENT_QUIT:
         p->quit = true;
         break;
     case SDL_EVENT_MOUSE_MOTION:
@@ -5894,6 +6082,9 @@ static void cleanup(Panel *p, void *clay_memory)
     if (p->navigation) {
         munmap(p->navigation, sizeof *p->navigation);
     }
+#ifdef WITH_PRO
+    cast_speech_model_install_abandon(p->model_install);
+#endif
     panel_color_pick_free(p->color_pick);
     panel_client_close(p->client);
     panel_lifecycle_destroy(p->lifecycle);
@@ -5905,6 +6096,9 @@ static void cleanup(Panel *p, void *clay_memory)
         TTF_CloseFont(p->font[i]);
         TTF_CloseFont(p->raster_font[i]);
     }
+#ifdef WITH_MACOS
+    mac_panel_release();
+#endif
     SDL_DestroyRenderer(p->renderer);
     SDL_DestroyWindow(p->window);
     free(clay_memory);
@@ -6035,6 +6229,16 @@ static void write_ui_state(Panel *p, const char *path)
     fclose(file);
 }
 
+#ifdef WITH_MACOS
+static void mac_show_panel(void *context)
+{
+    SDL_Window *window = context;
+    SDL_ShowWindow(window);
+    SDL_RestoreWindow(window);
+    SDL_RaiseWindow(window);
+}
+#endif
+
 int panel_run_application(const Config *config, int startup_argc, const char *const *startup_argv,
                           bool auto_start, char *error, size_t n)
 {
@@ -6043,10 +6247,18 @@ int panel_run_application(const Config *config, int startup_argc, const char *co
     if (!video_driver || strcmp(video_driver, "dummy")) {
         const char *display = getenv("DISPLAY");
         if (!display || !*display) {
-            snprintf(error, n, "the static control panel requires an X11 or XWayland display (DISPLAY is unset)");
+            snprintf(
+                error, n,
+                "the static control panel requires an X11 or XWayland display (DISPLAY is unset)");
             return -1;
         }
         SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "x11", SDL_HINT_OVERRIDE);
+    }
+#endif
+#ifdef WITH_MACOS
+    int claimed = mac_panel_claim(config->socket_path, error, n);
+    if (claimed) {
+        return claimed > 0 ? 0 : -1;
     }
 #endif
     initialize_fields();
@@ -6054,6 +6266,9 @@ int panel_run_application(const Config *config, int startup_argc, const char *co
     Panel *p = calloc(1, sizeof *p);
     if (!p) {
         snprintf(error, n, "cannot allocate control panel");
+#ifdef WITH_MACOS
+        mac_panel_release();
+#endif
         return -1;
     }
     p->color_pick = panel_color_pick_new();
@@ -6162,6 +6377,9 @@ int panel_run_application(const Config *config, int startup_argc, const char *co
         cleanup(p, clay_memory);
         return -1;
     }
+#ifdef WITH_MACOS
+    mac_panel_attach(mac_show_panel, p->window);
+#endif
     p->client = panel_client_open(config, xid, error, n);
     if (!p->client) {
         cleanup(p, clay_memory);
@@ -6184,6 +6402,9 @@ int panel_run_application(const Config *config, int startup_argc, const char *co
     }
     bool captured = false;
     while (!p->quit) {
+#ifdef WITH_MACOS
+        mac_panel_poll();
+#endif
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             if (e.type == p->file_event) {
@@ -6230,6 +6451,11 @@ int panel_run_application(const Config *config, int startup_argc, const char *co
         poll_client(p);
         poll_lifecycle(p);
         poll_color_pick(p);
+#ifdef WITH_PRO
+        if (p->model_install) {
+            cast_speech_model_install_poll(p->model_install, &p->model_progress);
+        }
+#endif
         commands = layout(p);
         render(p, commands);
         save_navigation(p);

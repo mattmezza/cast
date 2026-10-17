@@ -34,7 +34,7 @@ def main():
     if args.panel == '1':
         packages += ['sdl3', 'sdl3-ttf']
     if args.edition == 'pro':
-        packages += ['libsodium']
+        packages += ['libsodium', 'libcurl']
         if args.stt == '1':
             packages += ['whisper']
     compiler = shlex.split(environment.get('CC', 'cc'))

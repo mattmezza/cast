@@ -68,8 +68,8 @@ endif
 PRO_SOURCES = $(PRO_DIR)/src/pro_provider.c $(PRO_DIR)/src/license_verifier.c $(PRO_DIR)/src/bounded_json.c $(wildcard $(PRO_DIR)/src/cinematic_motion/*.c $(PRO_DIR)/src/speech/*.c $(PRO_DIR)/src/notes/*.c)
 CPPFLAGS += $(if $(filter 1,$(PRODUCTION_LICENSE_ACCEPTANCE)),-DCAST_PRODUCTION_LICENSE_ACCEPTANCE=1)
 CPPFLAGS += -DCAST_EDITION_PRO=1 -DWITH_PRO -I$(PRO_DIR)/src -DCAST_TRUST_HEADER='"$(PRO_TRUST_HEADER)"'
-LDLIBS += $(shell $(PKG_CONFIG) --libs libsodium)
-CPPFLAGS += $(shell $(PKG_CONFIG) --cflags libsodium)
+LDLIBS += $(shell $(PKG_CONFIG) --libs libsodium libcurl)
+CPPFLAGS += $(shell $(PKG_CONFIG) --cflags libsodium libcurl)
 endif
 ifeq ($(MEDIA_PROFILE),lgpl)
 CPPFLAGS += -DCAST_MEDIA_PROFILE_LGPL=1

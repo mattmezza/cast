@@ -113,10 +113,11 @@ SOURCES = src/main.c src/commands.c src/config.c src/config_migrate.c src/state.
  src/help_commands.c src/update.c src/edition.c src/license_store.c src/edition_extensions.c \
  src/workflow_schema.c src/edition_service.c src/media_codec.c src/app_runtime.c \
  src/os_compat.c vendor/inih/ini.c $(PRO_SOURCES)
-OBJC_SOURCES = src/platform_macos.m src/audio_macos.m src/webcam_macos.m src/preview_macos.m
+OBJC_SOURCES = $(if $(filter pro,$(EDITION)),$(PRO_DIR)/src/speech/model_fetch_macos.m) src/platform_macos.m src/audio_macos.m src/webcam_macos.m src/preview_macos.m
 ASSETS = $(BUILD)/src/command_assets.o
 ifeq ($(PANEL),1)
 SOURCES += src/panel.c src/panel_color_pick.c
+OBJC_SOURCES += src/panel_macos.m
 CPPFLAGS += -DWITH_PANEL -Ivendor/clay
 ASSETS += $(BUILD)/src/panel_font.o
 endif
@@ -172,10 +173,16 @@ check-os-compat: $(BUILD)/test_os_compat
 $(BUILD)/test_macos_preview: tests/test_macos_preview.m src/preview_macos.m src/preview_macos.h src/cast.h
 	@mkdir -p $(BUILD)
 	$(CC) -Isrc $(CFLAGS) $(WARN) -Werror -std=gnu11 -fobjc-arc -fblocks -o $@ tests/test_macos_preview.m src/preview_macos.m -framework AppKit -framework CoreGraphics
+$(BUILD)/test_macos_panel: tests/test_macos_panel.m src/panel_macos.m src/panel_macos.h
+	@mkdir -p $(BUILD)
+	$(CC) -Isrc $(CFLAGS) $(WARN) -Werror -std=gnu11 -fobjc-arc -fblocks -o $@ tests/test_macos_panel.m src/panel_macos.m -framework AppKit
+.PHONY: check-macos-panel
+check-macos-panel: $(BUILD)/test_macos_panel
+	$(BUILD)/test_macos_panel
 $(BUILD)/test_macos_pointer: tests/test_macos_pointer.c src/macos_pointer.h src/cast.h
 	@mkdir -p $(BUILD)
 	$(CC) -Isrc $(CFLAGS) $(WARN) -Werror -std=gnu11 -o $@ tests/test_macos_pointer.c
-check-unit: check-os-compat $(BUILD)/test_core $(BUILD)/test_visual $(BUILD)/test_macos_preview $(BUILD)/test_macos_pointer
+check-unit: check-os-compat check-macos-panel $(BUILD)/test_core $(BUILD)/test_visual $(BUILD)/test_macos_preview $(BUILD)/test_macos_pointer
 	$(BUILD)/test_core
 	$(BUILD)/test_visual
 	$(BUILD)/test_macos_preview

@@ -6,7 +6,10 @@ Ordinary startup opens the panel and starts a daemon unless one is already runni
 without starting capture automatically. Navigating, resizing or reconnecting never
 starts, pauses or reveals an output.
 **Close panel**, beside **Preview**, and the window-manager close action close only
-this window. The daemon, recording, streaming and preview continue running.
+this window. On macOS they hide the panel while keeping its Dock icon available;
+click that icon, choose **Show Panel** in its Dock menu, or launch the app again to
+show the existing panel. Launching `cast panel` again for the same socket also
+reuses that panel. The daemon, recording, streaming, notes and preview continue running.
 **Stop daemon** stops outputs, finalizes recordings and leaves the panel available;
 **Start daemon** restarts it using the last acknowledged session configuration.
 Stopped recordings and streams do not restart automatically. Virtual camera startup
@@ -234,6 +237,22 @@ disclosure for the advanced engine/VAD controls. Its compact status reports actu
 model readiness, inference/queue time and errors. Browsing a model picker never
 downloads one or enables audio. The selected source applies to captions; notes
 always use the explicitly permitted microphone.
+
+Speech setup distinguishes an unselected model from a missing or unreadable path.
+The downloadable catalog shows language support, download size, and the speed and
+accuracy tradeoff. Choose a model and explicitly **Download and verify**, or
+**Verify installed copy** to check a catalog model already on disk. A background
+worker reports progress, cancellation and errors without blocking the panel.
+**Use verified model** stages its local path; **Apply** saves that selection and
+**Revert** retains the current configuration. Downloads remain installed after
+Revert. Existing custom paths remain editable with **Choose file**.
+
+Models install into `$XDG_DATA_HOME/cast/models` when `XDG_DATA_HOME` is absolute,
+otherwise `$HOME/.local/share/cast/models`, on macOS and Linux. Downloads use a
+fixed catalog with pinned SHA256 and byte counts; partial or unverified bytes
+never become installed models, and existing files are never overwritten. Native
+model setup needs no Python runtime. Startup and browsing never download models.
+
 Recording options shows the last transcription job's state, progress and sidecar
 paths, then exposes sidecar format and automatic final transcription. A
 separate Speaker notes strip opens/closes the native notes window and its options
