@@ -83,6 +83,7 @@ endif
 CPPFLAGS += -DCAST_APPLICATION_NAME='"$(BINARY)"' -DCAST_MEDIA_PROFILE='"$(MEDIA_PROFILE)"' -DCAST_PLATFORM='"linux-$(shell uname -m)"' -DCAST_CORE_REVISION='"$(CORE_REVISION)"' -DCAST_PRIVATE_REVISION='"$(PRIVATE_REVISION)"' -DCAST_RELEASE_TIMESTAMP=$(RELEASE_TIMESTAMP) -DCAST_OFFICIAL_RELEASE=$(OFFICIAL_RELEASE)
 SOURCES = src/os_compat.c src/main.c src/commands.c src/config.c src/config_migrate.c src/state.c src/compositor.c src/composition_assets.c src/presentation_text.c src/platform.c src/media.c src/webcam.c src/audio.c src/record.c src/stream.c src/panel_transport.c src/panel_lifecycle.c src/help_commands.c src/update.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/edition_service.c src/media_codec.c src/app_runtime.c vendor/inih/ini.c
 INI_FLAGS = -DINI_HANDLER_LINENO=1 -DINI_CALL_HANDLER_ON_NEW_SECTION=1 -DINI_ALLOW_MULTILINE=0 -DINI_ALLOW_INLINE_COMMENTS=0 -DINI_STOP_ON_FIRST_ERROR=1 -DINI_MAX_LINE=8192
+CPPFLAGS += $(if $(filter 1,$(STATIC_PANEL_X11)),-DCAST_PANEL_STATIC_X11=1)
 CPPFLAGS += -Isrc -Ivendor/inih $(INI_FLAGS) -D_GNU_SOURCE
 LDLIBS += -lm -lpthread -ldl
 # GNU make conditionals keep backend dependency lists completely removable.
@@ -106,7 +107,7 @@ FONT_OBJECT = $(BUILD)/src/panel_font.o
 endif
 # Hash every provider/trust identity as well as backend/media options into object paths.
 STT_IDENTITY = $(if $(filter pro:1,$(EDITION):$(STT)),$(STT_CFLAGS):$(STT_LIBS):$(STT_CPU_BACKEND):$(STT_HELPER_PATH):$(STT_PROFILE):$(STT_ENGINEERING):$(STT_GPU_ENGINEERING):$(shell test ! -f '$(STT_PROFILE)' || sha256sum '$(STT_PROFILE)'),disabled)
-INTEGRATION_ID := $(shell { printf "%s" "$(EDITION):$(X11):$(WAYLAND):$(PANEL):$(STT):$(STT_IDENTITY):$(STT_HELPER_SIBLING):$(PRODUCTION_LICENSE_ACCEPTANCE):$(MEDIA_PROFILE):$(LGPL_ROOT):$(PRO_ROOT):$(CORE_REVISION):$(PRIVATE_REVISION):$(OFFICIAL_RELEASE):$(RELEASE_TIMESTAMP):$(CC):$(CFLAGS):$(LDFLAGS):$(PANEL_CFLAGS):$(PANEL_LIBS)"; cat $(wildcard src/*.c src/*.h src/*.S vendor/inih/*.c vendor/inih/*.h vendor/clay/*.h completions/* assets/fonts/* packaging/install.sh) $(if $(filter pro,$(EDITION)),$(wildcard $(PRO_DIR)/src/*.c $(PRO_DIR)/src/*.h $(PRO_DIR)/src/*/*.c $(PRO_DIR)/src/*/*.h $(PRO_DIR)/src/*/*.cpp $(PRO_TRUST_HEADER))) 2>/dev/null; } | sha256sum | cut -c1-32)
+INTEGRATION_ID := $(shell { printf "%s" "$(EDITION):$(X11):$(WAYLAND):$(PANEL):$(STT):$(STT_IDENTITY):$(STT_HELPER_SIBLING):$(PRODUCTION_LICENSE_ACCEPTANCE):$(STATIC_PANEL_X11):$(MEDIA_PROFILE):$(LGPL_ROOT):$(PRO_ROOT):$(CORE_REVISION):$(PRIVATE_REVISION):$(OFFICIAL_RELEASE):$(RELEASE_TIMESTAMP):$(CC):$(CFLAGS):$(LDFLAGS):$(PANEL_CFLAGS):$(PANEL_LIBS)"; cat $(wildcard src/*.c src/*.h src/*.S vendor/inih/*.c vendor/inih/*.h vendor/clay/*.h completions/* assets/fonts/* packaging/install.sh) $(if $(filter pro,$(EDITION)),$(wildcard $(PRO_DIR)/src/*.c $(PRO_DIR)/src/*.h $(PRO_DIR)/src/*/*.c $(PRO_DIR)/src/*/*.h $(PRO_DIR)/src/*/*.cpp $(PRO_TRUST_HEADER))) 2>/dev/null; } | sha256sum | cut -c1-32)
 CPPFLAGS += -DCAST_BUILD_ID='"$(INTEGRATION_ID)"'
 SOURCES += $(PRO_SOURCES)
 OBJECTS = $(SOURCES:%.c=$(BUILD)/%.o) $(COMMAND_ASSETS) $(FONT_OBJECT)
@@ -212,10 +213,10 @@ endif
 $(BUILD)/test_xorg: $(XORG_TEST_SOURCES) src/cast.h src/platform_backend.h $(FONT_OBJECT)
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(shell $(PKG_CONFIG) --cflags xtst) $(CFLAGS) $(WARN) -std=gnu11 -o $@ $(XORG_TEST_SOURCES) $(FONT_OBJECT) $(PKG_LIBS) $(shell $(PKG_CONFIG) --libs xtst) $(LDLIBS) $(LDFLAGS)
-check-xorg: cast $(BUILD)/test_xorg
+check-xorg: $(BINARY) $(BUILD)/test_xorg
 	timeout 30s xvfb-run -a -s '-screen 0 800x600x24' $(BUILD)/test_xorg --exercise
 	timeout 30s xvfb-run -a -s '-screen 0 800x600x24 -extension MIT-SHM' $(BUILD)/test_xorg --exercise
-	CAST_COUNTDOWN_WITH_PANEL=$(PANEL) timeout 45s xvfb-run -a -s '-screen 0 800x600x24' python3 tests/test_countdown_xorg.py
+	CAST_XORG_TEST_BINARY=$(CURDIR)/$(BINARY) CAST_COUNTDOWN_WITH_PANEL=$(PANEL) timeout 45s xvfb-run -a -s '-screen 0 800x600x24' python3 tests/test_countdown_xorg.py
 else
 check-xorg:
 	@echo 'check-xorg requires X11=1 and optional Xvfb/libXtst test dependencies' >&2
@@ -244,10 +245,14 @@ check-loopback: $(BINARY)
 	@test -n '$(LOOPBACK_DEVICE)' || { echo 'set LOOPBACK_DEVICE to an existing v4l2loopback output device' >&2; exit 1; }
 	python3 tests/test_loopback.py --device '$(LOOPBACK_DEVICE)'
 ifeq ($(PANEL),1)
-check-panel: cast
+check-panel: $(BINARY)
+ifeq ($(EDITION),pro)
+	CAST_PANEL_TEST_BINARY=$(CURDIR)/$(BINARY) CAST_PANEL_TEST_LICENSE=$(PRO_DIR)/tests/generated/perpetual.json python3 tests/test_panel_ui.py --notes-only
+else
 	python3 tests/test_panel_ui.py
 ifeq ($(X11),1)
 	python3 tests/test_panel_ui.py --exclusion-only
+endif
 endif
 else
 check-panel:

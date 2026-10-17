@@ -111,7 +111,7 @@ def main():
     libs = '-Wl,--start-group -L' + str(prefix / 'lib') + ' ' + libs + ' -lstdc++ -Wl,--end-group'
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     variables = ['EDITION=' + args.edition, 'X11=1', 'WAYLAND=1', 'PANEL=1', 'STT=0',
-                 'SOURCE_COMMIT=' + commit, 'OFFICIAL_RELEASE=1', 'TEST_LINK_DNS=1',
+                 'STATIC_PANEL_X11=1', 'SOURCE_COMMIT=' + commit, 'OFFICIAL_RELEASE=1', 'TEST_LINK_DNS=1',
                  'PKG_LIBS=' + libs, 'PANEL_LIBS=', 'LDFLAGS=-static -no-pie -Wl,-Map,' + str(base / 'cast.map')]
     if args.edition == 'pro':
         profile = json.loads(args.stt_profile.read_text())

@@ -6022,6 +6022,17 @@ static void write_ui_state(Panel *p, const char *path)
 int panel_run_application(const Config *config, int startup_argc, const char *const *startup_argv,
                           bool auto_start, char *error, size_t n)
 {
+#ifdef CAST_PANEL_STATIC_X11
+    const char *video_driver = getenv("SDL_VIDEODRIVER");
+    if (!video_driver || strcmp(video_driver, "dummy")) {
+        const char *display = getenv("DISPLAY");
+        if (!display || !*display) {
+            snprintf(error, n, "the static control panel requires an X11 or XWayland display (DISPLAY is unset)");
+            return -1;
+        }
+        SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "x11", SDL_HINT_OVERRIDE);
+    }
+#endif
     initialize_fields();
     void *clay_memory = NULL;
     Panel *p = calloc(1, sizeof *p);

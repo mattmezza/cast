@@ -38,13 +38,13 @@ def wait_until(predicate, message, timeout=8):
 
 
 def guides():
-    result = run_tool(['xdotool', 'search', '--onlyvisible', '--class', '^CastPreview$'],
+    result = run_tool(['xdotool', 'search', '--onlyvisible', '--class', '^Cast(Pro)?Preview$'],
                       capture_output=True, text=True)
     return result.stdout.split() if result.returncode == 0 else []
 
 
 def panels():
-    result = run_tool(['xdotool', 'search', '--onlyvisible', '--class', '^CastPanel$'],
+    result = run_tool(['xdotool', 'search', '--onlyvisible', '--class', '^Cast(Pro)?Panel$'],
                       capture_output=True, text=True)
     return result.stdout.split() if result.returncode == 0 else []
 
@@ -100,7 +100,7 @@ def main():
                 window = guides()[0]
                 properties = tool_output(
                     ['xprop', '-id', window, 'WM_CLASS', '_NET_WM_WINDOW_TYPE'], text=True)
-                assert 'CastPreview' in properties and '_NET_WM_WINDOW_TYPE_UTILITY' in properties
+                assert ('CastPreview' in properties or 'CastProPreview' in properties) and '_NET_WM_WINDOW_TYPE_UTILITY' in properties
                 screenshot = os.environ.get('CAST_COUNTDOWN_CAPTURE')
                 if screenshot:
                     geometry = dict(line.split('=', 1) for line in tool_output(
