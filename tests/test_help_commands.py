@@ -152,7 +152,12 @@ with tempfile.TemporaryDirectory(prefix="cast-help-test-") as directory:
         assert {"set", "font", "color"} <= zsh_complete("cast", "text", "")
         assert zsh_complete("cast", "settings", "background.source", "") == {"screen", "camera"}
         assert zsh_complete("cast", "completions", "--script", "") == set(SCRIPTS)
-        init = 'fpath=(' + shlex.quote(str(PROJECT / "completions")) + ' $fpath)\n'
+        # Hosted checkout ancestors can be group-writable. Register our script
+        # from a private fixture directory so compinit never needs a TTY prompt.
+        completion_dir = root / "zsh-functions"
+        completion_dir.mkdir(mode=0o700)
+        shutil.copy2(PROJECT / "completions" / "_cast", completion_dir / "_cast")
+        init = 'fpath=(' + shlex.quote(str(completion_dir)) + ' $fpath)\n'
         init += 'autoload -Uz compinit\ncompinit -D -d ' + shlex.quote(str(root / "zcompdump"))
         init += '\n[[ $_comps[cast] == _cast ]]\n'
         run(["zsh", "-f", "-c", init], env=env, cwd=root)
