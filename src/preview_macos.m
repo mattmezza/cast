@@ -5,10 +5,12 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 @interface CastPreviewView : NSView {
     CGImageRef pixels;
 }
+@property(nonatomic) uint64_t countdownRemaining;
 - (BOOL)replaceFrame:(const Frame *)frame;
 - (void)clear;
 @end
@@ -36,6 +38,7 @@
 {
     if (pixels) CGImageRelease(pixels);
     pixels = NULL;
+    self.countdownRemaining = 0;
     self.needsDisplay = YES;
 }
 - (void)dealloc { if (pixels) CGImageRelease(pixels); }
@@ -53,6 +56,33 @@
     CGContextRef context = NSGraphicsContext.currentContext.CGContext;
     CGContextSetInterpolationQuality(context, kCGInterpolationHigh);
     CGContextDrawImage(context, NSRectToCGRect(rect), pixels);
+    if (self.countdownRemaining) {
+        /* Local guide only: never modify the staged recording frame. */
+        [[NSColor colorWithWhite:0 alpha:0.70] setFill];
+        NSRectFillUsingOperation(self.bounds, NSCompositingOperationSourceOver);
+        CGFloat cx = NSMidX(self.bounds), cy = NSMidY(self.bounds);
+        CGFloat radius = MAX(34, MIN(self.bounds.size.width, self.bounds.size.height) / 3);
+        [[NSColor colorWithWhite:0.75 alpha:1] setStroke];
+        NSBezierPath *leader = [NSBezierPath bezierPath];
+        [leader moveToPoint:NSMakePoint(0,cy)];
+        [leader lineToPoint:NSMakePoint(NSWidth(self.bounds),cy)];
+        [leader moveToPoint:NSMakePoint(cx,0)];
+        [leader lineToPoint:NSMakePoint(cx,NSHeight(self.bounds))];
+        [leader appendBezierPathWithOvalInRect:NSMakeRect(cx-radius,cy-radius,2*radius,2*radius)];
+        [leader appendBezierPathWithOvalInRect:NSMakeRect(cx-radius+5,cy-radius+5,2*radius-10,2*radius-10)];
+        double phase = (double)(1000000000 - self.countdownRemaining % 1000000000) / 1000000000;
+        double angle = M_PI / 2 - 2 * M_PI * phase;
+        [leader moveToPoint:NSMakePoint(cx,cy)];
+        [leader lineToPoint:NSMakePoint(cx+cos(angle)*radius,cy+sin(angle)*radius)];
+        [leader stroke];
+        NSString *number = [NSString stringWithFormat:@"%llu",
+            (unsigned long long)((self.countdownRemaining-1)/1000000000+1)];
+        NSDictionary *attributes = @{NSFontAttributeName:[NSFont monospacedDigitSystemFontOfSize:48
+            weight:NSFontWeightSemibold], NSForegroundColorAttributeName:NSColor.whiteColor};
+        NSSize textSize = [number sizeWithAttributes:attributes];
+        [number drawAtPoint:NSMakePoint(cx-textSize.width/2,cy-textSize.height/2)
+            withAttributes:attributes];
+    }
 }
 @end
 
@@ -178,7 +208,13 @@ void mac_preview_events(CastMacPreview *p)
             NSEvent *event = [NSApp nextEventMatchingMask:NSEventMaskAny untilDate:NSDate.distantPast
                 inMode:NSDefaultRunLoopMode dequeue:YES];
             if (!event) break;
-            if (mouse_event(controller(p),event)) continue;
+            CastPreviewController *c = controller(p);
+            if (c.countdown && event.window == c.window && event.type == NSEventTypeKeyDown &&
+                event.keyCode == 53) {
+                [c windowShouldClose:c.window];
+                continue;
+            }
+            if (mouse_event(c,event)) continue;
             [NSApp sendEvent:event];
         }
         [NSApp updateWindows];
@@ -251,6 +287,7 @@ int mac_preview_countdown_frame(CastMacPreview *p, const Frame *frame, const Con
     if (!p) return fail(error,size,"cannot allocate macOS preview");
     CastPreviewController *c = controller(p);
     if (c.countdown && c.pending == -2) return 0;
+    /* Keep the overlay while replacing its owned background frame. */
     c.countdown = NO;
     Config visible = *cfg;
     visible.preview = true;
@@ -271,6 +308,9 @@ int mac_preview_countdown(CastMacPreview *p, uint64_t remaining, char *error, si
      * its transition to zero, or the live image would flash black each frame. */
     if (!remaining && !c.countdown) return 0;
     if (remaining) {
+        c.view.countdownRemaining = remaining;
+        c.view.needsDisplay = YES;
+        [c.view displayIfNeeded];
         c.window.title = [NSString stringWithFormat:@"SuperScreencast — Recording in %llu",
             (unsigned long long)((remaining+999999999)/1000000000)];
         if (c.pending == -2) {
@@ -279,6 +319,7 @@ int mac_preview_countdown(CastMacPreview *p, uint64_t remaining, char *error, si
             return 1; /* Keep dismissal pending so the daemon also turns preview off. */
         }
     } else {
+        c.view.countdownRemaining = 0;
         c.countdown = NO;
         c.selector.enabled = YES;
         [c.view clear]; [c.view displayIfNeeded];

@@ -172,13 +172,28 @@ int main(void)
         assert(!mac_preview_countdown_frame(preview,&private_frame,&cfg,error,sizeof error));
         assert(!mac_preview_countdown(preview,2100000000,error,sizeof error));
         assert(window.visible && [window.title containsString:@"Recording in 3"]);
+        /* The film guide must be painted in the view, not merely its title. */
+        image = snapshot(view);
+        color_at(image,.3,.4,10,11,13); /* Recording composition dimmed to 30%. */
+        NSUInteger bright = 0;
+        for (NSInteger y=image.pixelsHigh/3; y<image.pixelsHigh*2/3; y++)
+            for (NSInteger x=image.pixelsWide/3; x<image.pixelsWide*2/3; x++) {
+                NSColor *pixel = [[image colorAtX:x y:y]
+                    colorUsingColorSpace:NSColorSpace.deviceRGBColorSpace];
+                if (pixel.redComponent > .9) bright++;
+            }
+        assert(bright > 100); /* Large centered countdown numeral. */
         assert(!mac_preview_countdown(preview,1,error,sizeof error));
         assert([window.title containsString:@"Recording in 1"]);
         assert(!mac_preview_countdown(preview,0,error,sizeof error));
         assert(!window.visible);
         color_at(snapshot(view),.5,.5,20,20,20);
         assert(!mac_preview_countdown_frame(preview,&private_frame,&cfg,error,sizeof error));
-        [window performClose:nil];
+        NSEvent *escape = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint
+            modifierFlags:0 timestamp:0 windowNumber:window.windowNumber context:nil
+            characters:@"\x1b" charactersIgnoringModifiers:@"\x1b" isARepeat:NO keyCode:53];
+        [NSApp postEvent:escape atStart:YES];
+        mac_preview_events(preview);
         assert(mac_preview_countdown(preview,1000000000,error,sizeof error) == 1);
         assert(mac_preview_target(preview) == -2 && mac_preview_target(preview) == -1 &&
                !window.visible);
