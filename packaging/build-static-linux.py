@@ -26,6 +26,7 @@ def main():
     parser.add_argument('--edition', choices=('community', 'pro'), default='community')
     parser.add_argument('--pro-root', type=Path)
     parser.add_argument('--stt-profile', type=Path)
+    parser.add_argument('--pro-trust-header', type=Path)
     args = parser.parse_args()
     if args.edition == 'pro' and (not args.pro_root or not args.stt_profile):
         parser.error('Pro requires --pro-root and --stt-profile')
@@ -153,6 +154,8 @@ def main():
                  'PKG_LIBS=' + libs, 'PANEL_LIBS=', 'LDFLAGS=-static -no-pie -Wl,-Map,' + str(base / 'cast.map')]
     if args.edition == 'pro':
         profile = json.loads(args.stt_profile.read_text())
+        if args.pro_trust_header:
+            variables.append('PRO_TRUST_HEADER=' + str(args.pro_trust_header.resolve()))
         variables += ['MEDIA_PROFILE=lgpl', 'PRO_ROOT=' + str(args.pro_root.resolve()),
             'LGPL_ROOT=' + str(base), 'OFFICIAL_RELEASE=0', 'STT=1', 'STT_ENGINEERING=1',
             'STT_PROFILE=' + str(args.stt_profile.resolve()), 'STT_CFLAGS=' + profile['cflags'],
