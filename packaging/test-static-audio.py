@@ -32,7 +32,7 @@ def audit_traces(paths):
         for line in path.read_text().splitlines():
             process = re.match(r'^(\d+)\s+', line)
             pid = process.group(1) if process else 'main'
-            library = re.search(r'"([^"\n]+\.so(?:\.[^"/]+)*)"', line)
+            library = re.search(r'"([^"\n]+\.so(?:\.[0-9]+)*)"', line)
             if 'openat(' in line and library:
                 pending[pid] = library.group(1)
             if ('openat(' in line or '<... openat resumed>' in line) and '<unfinished ...>' not in line:
