@@ -135,9 +135,10 @@ def main():
     libs = '-Wl,--start-group -L' + str(prefix / 'lib') + ' ' + libs + ' -lstdc++ -Wl,--end-group'
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     variables = ['EDITION=community', 'X11=1', 'WAYLAND=1', 'PANEL=1', 'STT=0',
-                 'SOURCE_COMMIT=' + commit, 'OFFICIAL_RELEASE=1',
+                 'SOURCE_COMMIT=' + commit, 'OFFICIAL_RELEASE=1', 'TEST_LINK_DNS=1',
                  'PKG_LIBS=' + libs, 'PANEL_LIBS=', 'LDFLAGS=-static -no-pie -Wl,-Map,' + str(base / 'cast.map')]
     run('make', jobs, *variables, 'all', env=environment)
+    environment['CAST_TEST_LINK_DNS'] = '1'
     for suite in ('check', 'check-xorg', 'check-panel'):
         run('make', jobs, *variables, suite, env=environment)
     # Each test executable also consumes LDFLAGS. Relink the release executable

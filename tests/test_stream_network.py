@@ -192,15 +192,16 @@ def main():
             proxy.close()
             finish_receiver(ingest)
         assert proxy.denials == 1, "fixture did not deny the publish command"
-        interposer = directory / "block-dns.so"
-        subprocess.run(["cc", "-shared", "-fPIC", "-Wall", "-Wextra", "-o", str(interposer),
-                        "tests/fixtures/stream_block_dns.c", "-ldl"], check=True)
         environment = os.environ.copy()
-        # Preserve sanitizer preload ordering when used under make sanitize.
-        prior = environment.get("LD_PRELOAD", "")
-        if environment.get("ASAN_OPTIONS") and not prior:
-            prior = subprocess.check_output(["cc", "-print-file-name=libasan.so"], text=True).strip()
-        environment["LD_PRELOAD"] = f"{prior}:{interposer}" if prior else str(interposer)
+        if environment.get("CAST_TEST_LINK_DNS") != "1":
+            interposer = directory / "block-dns.so"
+            subprocess.run(["cc", "-shared", "-fPIC", "-Wall", "-Wextra", "-o", str(interposer),
+                            "tests/fixtures/stream_block_dns.c", "-ldl"], check=True)
+            # Preserve sanitizer preload ordering when used under make sanitize.
+            prior = environment.get("LD_PRELOAD", "")
+            if environment.get("ASAN_OPTIONS") and not prior:
+                prior = subprocess.check_output(["cc", "-print-file-name=libasan.so"], text=True).strip()
+            environment["LD_PRELOAD"] = f"{prior}:{interposer}" if prior else str(interposer)
         environment["CAST_TEST_DNS_MARKER"] = str(directory / "dns-entered")
         run_client(binary, "rtmp://cast-blocked.invalid:1935/ingest", mode="blocked", env=environment)
     print("streaming TLS trust/hostname, blocked TLS negotiation and actual blocked DNS fixtures passed")

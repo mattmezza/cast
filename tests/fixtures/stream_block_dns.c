@@ -7,6 +7,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#ifdef CAST_TEST_LINK_DNS
+int __real_getaddrinfo(const char *, const char *, const struct addrinfo *, struct addrinfo **);
+#define getaddrinfo __wrap_getaddrinfo
+#endif
 int getaddrinfo(const char *node, const char *service, const struct addrinfo *hints,
                 struct addrinfo **result)
 {
@@ -23,7 +27,11 @@ int getaddrinfo(const char *node, const char *service, const struct addrinfo *hi
             pause();
         }
     }
+#ifdef CAST_TEST_LINK_DNS
+    return __real_getaddrinfo(node, service, hints, result);
+#else
     int (*original)(const char *, const char *, const struct addrinfo *, struct addrinfo **) =
         dlsym(RTLD_NEXT, "getaddrinfo");
     return original(node, service, hints, result);
+#endif
 }

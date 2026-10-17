@@ -161,9 +161,14 @@ $(BUILD)/test_visual: tests/test_visual.c tests/compositor_runtime_stubs.c src/c
 $(BUILD)/test_media: tests/test_media.c $(MEDIA_SOURCES) src/config.c vendor/inih/ini.c src/cast.h src/media_internal.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -DCAST_TEST -o $@ $(filter %.c,$^) $(PKG_LIBS) $(LDLIBS) $(LDFLAGS)
-$(BUILD)/test_stream: tests/test_stream.c $(MEDIA_SOURCES) src/config.c vendor/inih/ini.c src/cast.h src/media_internal.h src/stream.h
+# Static executables cannot use the LD_PRELOAD DNS fixture.
+ifeq ($(TEST_LINK_DNS),1)
+STREAM_DNS_SOURCE = tests/fixtures/stream_block_dns.c
+STREAM_DNS_FLAGS = -DCAST_TEST_LINK_DNS -Wl,--wrap=getaddrinfo
+endif
+$(BUILD)/test_stream: tests/test_stream.c $(MEDIA_SOURCES) src/config.c vendor/inih/ini.c src/cast.h src/media_internal.h src/stream.h $(STREAM_DNS_SOURCE)
 	@mkdir -p $(BUILD)
-	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -DCAST_TEST -o $@ $(filter %.c,$^) $(PKG_LIBS) $(LDLIBS) $(LDFLAGS)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -DCAST_TEST $(STREAM_DNS_FLAGS) -o $@ $(filter %.c,$^) $(PKG_LIBS) $(LDLIBS) $(LDFLAGS)
 check-stream-sustained: $(BUILD)/test_stream
 	python3 tests/test_stream_sustained.py --binary $(BUILD)/test_stream
 check-stream: $(BUILD)/test_stream
