@@ -110,7 +110,8 @@ jobs:
           python3 packaging/public-boundary.py
           python3 tools/deps-lgpl.py --root build/deps-lgpl-macos --jobs 4
           make -j4 EDITION=community MEDIA_PROFILE=lgpl LGPL_ROOT="$PWD/build/deps-lgpl-macos"
-          make EDITION=community MEDIA_PROFILE=lgpl LGPL_ROOT="$PWD/build/deps-lgpl-macos" check-macos
+          # Test executables in older tags omit the controlled-media runtime path.
+          DYLD_LIBRARY_PATH="$PWD/build/deps-lgpl-macos/prefix/lib" make EDITION=community MEDIA_PROFILE=lgpl LGPL_ROOT="$PWD/build/deps-lgpl-macos" check-macos
           make EDITION=community MEDIA_PROFILE=lgpl LGPL_ROOT="$PWD/build/deps-lgpl-macos" MACOS_STANDALONE=1 macos-app
       - name: Verify and archive standalone app
         shell: bash
