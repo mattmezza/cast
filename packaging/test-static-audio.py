@@ -54,6 +54,9 @@ def main():
         runtime.mkdir(mode=0o700)
         environment = dict(os.environ, XDG_RUNTIME_DIR=str(runtime),
                            PULSE_SERVER='unix:' + str(runtime / 'pulse/native'))
+        empty_plugins = work / 'empty-plugins'
+        empty_plugins.mkdir()
+        static_environment = dict(environment, SPA_PLUGIN_DIR=str(empty_plugins), PIPEWIRE_MODULE_DIR=str(empty_plugins))
         processes = []
         traces = []
 
@@ -66,12 +69,12 @@ def main():
             return command
         with (work / 'services.log').open('w+') as log:
             def start(*command):
-                process = subprocess.Popen(traced(command), env=environment, stdout=log, stderr=log)
+                process = subprocess.Popen(traced(command), env=static_environment if command[0] == str(binary) else environment, stdout=log, stderr=log)
                 processes.append(process)
                 return process
 
             def call(*command, check=True):
-                return subprocess.run(traced(command), env=environment, capture_output=True,
+                return subprocess.run(traced(command), env=static_environment if command[0] == str(binary) else environment, capture_output=True,
                                       text=True, check=check, timeout=10)
 
             try:
@@ -123,7 +126,7 @@ def main():
                 daemon.wait(timeout=10)
                 if args.trace:
                     audit_traces(traces)
-                    print('Cast audio/CLI trace passed: no successful shared-library opens')
+                    print('Cast audio/CLI trace passed with empty SPA/module directories: no successful shared-library opens')
             finally:
                 for process in reversed(processes):
                     if process.poll() is None:

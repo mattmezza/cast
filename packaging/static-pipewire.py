@@ -28,7 +28,15 @@ def build(pwbuild, prefix, environment):
         groups.append(('libpipewire-module-' + module,
                        sorted(pwbuild.glob('src/modules/libpipewire-module-' + module + '.so.p/**/*.o'))))
     for spa in SPAS:
-        groups.append(('libspa-' + spa, sorted((pwbuild / 'spa/plugins' / spa).rglob('*.o'))))
+        directory = pwbuild / 'spa/plugins' / spa
+        files = list(directory.glob('libspa-' + spa + '.so.p/*.o'))
+        # DSP helper archives are production inputs; sibling SPA plugins and
+        # test executables must never share this factory export namespace.
+        if spa in ('audioconvert', 'audiomixer'):
+            files += directory.glob('lib' + spa + '*.a.p/*.o')
+        elif spa == 'videoconvert':
+            files += directory.glob('libvideoconvert_fmmpeg.a.p/*.o')
+        groups.append(('libspa-' + spa, sorted(files)))
     objects, entries, declarations = [], [], []
     spa_node_added = False
     for index, (name, files) in enumerate(groups):
@@ -49,6 +57,8 @@ def build(pwbuild, prefix, environment):
             for symbol in ('pipewire__module_init', 'spa_handle_factory_enum', 'spa_log_topic_enum'):
                 if any(line.split()[-1:] == [symbol] for line in symbols.splitlines()):
                     replacement = 'cast_pw_builtin_' + str(index) + '_' + symbol
+                    if symbol in exports:
+                        raise ValueError('Duplicate builtin export ' + symbol + ' in ' + name)
                     exports[symbol] = replacement
                     declarations.append('extern void ' + replacement + '(void);')
                     replacements += ['--redefine-sym', symbol + '=' + replacement]
@@ -58,6 +68,9 @@ def build(pwbuild, prefix, environment):
             subprocess.run(['objcopy', *replacements, target], check=True)
             objects.append(target)
         if name != 'client':
+            required = 'pipewire__module_init' if name.startswith('libpipewire-') else 'spa_handle_factory_enum'
+            if required not in exports:
+                raise ValueError('Missing builtin export ' + required + ' in ' + name)
             pointers = [exports.get(symbol) for symbol in ('pipewire__module_init', 'spa_handle_factory_enum', 'spa_log_topic_enum')]
             entries.append('{"' + name + '", ' + ', '.join('(void *)' + value if value else 'NULL' for value in pointers) + '}')
     source = output / 'loader.c'

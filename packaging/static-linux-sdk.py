@@ -88,7 +88,7 @@ def build(args, base, prefix, sources, environment, jobs, ROOT, run, static_desk
                      '-DSDL_TEST_LIBRARY=OFF', '-DSDL_X11=ON', '-DSDL_WAYLAND=OFF',
                      '-DSDL_DEPS_SHARED=OFF', '-DSDL_X11_SHARED=OFF', '-DSDL_WAYLAND_SHARED=OFF',
                      '-DSDL_WAYLAND_LIBDECOR=OFF', '-DSDL_OPENGL=OFF', '-DSDL_OPENGLES=OFF',
-                     '-DSDL_VULKAN=OFF', '-DSDL_RENDER_GPU=OFF', '-DSDL_GPU=OFF', '-DSDL_AUDIO=OFF',
+                     '-DSDL_VULKAN=OFF', '-DSDL_RENDER_GPU=OFF', '-DSDL_GPU=OFF', '-DSDL_AUDIO=OFF', '-DSDL_CAMERA=OFF',
                      '-DSDL_LIBUDEV=OFF', '-DSDL_JOYSTICK=OFF', '-DSDL_HAPTIC=OFF', '-DSDL_SENSOR=OFF',
                      '-DSDL_HIDAPI=OFF', '-DSDL_HIDAPI_LIBUSB=OFF', '-DSDL_DBUS=OFF', '-DSDL_IBUS=OFF']),
             ('SDL_ttf', ['-DBUILD_SHARED_LIBS=OFF', '-DSDLTTF_SAMPLES=OFF', '-DSDLTTF_HARFBUZZ=OFF',

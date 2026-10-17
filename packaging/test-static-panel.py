@@ -31,6 +31,9 @@ with tempfile.TemporaryDirectory(prefix='cast-static-panel-') as temporary:
     snapshot = work / 'panel.json'
     environment = dict(os.environ, XDG_RUNTIME_DIR=str(work), XDG_DATA_HOME=str(work / 'data'),
                        SDL_VIDEODRIVER='x11', CAST_PANEL_UI_STATE=str(snapshot))
+    empty_plugins = work / 'empty-plugins'
+    empty_plugins.mkdir()
+    environment.update(SPA_PLUGIN_DIR=str(empty_plugins), PIPEWIRE_MODULE_DIR=str(empty_plugins))
     common = [str(args.binary.resolve()), '--config', str(config), '--socket', str(work / 'cast.sock')]
     traces, processes = [], []
     def command(*arguments):
