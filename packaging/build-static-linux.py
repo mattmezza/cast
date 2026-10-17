@@ -162,9 +162,17 @@ def main():
             'STT_LIBS=' + profile['libs'], 'STT_CPU_BACKEND=',
             'STT_LDFLAGS=-Wl,-Map,' + str(base / 'helper.map')]
     run('make', jobs, *variables, 'all', env=environment)
+    helper = None
+    test_variables = variables.copy()
+    if args.edition == 'pro':
+        helper = max((ROOT / 'build').glob('pro-*/cast-pro-stt-helper'), key=lambda p: p.stat().st_mtime)
+        private = args.pro_root.resolve()
+        if (private / 'pro/src/trusted_keys.h').is_file():
+            private /= 'pro'
+        test_variables.append('PRO_TRUST_HEADER=' + str(private / 'src/trusted_keys.h'))
     environment['CAST_TEST_LINK_DNS'] = '1'
     for suite in ('check', 'check-xorg', 'check-panel'):
-        run('make', jobs, *variables, suite, env=environment)
+        run('make', jobs, *test_variables, suite, env=environment)
     # Each test executable also consumes LDFLAGS. Relink the release executable
     # last, with its own map, so source collection audits the actual payload.
     program = ROOT / ('cast-pro' if args.edition == 'pro' else 'cast')
@@ -178,8 +186,6 @@ def main():
     run(program, '--help')
     shutil.copy2(program, base / program.name)
     if args.edition == 'pro':
-        helpers = sorted((ROOT / 'build').glob('pro-*/cast-pro-stt-helper'), key=lambda p: p.stat().st_mtime)
-        helper = helpers[-1]
         for option in ('-l', '-d'):
             result = subprocess.check_output(['readelf', option, helper], text=True)
             if 'INTERP' in result or '(NEEDED)' in result:
@@ -187,6 +193,7 @@ def main():
         shutil.copy2(helper, base / helper.name)
 
     (base / 'build-info.json').write_text(json.dumps({
+        'helper_path': str(helper.relative_to(ROOT)) if helper else None,
         'source_commit': commit, 'make_variables': variables, 'sources': lock['sources'],
         'linkage': 'static glibc; no PT_INTERP or DT_NEEDED',
         'runtime_requirements': ['compatible glibc for dynamically loaded desktop modules',
