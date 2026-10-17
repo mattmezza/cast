@@ -162,10 +162,14 @@ check-os-compat: $(BUILD)/test_os_compat
 $(BUILD)/test_macos_preview: tests/test_macos_preview.m src/preview_macos.m src/preview_macos.h src/cast.h
 	@mkdir -p $(BUILD)
 	$(CC) -Isrc $(CFLAGS) $(WARN) -Werror -std=gnu11 -fobjc-arc -fblocks -o $@ tests/test_macos_preview.m src/preview_macos.m -framework AppKit -framework CoreGraphics
-check-unit: check-os-compat $(BUILD)/test_core $(BUILD)/test_visual $(BUILD)/test_macos_preview
+$(BUILD)/test_macos_pointer: tests/test_macos_pointer.c src/macos_pointer.h src/cast.h
+	@mkdir -p $(BUILD)
+	$(CC) -Isrc $(CFLAGS) $(WARN) -Werror -std=gnu11 -o $@ tests/test_macos_pointer.c
+check-unit: check-os-compat $(BUILD)/test_core $(BUILD)/test_visual $(BUILD)/test_macos_preview $(BUILD)/test_macos_pointer
 	$(BUILD)/test_core
 	$(BUILD)/test_visual
 	$(BUILD)/test_macos_preview
+	$(BUILD)/test_macos_pointer
 check check-macos: $(BINARY) check-unit
 	python3 tests/test_macos_smoke.py --binary ./$(BINARY)
 clean:
