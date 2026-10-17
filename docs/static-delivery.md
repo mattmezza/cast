@@ -40,7 +40,10 @@ link map.
 
 The static variant embeds PipeWire client modules and SPA factories in the same
 allocator domain as the application. Its module loader rejects external plug-ins.
-SDL uses static desktop dependencies and software rendering, with GPU driver
+The panel uses SDL's X11 backend with static dependencies and software rendering;
+on a Wayland desktop it needs XWayland. Wayland screen capture remains supported
+through the desktop portal and PipeWire, independently of the panel's backend.
+GPU driver
 loading, libdecor and optional controller/audio discovery disabled. Recording
 audio uses the application's PipeWire adapter. The static panel omits SDL's
 D-Bus IME integration; UTF-8 text and ordinary keyboard/paste input remain.
