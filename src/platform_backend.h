@@ -28,6 +28,7 @@ Platform *macos_open(const Config *, char *, size_t);
 void macos_close(Platform *);
 Capabilities macos_capabilities(Platform *);
 uint64_t macos_source_generation(Platform *);
+void macos_events(Platform *, Compositor *, const Config *, bool);
 int macos_capture(Platform *, Frame *, Cursor *, char *, size_t);
 int macos_command(Platform *, Config *, int, char **, char *, size_t);
 int macos_reconfigure(Platform *, const Config *, char *, size_t);

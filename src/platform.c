@@ -257,6 +257,7 @@ void platform_events(Platform *p, Compositor *comp, const Config *cfg, bool priv
 {
 #ifdef WITH_MACOS
     mac_preview_events(p->preview);
+    if (p->backend == MACOS) macos_events(p->impl, comp, cfg, privacy);
 #endif
 #ifdef WITH_X11
     if (p->backend == XORG) {

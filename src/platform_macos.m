@@ -21,6 +21,12 @@
     Config config;
     uint64_t generation, epoch, accept_after;
     bool closed, ready, failed;
+    CFMachPortRef input_tap;
+    CFRunLoopRef input_loop;
+    pthread_t input_thread;
+    bool input_started;
+    struct { CGPoint point; int button; uint64_t at; } clicks[64];
+    unsigned click_count;
     char failure[CAST_ERR];
 }
 @property(nonatomic, strong) SCStream *stream;
@@ -61,6 +67,66 @@ static int mac_config(const Config *cfg, char *error, size_t size)
         return mac_error(error, size, "selected macOS display is unavailable; use screen list");
     return 0;
 }
+/* Listen-only input never consumes or changes another application's events.
+ * Creating the tap does not request permission; Input Monitoring can be granted
+ * explicitly in System Settings and takes effect after restarting capture. */
+static CGEventRef input_event(CGEventTapProxy proxy, CGEventType type, CGEventRef event,
+                             void *context)
+{
+    (void)proxy;
+    CastScreenCapture *capture = (__bridge CastScreenCapture *)context;
+    if (type == kCGEventTapDisabledByTimeout || type == kCGEventTapDisabledByUserInput) {
+        CGEventTapEnable(capture->input_tap, true);
+        return event;
+    }
+    if (type != kCGEventLeftMouseDown && type != kCGEventRightMouseDown &&
+        type != kCGEventOtherMouseDown) return event;
+    int button = type == kCGEventLeftMouseDown ? 1 : type == kCGEventRightMouseDown ? 3 : 2;
+    pthread_mutex_lock(&capture->lock);
+    if (!capture->closed && capture->click_count < 64) {
+        unsigned index = capture->click_count++;
+        capture->clicks[index].point = CGEventGetLocation(event);
+        capture->clicks[index].button = button;
+        capture->clicks[index].at = cast_now_ns();
+    }
+    pthread_mutex_unlock(&capture->lock);
+    return event;
+}
+static void *input_run(void *context)
+{
+    CastScreenCapture *capture = (__bridge CastScreenCapture *)context;
+    @autoreleasepool {
+        CFRunLoopSourceRef source = CFMachPortCreateRunLoopSource(NULL, capture->input_tap, 0);
+        if (!source) return NULL;
+        CFRunLoopRef loop = CFRunLoopGetCurrent();
+        pthread_mutex_lock(&capture->lock);
+        capture->input_loop = (CFRunLoopRef)CFRetain(loop);
+        bool closed = capture->closed;
+        pthread_mutex_unlock(&capture->lock);
+        CFRunLoopAddSource(loop, source, kCFRunLoopCommonModes);
+        if (!closed) CFRunLoopRun();
+        CFRunLoopRemoveSource(loop, source, kCFRunLoopCommonModes);
+        CFRelease(source);
+    }
+    return NULL;
+}
+static CGDirectDisplayID selected_display(const Config *cfg)
+{
+    return (!cfg->monitor[0] || !strcmp(cfg->monitor, "main"))
+        ? CGMainDisplayID() : (CGDirectDisplayID)strtoul(cfg->monitor, NULL, 10);
+}
+static Cursor pointer_at(CGPoint point, const Config *cfg, int width, int height, uint64_t at)
+{
+    CGRect bounds = CGDisplayBounds(selected_display(cfg));
+    Cursor cursor = {.ts_ns = at};
+    if (bounds.size.width > 0 && bounds.size.height > 0 && width > 0 && height > 0 &&
+        CGRectContainsPoint(bounds, point)) {
+        cursor.x = (int)((point.x - bounds.origin.x) * width / bounds.size.width);
+        cursor.y = (int)((point.y - bounds.origin.y) * height / bounds.size.height);
+        cursor.valid = true;
+    }
+    return cursor;
+}
 @implementation CastScreenCapture
 - (instancetype)init
 {
@@ -69,11 +135,20 @@ static int mac_config(const Config *cfg, char *error, size_t size)
         pthread_mutex_init(&lock, NULL);
         _samples = dispatch_queue_create("cast.screen.samples", DISPATCH_QUEUE_SERIAL);
         generation = 1;
+        CGEventMask mask = CGEventMaskBit(kCGEventLeftMouseDown) |
+            CGEventMaskBit(kCGEventRightMouseDown) | CGEventMaskBit(kCGEventOtherMouseDown);
+        input_tap = CGEventTapCreate(kCGSessionEventTap, kCGHeadInsertEventTap,
+            kCGEventTapOptionListenOnly, mask, input_event, (__bridge void *)self);
+        if (input_tap && !pthread_create(&input_thread, NULL, input_run, (__bridge void *)self))
+            input_started = true;
     }
     return self;
 }
 - (void)dealloc
 {
+    if (input_started) [self shutdown];
+    if (input_loop) CFRelease(input_loop);
+    if (input_tap) CFRelease(input_tap);
     frame_free(&latest);
     pthread_mutex_destroy(&lock);
 }
@@ -88,6 +163,13 @@ static int mac_config(const Config *cfg, char *error, size_t size)
     self.stream = nil;
     pthread_mutex_unlock(&lock);
     [old stopCaptureWithCompletionHandler:^(NSError *error) { (void)error; }];
+    pthread_mutex_lock(&lock);
+    CFRunLoopRef loop = input_loop;
+    if (loop) CFRetain(loop);
+    pthread_mutex_unlock(&lock);
+    if (loop) { CFRunLoopStop(loop); CFRelease(loop); }
+    if (input_started) { pthread_join(input_thread, NULL); input_started = false; }
+    if (input_tap) CFMachPortInvalidate(input_tap);
 }
 - (void)begin
 {
@@ -263,10 +345,10 @@ void macos_close(Platform *p)
 }
 Capabilities macos_capabilities(Platform *p)
 {
-    (void)p;
+    CastScreenCapture *capture = (__bridge CastScreenCapture *)p;
     bool exclusion = NSBundle.mainBundle.bundleIdentifier.length > 0;
-    Capabilities cap = {.capture = true, .embedded_cursor = true, .preview = true, .panel_exclusion = exclusion};
-    snprintf(cap.description, sizeof cap.description, "ScreenCaptureKit monitor capture; embedded cursor; %s; native preview; no global input or selection UI",
+    Capabilities cap = {.capture = true, .cursor_metadata = true, .input = capture->input_started, .embedded_cursor = true, .preview = true, .panel_exclusion = exclusion};
+    snprintf(cap.description, sizeof cap.description, "ScreenCaptureKit monitor capture; embedded cursor; %s; native preview; pointer metadata; click input requires Input Monitoring",
         exclusion ? "Cast app bundle excluded" : "bundle exclusion unavailable outside .app");
     return cap;
 }
@@ -291,8 +373,17 @@ int macos_capture(Platform *p, Frame *frame, Cursor *cursor, char *error, size_t
         result = frame_copy(frame, &capture->latest);
         if (result < 0) mac_error(error, size, "cannot copy macOS screen frame");
     }
+    Config cfg = capture->config;
     pthread_mutex_unlock(&capture->lock);
     *cursor = (Cursor){0};
+    if (!result) {
+        CGEventRef event = CGEventCreate(NULL);
+        if (event) {
+            *cursor = pointer_at(CGEventGetLocation(event), &cfg, frame->width, frame->height,
+                                 frame->ts_ns);
+            CFRelease(event);
+        }
+    }
     return result;
 }
 int macos_reconfigure(Platform *p, const Config *cfg, char *error, size_t size)
@@ -367,4 +458,18 @@ int macos_panel_register(Platform *p, char *error, size_t size)
     [capture begin];
     macos_panel_status(p, error, size);
     return 0;
+}
+
+void macos_events(Platform *p, Compositor *comp, const Config *cfg, bool privacy)
+{
+    CastScreenCapture *capture = (__bridge CastScreenCapture *)p;
+    pthread_mutex_lock(&capture->lock);
+    for (unsigned i = 0; !privacy && i < capture->click_count; ++i) {
+        Cursor point = pointer_at(capture->clicks[i].point, cfg, capture->latest.width,
+                                  capture->latest.height, capture->clicks[i].at);
+        if (point.valid)
+            compositor_click(comp, point.x, point.y, capture->clicks[i].button, point.ts_ns);
+    }
+    capture->click_count = 0;
+    pthread_mutex_unlock(&capture->lock);
 }
