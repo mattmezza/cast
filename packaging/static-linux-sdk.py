@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""Dependency-only static Linux recipe; its exact bytes bind the SDK cache."""
+import json
+import shutil
+
+
+def build(args, base, prefix, sources, environment, jobs, ROOT, run, static_desktop, static_pipewire):
+    static_desktop.build(base, prefix, args.jobs, environment)
+    # Ubuntu's libmount-dev contains no static archive. Build its matching
+    # family of mount/blkid/uuid libraries without unrelated system programs.
+    run('./configure', '--prefix=' + str(prefix), '--libdir=' + str(prefix / 'lib'),
+        '--disable-all-programs', '--enable-libmount', '--enable-libblkid',
+        '--enable-libuuid', '--enable-static', '--disable-shared', '--without-selinux',
+        '--disable-nls', cwd=sources['util-linux'], env=environment)
+    run('make', jobs, cwd=sources['util-linux'], env=environment)
+    run('make', 'install', cwd=sources['util-linux'], env=environment)
+    # PipeWire upstream explicitly uses shared_library(), ignoring default_library.
+    # Build a static counterpart from exactly the same compiled client objects.
+    pipewire = sources['pipewire']
+    static_pipewire.prepare(pipewire)
+    pwbuild = base / 'pipewire-build'
+    if pwbuild.exists():
+        shutil.rmtree(pwbuild)
+    run('meson', 'setup', pwbuild, pipewire, '--prefix=/usr', '--libdir=lib/x86_64-linux-gnu',
+        '--auto-features=disabled', '-Dexamples=disabled', '-Dtests=disabled',
+        '-Dspa-plugins=enabled', '-Dsupport=enabled', '-Daudioconvert=enabled',
+        '-Daudiomixer=enabled', '-Dvideoconvert=enabled', '-Dpipewire-jack=disabled', '-Dpipewire-v4l2=disabled', env=environment)
+    run('ninja', '-C', pwbuild, jobs, env=environment)
+    (prefix / 'lib').mkdir(exist_ok=True)
+    static_pipewire.build(pwbuild, prefix, environment)
+    # Install the same build's public/generated headers and pkg-config files.
+    # Distro headers can describe an older ABI and must never drive this build.
+    pwstage = base / 'pipewire-install'
+    run('meson', 'install', '-C', pwbuild, '--destdir', pwstage, env=environment)
+    shutil.copytree(pwstage / 'usr', prefix, dirs_exist_ok=True)
+    for metadata in prefix.rglob('*.pc'):
+        text = metadata.read_text().replace('prefix=/usr', 'prefix=' + str(prefix))
+        metadata.write_text(text)
+    shutil.copy2(prefix / 'lib/libpipewire-0.3.a', prefix / 'lib/x86_64-linux-gnu/libpipewire-0.3.a')
+    run('make', jobs, 'BUILDTYPE=Release', 'libraries', cwd=sources['openh264'], env=environment)
+    run('make', 'PREFIX=' + str(prefix), 'install-static', cwd=sources['openh264'], env=environment)
+    media = json.loads((ROOT / 'packaging/media-lgpl-lock.json').read_text())
+    flags = [x for x in media['ffmpeg_flags'] if x not in ('--enable-shared', '--disable-static')]
+    run('./configure', '--prefix=' + str(prefix), '--enable-static', '--disable-shared',
+        '--pkg-config-flags=--static', *flags, cwd=sources['ffmpeg'], env=environment)
+    run('make', jobs, cwd=sources['ffmpeg'], env=environment)
+    run('make', 'install', cwd=sources['ffmpeg'], env=environment)
+    # SDL's Wayland probe otherwise exports -lEGL even with every GL path off.
+    checks = sources['SDL'] / 'cmake/sdlchecks.cmake'
+    original = '    set(WAYLAND_PKG_CONFIG_SPEC "wayland-client>=1.18" wayland-egl wayland-cursor egl "xkbcommon>=0.5.0")'
+    replacement = '    set(WAYLAND_PKG_CONFIG_SPEC "wayland-client>=1.18" wayland-egl wayland-cursor "xkbcommon>=0.5.0")\n    if(SDL_OPENGL OR SDL_OPENGLES)\n      list(APPEND WAYLAND_PKG_CONFIG_SPEC egl)\n    endif()'
+    content = checks.read_text()
+    if content.count(original) != 1:
+        raise ValueError('SDL Wayland dependency recipe changed')
+    checks.write_text(content.replace(original, replacement))
+    for name, options in [
+        ('SDL', ['-DSDL_SHARED=OFF', '-DSDL_STATIC=ON', '-DSDL_TESTS=OFF',
+                 '-DSDL_TEST_LIBRARY=OFF', '-DSDL_X11=ON', '-DSDL_WAYLAND=ON',
+                 '-DSDL_LOADSO=OFF', '-DCMAKE_C_FLAGS=-DSDL_DYNAMIC_API=0', '-DSDL_DEPS_SHARED=OFF', '-DSDL_X11_SHARED=OFF', '-DSDL_WAYLAND_SHARED=OFF',
+                 '-DSDL_WAYLAND_LIBDECOR=OFF', '-DSDL_OPENGL=OFF', '-DSDL_OPENGLES=OFF',
+                 '-DSDL_VULKAN=OFF', '-DSDL_RENDER_GPU=OFF', '-DSDL_GPU=OFF', '-DSDL_AUDIO=OFF',
+                 '-DSDL_LIBUDEV=OFF', '-DSDL_JOYSTICK=OFF', '-DSDL_HAPTIC=OFF', '-DSDL_SENSOR=OFF',
+                 '-DSDL_HIDAPI=OFF', '-DSDL_HIDAPI_LIBUSB=OFF', '-DSDL_DBUS=OFF', '-DSDL_IBUS=OFF']),
+        ('SDL_ttf', ['-DBUILD_SHARED_LIBS=OFF', '-DSDLTTF_SAMPLES=OFF', '-DSDLTTF_HARFBUZZ=OFF',
+                     '-DSDLTTF_PLUTOSVG=OFF'])]:
+        build = base / (name + '-build')
+        run('cmake', '-S', sources[name], '-B', build, '-G', 'Ninja',
+            '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_INSTALL_PREFIX=' + str(prefix),
+            '-DCMAKE_INSTALL_LIBDIR=lib', *options, env=environment)
+        run('cmake', '--build', build, '--parallel', args.jobs, env=environment)
+        run('cmake', '--install', build, env=environment)

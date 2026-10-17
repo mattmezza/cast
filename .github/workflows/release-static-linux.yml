@@ -125,7 +125,7 @@ jobs:
             build/static-linux/prefix
             build/static-linux/upstream
             build/static-linux/sdk.identity
-          key: static-linux-ubuntu24-${{ steps.toolchain.outputs.packages }}-${{ hashFiles('packaging/static-linux-lock.json', 'packaging/media-lgpl-lock.json', 'packaging/build-static-linux.py', 'packaging/static-pipewire.py', 'packaging/static-desktop-sdk.py') }}
+          key: static-linux-ubuntu24-${{ steps.toolchain.outputs.packages }}-${{ hashFiles('packaging/static-linux-lock.json', 'packaging/media-lgpl-lock.json', 'packaging/static-linux-sdk.py', 'packaging/static-pipewire.py', 'packaging/static-desktop-sdk.py') }}
       - name: Build verified-source static dependency SDK
         run: python3 packaging/build-static-linux.py --jobs 4 --reuse-sdk --sdk-only
       - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5

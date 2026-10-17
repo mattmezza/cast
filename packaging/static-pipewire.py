@@ -5,7 +5,7 @@ import shutil
 import subprocess
 
 MODULES = ('protocol-native', 'client-node', 'client-device', 'adapter', 'metadata', 'session-manager')
-SPAS = ('support', 'audioconvert', 'audiomixer')
+SPAS = ('support', 'audioconvert', 'audiomixer', 'videoconvert')
 
 
 def prepare(source):
@@ -40,7 +40,7 @@ def build(pwbuild, prefix, environment):
                 if spa_node_added:
                     continue
                 spa_node_added = True
-            if 'dumpcoeff' in str(original) or '/test' in str(original) or '/benchmark' in str(original):
+            if 'libtest_lib.a.p' in str(original) or 'dumpcoeff' in str(original) or '/test' in str(original) or '/benchmark' in str(original):
                 continue
             target = output / (str(len(objects)) + '.o')
             shutil.copy2(original, target)

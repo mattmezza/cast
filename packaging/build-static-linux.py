@@ -45,12 +45,15 @@ def main():
     desktop_spec = importlib.util.spec_from_file_location('static_desktop', ROOT / 'packaging/static-desktop-sdk.py')
     static_desktop = importlib.util.module_from_spec(desktop_spec)
     desktop_spec.loader.exec_module(static_desktop)
+    sdk_spec = importlib.util.spec_from_file_location('static_linux_sdk', ROOT / 'packaging/static-linux-sdk.py')
+    sdk_recipe = importlib.util.module_from_spec(sdk_spec)
+    sdk_spec.loader.exec_module(sdk_recipe)
     lock_path = ROOT / 'packaging/static-linux-lock.json'
     lock = json.loads(lock_path.read_text())
     toolchain = subprocess.check_output(['dpkg-query', '-W', '-f=${binary:Package}=${Version}\n'])
     identity = hashlib.sha256(lock_path.read_bytes() +
                               (ROOT / 'packaging/media-lgpl-lock.json').read_bytes() +
-                              Path(__file__).read_bytes() + (ROOT / 'packaging/static-pipewire.py').read_bytes() +
+                              (ROOT / 'packaging/static-linux-sdk.py').read_bytes() + (ROOT / 'packaging/static-pipewire.py').read_bytes() +
                               (ROOT / 'packaging/static-desktop-sdk.py').read_bytes() + toolchain).hexdigest()
     marker = base / 'sdk.identity'
     reuse = args.reuse_sdk and marker.is_file() and marker.read_text().strip() == identity
@@ -82,62 +85,8 @@ def main():
                        CMAKE_PREFIX_PATH=str(prefix))
     jobs = '-j' + str(args.jobs)
     if not reuse:
-        static_desktop.build(base, prefix, args.jobs, environment)
-        # Ubuntu's libmount-dev contains no static archive. Build its matching
-        # family of mount/blkid/uuid libraries without unrelated system programs.
-        run('./configure', '--prefix=' + str(prefix), '--libdir=' + str(prefix / 'lib'),
-            '--disable-all-programs', '--enable-libmount', '--enable-libblkid',
-            '--enable-libuuid', '--enable-static', '--disable-shared', '--without-selinux',
-            '--disable-nls', cwd=sources['util-linux'], env=environment)
-        run('make', jobs, cwd=sources['util-linux'], env=environment)
-        run('make', 'install', cwd=sources['util-linux'], env=environment)
-        # PipeWire upstream explicitly uses shared_library(), ignoring default_library.
-        # Build a static counterpart from exactly the same compiled client objects.
-        pipewire = sources['pipewire']
-        static_pipewire.prepare(pipewire)
-        pwbuild = base / 'pipewire-build'
-        if pwbuild.exists():
-            shutil.rmtree(pwbuild)
-        run('meson', 'setup', pwbuild, pipewire, '--prefix=/usr', '--libdir=lib/x86_64-linux-gnu',
-            '--auto-features=disabled', '-Dexamples=disabled', '-Dtests=disabled',
-            '-Dspa-plugins=enabled', '-Dsupport=enabled', '-Daudioconvert=enabled',
-            '-Daudiomixer=enabled', '-Dpipewire-jack=disabled', '-Dpipewire-v4l2=disabled', env=environment)
-        run('ninja', '-C', pwbuild, jobs, env=environment)
-        (prefix / 'lib').mkdir(exist_ok=True)
-        static_pipewire.build(pwbuild, prefix, environment)
-        # Install the same build's public/generated headers and pkg-config files.
-        # Distro headers can describe an older ABI and must never drive this build.
-        pwstage = base / 'pipewire-install'
-        run('meson', 'install', '-C', pwbuild, '--destdir', pwstage, env=environment)
-        shutil.copytree(pwstage / 'usr', prefix, dirs_exist_ok=True)
-        for metadata in prefix.rglob('*.pc'):
-            text = metadata.read_text().replace('prefix=/usr', 'prefix=' + str(prefix))
-            metadata.write_text(text)
-        shutil.copy2(prefix / 'lib/libpipewire-0.3.a', prefix / 'lib/x86_64-linux-gnu/libpipewire-0.3.a')
-        run('make', jobs, 'BUILDTYPE=Release', 'libraries', cwd=sources['openh264'], env=environment)
-        run('make', 'PREFIX=' + str(prefix), 'install-static', cwd=sources['openh264'], env=environment)
-        media = json.loads((ROOT / 'packaging/media-lgpl-lock.json').read_text())
-        flags = [x for x in media['ffmpeg_flags'] if x not in ('--enable-shared', '--disable-static')]
-        run('./configure', '--prefix=' + str(prefix), '--enable-static', '--disable-shared',
-            '--pkg-config-flags=--static', *flags, cwd=sources['ffmpeg'], env=environment)
-        run('make', jobs, cwd=sources['ffmpeg'], env=environment)
-        run('make', 'install', cwd=sources['ffmpeg'], env=environment)
-        for name, options in [
-            ('SDL', ['-DSDL_SHARED=OFF', '-DSDL_STATIC=ON', '-DSDL_TESTS=OFF',
-                     '-DSDL_TEST_LIBRARY=OFF', '-DSDL_X11=ON', '-DSDL_WAYLAND=ON',
-                     '-DSDL_LOADSO=OFF', '-DCMAKE_C_FLAGS=-DSDL_DYNAMIC_API=0', '-DSDL_DEPS_SHARED=OFF', '-DSDL_X11_SHARED=OFF', '-DSDL_WAYLAND_SHARED=OFF',
-                     '-DSDL_WAYLAND_LIBDECOR=OFF', '-DSDL_OPENGL=OFF', '-DSDL_OPENGLES=OFF',
-                     '-DSDL_VULKAN=OFF', '-DSDL_RENDER_GPU=OFF', '-DSDL_GPU=OFF', '-DSDL_AUDIO=OFF',
-                     '-DSDL_LIBUDEV=OFF', '-DSDL_JOYSTICK=OFF', '-DSDL_HAPTIC=OFF', '-DSDL_SENSOR=OFF',
-                     '-DSDL_HIDAPI=OFF', '-DSDL_HIDAPI_LIBUSB=OFF', '-DSDL_DBUS=OFF', '-DSDL_IBUS=OFF']),
-            ('SDL_ttf', ['-DBUILD_SHARED_LIBS=OFF', '-DSDLTTF_SAMPLES=OFF', '-DSDLTTF_HARFBUZZ=OFF',
-                         '-DSDLTTF_PLUTOSVG=OFF'])]:
-            build = base / (name + '-build')
-            run('cmake', '-S', sources[name], '-B', build, '-G', 'Ninja',
-                '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_INSTALL_PREFIX=' + str(prefix),
-                '-DCMAKE_INSTALL_LIBDIR=lib', *options, env=environment)
-            run('cmake', '--build', build, '--parallel', args.jobs, env=environment)
-            run('cmake', '--install', build, env=environment)
+        sdk_recipe.build(args, base, prefix, sources, environment, jobs, ROOT, run,
+                         static_desktop, static_pipewire)
         marker.write_text(identity + '\n')
     else:
         print('Reusing verified-source SDK with matching installed toolchain', flush=True)
