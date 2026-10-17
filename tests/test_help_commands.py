@@ -158,7 +158,7 @@ with tempfile.TemporaryDirectory(prefix="cast-help-test-") as directory:
         completion_dir.mkdir(mode=0o700)
         shutil.copy2(PROJECT / "completions" / "_cast", completion_dir / "_cast")
         init = 'fpath=(' + shlex.quote(str(completion_dir)) + ' $fpath)\n'
-        init += 'autoload -Uz compinit\ncompinit -D -d ' + shlex.quote(str(root / "zcompdump"))
+        init += 'autoload -Uz compinit\ncompinit -i -D -d ' + shlex.quote(str(root / "zcompdump"))
         init += '\n[[ $_comps[cast] == _cast ]]\n'
         run(["zsh", "-f", "-c", init], env=env, cwd=root)
 
