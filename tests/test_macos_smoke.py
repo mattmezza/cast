@@ -34,9 +34,12 @@ def main():
 
         def probe_recording(path):
             probe = subprocess.run(['ffprobe', '-v', 'error', '-count_frames',
-                                    '-show_streams', '-of', 'json', str(path)],
+                                    '-show_streams', '-show_format', '-of', 'json', str(path)],
                                    capture_output=True, text=True, check=True, timeout=15)
-            streams = json.loads(probe.stdout)['streams']
+            decoded = json.loads(probe.stdout)
+            formats = decoded['format']['format_name'].split(',')
+            assert ('mp4' if path.suffix == '.mp4' else 'matroska') in formats, (path, formats)
+            streams = decoded['streams']
             for kind in ('video', 'audio'):
                 assert any(stream['codec_type'] == kind and
                            int(stream.get('nb_read_frames', 0)) > 0
@@ -72,6 +75,9 @@ def main():
                 time.sleep(.6)
                 recording = status()
                 assert recording['record']['path'] == str(target) + '.mkv'
+                assert not target.exists(), 'MP4 must not be published during recording'
+                with Path(str(target) + '.mkv').open('rb') as in_progress:
+                    assert in_progress.read(4) == bytes.fromhex('1a45dfa3'), 'expected Matroska EBML header'
                 command('record', 'pause')
                 command('record', 'resume')
                 time.sleep(.3)
@@ -81,6 +87,7 @@ def main():
                     assert time.monotonic() < deadline
                     time.sleep(.05)
                 assert target.stat().st_size > 0
+                assert status()['record']['path'] == str(target)
                 assert not Path(str(target) + '.mkv').exists()
                 probe_recording(target)
                 command('settings', 'record.container', 'matroska')
@@ -90,6 +97,8 @@ def main():
                 time.sleep(.6)
                 command('record', 'stop')
                 probe_recording(mkv)
+                assert status()['record']['path'] == str(mkv)
+                assert not Path(str(mkv) + '.mkv').exists()
                 if os.uname().sysname == 'Darwin':
                     command('settings', 'record.countdown', '1')
                     command('preview', 'target', 'composition')
