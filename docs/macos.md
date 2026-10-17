@@ -175,7 +175,7 @@ AVFoundation, default microphone through AVAudioEngine, system audio through
 ScreenCaptureKit, composition, recording, and the existing control panel.
 
 This port does not implement virtual camera, virtual microphone, RTMP streaming,
-window/region selection, or global input annotations/hotkeys. Native preview and
+window/region selection, or global keyboard annotations/hotkeys. Native preview and
 countdown windows are supported. Unsupported operations report errors. Pro is supported for local development with controlled LGPL media and CPU
 Whisper inference; see the sibling private repository’s docs/development.md.
 Manual cinematic zoom/focus uses the shared Pro renderer. The capture adapter
