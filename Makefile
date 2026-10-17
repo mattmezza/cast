@@ -129,6 +129,7 @@ MEDIA_SOURCES = src/os_compat.c src/edition.c src/license_store.c src/edition_ex
 
 ifeq ($(EDITION):$(STT),pro:1)
 CPPFLAGS += $(if $(findstring -DCAST_GGML_BUNDLED_VULKAN=1,$(STT_CFLAGS)),-DCAST_WITH_SPEECH_VULKAN=1)
+CPPFLAGS += $(if $(filter 1,$(STT_HELPER_SIBLING)),-DCAST_STT_HELPER_SIBLING=1)
 CPPFLAGS += -DCAST_WITH_STT -DCAST_STT_HELPER_PATH='"$(STT_HELPER_PATH)"'
 STT_HELPER = $(BUILD)/cast-pro-stt-helper
 endif
