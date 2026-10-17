@@ -141,8 +141,10 @@ jobs:
           test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
           python3 packaging/public-boundary.py
           python3 packaging/build-static-linux.py --jobs 4 --reuse-sdk
-      - name: Verify PipeWire capture with a synthetic null sink
-        run: dbus-run-session -- python3 packaging/test-static-audio.py
+      - name: Verify static audio and reject runtime shared-library loads
+        run: |
+          sudo apt-get install -y strace
+          dbus-run-session -- python3 packaging/test-static-audio.py --trace
       - name: Preserve exact linked dependency sources
         run: python3 packaging/static-linux-sources.py
       - name: Prepare verified static release assets

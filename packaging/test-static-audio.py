@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Prove the static payload captures nonzero audio through real PipeWire plugins."""
+import argparse
 import array
 import json
 import math
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -23,7 +25,29 @@ def wait(predicate, message, seconds=15):
     raise AssertionError(message)
 
 
+def audit_traces(paths):
+    loaded = []
+    for path in paths:
+        pending = {}
+        for line in path.read_text().splitlines():
+            process = re.match(r'^(\d+)\s+', line)
+            pid = process.group(1) if process else 'main'
+            library = re.search(r'"([^"\n]+\.so(?:\.[^"/]+)*)"', line)
+            if 'openat(' in line and library:
+                pending[pid] = library.group(1)
+            if ('openat(' in line or '<... openat resumed>' in line) and '<unfinished ...>' not in line:
+                name = pending.pop(pid, None)
+                if name and re.search(r'=\s+[0-9]+(?:\s|$)', line):
+                    loaded.append(name)
+    assert not loaded, 'Cast opened shared libraries: ' + ', '.join(sorted(set(loaded)))
+
+
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--binary', type=Path, default=BINARY)
+    parser.add_argument('--trace', action='store_true', help='reject successful shared-library opens by Cast')
+    args = parser.parse_args()
+    binary = args.binary.resolve()
     with tempfile.TemporaryDirectory(prefix='cast-static-audio-') as directory:
         work = Path(directory)
         runtime = work / 'runtime'
@@ -31,14 +55,23 @@ def main():
         environment = dict(os.environ, XDG_RUNTIME_DIR=str(runtime),
                            PULSE_SERVER='unix:' + str(runtime / 'pulse/native'))
         processes = []
+        traces = []
+
+        def traced(command):
+            if args.trace and command[0] == str(binary):
+                path = work / ('cast-trace-' + str(len(traces)) + '.log')
+                traces.append(path)
+                return ['strace', '-f', '--kill-on-exit', '-qq', '-s', '4096',
+                        '-e', 'trace=openat', '-o', str(path), '--', *command]
+            return command
         with (work / 'services.log').open('w+') as log:
             def start(*command):
-                process = subprocess.Popen(command, env=environment, stdout=log, stderr=log)
+                process = subprocess.Popen(traced(command), env=environment, stdout=log, stderr=log)
                 processes.append(process)
                 return process
 
             def call(*command, check=True):
-                return subprocess.run(command, env=environment, capture_output=True,
+                return subprocess.run(traced(command), env=environment, capture_output=True,
                                       text=True, check=check, timeout=10)
 
             try:
@@ -63,7 +96,7 @@ def main():
                                   '[audio]\nmic=false\ndesktop=true\n'
                                   'desktop_source=cast_static_test\nvirtual=false\n'
                                   '[record]\nvideo_codec=ffv1\ncountdown=0\n')
-                common = [str(BINARY), '--config', str(config), '--socket', str(runtime / 'cast.sock')]
+                common = [str(binary), '--config', str(config), '--socket', str(runtime / 'cast.sock')]
                 daemon = start(*common, '--headless', '--no-camera', '--no-virtual')
                 wait(lambda: (runtime / 'cast.sock').exists() or daemon.poll() is not None,
                      'Static daemon did not start')
@@ -87,6 +120,10 @@ def main():
                 assert rms > .005, 'Static audio capture produced silence: RMS=' + str(rms)
                 print('Static PipeWire null-sink recording passed; RMS=' + str(rms))
                 call(*common, 'quit')
+                daemon.wait(timeout=10)
+                if args.trace:
+                    audit_traces(traces)
+                    print('Cast audio/CLI trace passed: no successful shared-library opens')
             finally:
                 for process in reversed(processes):
                     if process.poll() is None:
