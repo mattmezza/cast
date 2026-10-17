@@ -158,7 +158,7 @@ def main():
             variables.append('PRO_TRUST_HEADER=' + str(args.pro_trust_header.resolve()))
         variables += ['MEDIA_PROFILE=lgpl', 'PRO_ROOT=' + str(args.pro_root.resolve()),
             'LGPL_ROOT=' + str(base), 'OFFICIAL_RELEASE=0', 'STT=1', 'STT_ENGINEERING=1',
-            'STT_HELPER_SIBLING=1', 'STT_PROFILE=' + str(args.stt_profile.resolve()), 'STT_CFLAGS=' + profile['cflags'],
+            'PRODUCTION_LICENSE_ACCEPTANCE=1', 'STT_HELPER_SIBLING=1', 'STT_PROFILE=' + str(args.stt_profile.resolve()), 'STT_CFLAGS=' + profile['cflags'],
             'STT_LIBS=' + profile['libs'], 'STT_CPU_BACKEND=',
             'STT_LDFLAGS=-Wl,-Map,' + str(base / 'helper.map')]
     run('make', jobs, *variables, 'all', env=environment)
@@ -169,6 +169,7 @@ def main():
         private = args.pro_root.resolve()
         if (private / 'pro/src/trusted_keys.h').is_file():
             private /= 'pro'
+        test_variables.append('PRODUCTION_LICENSE_ACCEPTANCE=0')
         test_variables.append('PRO_TRUST_HEADER=' + str(private / 'src/trusted_keys.h'))
     environment['CAST_TEST_LINK_DNS'] = '1'
     for suite in ('check', 'check-xorg', 'check-panel'):
