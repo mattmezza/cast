@@ -1349,7 +1349,9 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
                 return app_error(out, n, "no recording to stop");
             }
             int rc = media_record_stop(a->media, out, n);
-            a->record_finalizing = media_record_finalizing(a->media);
+            /* Even a worker that finishes before this read must deliver the
+             * completion hook on the next tick (automatic subtitle creation). */
+            a->record_finalizing = !rc || media_record_finalizing(a->media);
             a->state.recording = a->state.record_paused = a->state.group_record_restore = false;
             a->state.record_cut = a->state.record_frozen = a->state.record_blurred = false;
             frame_free(&a->record_frozen);
