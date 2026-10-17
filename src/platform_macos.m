@@ -2,6 +2,7 @@
  * Startup is asynchronous on private queues: no main-thread dispatch or blocking
  * wait is used, so the daemon need not run an AppKit event loop. */
 #include "platform_backend.h"
+#include "macos_pointer.h"
 #import <Foundation/Foundation.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <CoreGraphics/CoreGraphics.h>
@@ -25,8 +26,7 @@
     CFRunLoopRef input_loop;
     pthread_t input_thread;
     bool input_started;
-    struct { CGPoint point; int button; uint64_t at; } clicks[64];
-    unsigned click_count;
+    MacPointerQueue input_clicks;
     char failure[CAST_ERR];
 }
 @property(nonatomic, strong) SCStream *stream;
@@ -83,11 +83,10 @@ static CGEventRef input_event(CGEventTapProxy proxy, CGEventType type, CGEventRe
         type != kCGEventOtherMouseDown) return event;
     int button = type == kCGEventLeftMouseDown ? 1 : type == kCGEventRightMouseDown ? 3 : 2;
     pthread_mutex_lock(&capture->lock);
-    if (!capture->closed && capture->click_count < 64) {
-        unsigned index = capture->click_count++;
-        capture->clicks[index].point = CGEventGetLocation(event);
-        capture->clicks[index].button = button;
-        capture->clicks[index].at = cast_now_ns();
+    if (!capture->closed) {
+        CGPoint point = CGEventGetLocation(event);
+        mac_pointer_push(&capture->input_clicks,
+            (MacPointerClick){point.x, point.y, button, cast_now_ns()});
     }
     pthread_mutex_unlock(&capture->lock);
     return event;
@@ -123,14 +122,8 @@ static CGDirectDisplayID selected_display(const Config *cfg)
 static Cursor pointer_at(CGPoint point, const Config *cfg, int width, int height, uint64_t at)
 {
     CGRect bounds = CGDisplayBounds(selected_display(cfg));
-    Cursor cursor = {.ts_ns = at};
-    if (bounds.size.width > 0 && bounds.size.height > 0 && width > 0 && height > 0 &&
-        CGRectContainsPoint(bounds, point)) {
-        cursor.x = (int)((point.x - bounds.origin.x) * width / bounds.size.width);
-        cursor.y = (int)((point.y - bounds.origin.y) * height / bounds.size.height);
-        cursor.valid = true;
-    }
-    return cursor;
+    return mac_pointer_map(point.x, point.y, bounds.origin.x, bounds.origin.y,
+                           bounds.size.width, bounds.size.height, width, height, at);
 }
 @implementation CastScreenCapture
 - (instancetype)init
@@ -469,12 +462,13 @@ void macos_events(Platform *p, Compositor *comp, const Config *cfg, bool privacy
 {
     CastScreenCapture *capture = (__bridge CastScreenCapture *)p;
     pthread_mutex_lock(&capture->lock);
-    for (unsigned i = 0; !privacy && i < capture->click_count; ++i) {
-        Cursor point = pointer_at(capture->clicks[i].point, cfg, capture->latest.width,
-                                  capture->latest.height, capture->clicks[i].at);
+    MacPointerClick clicks[64];
+    unsigned count = mac_pointer_drain(&capture->input_clicks, privacy, clicks);
+    for (unsigned i = 0; i < count; ++i) {
+        Cursor point = pointer_at(CGPointMake(clicks[i].x, clicks[i].y), cfg,
+                                  capture->latest.width, capture->latest.height, clicks[i].at);
         if (point.valid)
-            compositor_click(comp, point.x, point.y, capture->clicks[i].button, point.ts_ns);
+            compositor_click(comp, point.x, point.y, clicks[i].button, point.ts_ns);
     }
-    capture->click_count = 0;
     pthread_mutex_unlock(&capture->lock);
 }
