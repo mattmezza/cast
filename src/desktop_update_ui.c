@@ -189,7 +189,7 @@ static int install_update(const Config *config, const CastDesktopUpdate *update,
         char lockpath[PATH_MAX];
         struct stat st;
         snprintf(lockpath, sizeof lockpath, "%s.lock", config->socket_path);
-        int fd = open(lockpath, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+        int fd = open(lockpath, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
         bool idle = fd >= 0 && !fstat(fd, &st) && S_ISREG(st.st_mode) &&
                     st.st_uid == getuid() && !(st.st_mode & 0077) &&
                     !flock(fd, LOCK_EX | LOCK_NB);
