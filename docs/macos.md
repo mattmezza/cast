@@ -7,6 +7,25 @@ and the synthetic checks pass on Apple Silicon. Hardware capture still requires
 permission and runtime validation; synthetic checks cannot establish that it works.
 Intel builds have not been validated.
 
+## Install a release
+
+Download the Apple Silicon DMG from the [download page](https://superscreencast.com/download).
+Open it, drag **Super Screencast.app** onto **Applications**, then eject the disk
+image and launch the app from Applications. Pro uses the same steps with
+**Super Screencast Pro.app**. Current packaged releases require macOS 15 or later.
+The ZIP remains available as an alternative: extract it and move the app into
+Applications. Both packages contain the same self-contained app.
+
+These releases are ad-hoc signed, not Apple-notarized. If macOS blocks the app,
+use **System Settings > Privacy & Security > Open Anyway** after attempting to
+open it. Installing from a DMG does not change Gatekeeper's verification.
+
+Release workflows create the disk image from the signed app, include its icon
+and an Applications shortcut, and mount the final image read-only to verify the
+app's signature and exact file contents. Existing published ZIP releases can
+receive an additive DMG via the **Add DMG to existing macOS release** workflow;
+the original ZIP and checksums remain unchanged.
+
 ## Build on your MacBook
 
 Install Apple's Command Line Tools and the Homebrew dependencies, then build from
