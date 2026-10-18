@@ -635,8 +635,16 @@ int main(void)
     COMMAND(app, true, "resume");
     assert(app->state.virtual_paused); /* Group resume cannot undo an independent pause. */
     COMMAND(app, true, "virtual", "resume");
+    COMMAND(app, true, "desktop-update", "prepare");
+    assert(app->desktop_update_until > cast_now_ns());
+    COMMAND(app, false, "record", "start", recording_path);
+    assert(!app->state.recording);
+    COMMAND(app, true, "desktop-update", "cancel");
     COMMAND(app, true, "record", "start", recording_path);
     tick(app);
+    COMMAND(app, false, "desktop-update", "prepare");
+    COMMAND(app, false, "desktop-update", "commit");
+    assert(app->state.recording && !stopping && !app->desktop_update_until);
     output_modes(app);
     COMMAND(app, true, "pause");
     COMMAND(app, true, "pause");
@@ -668,7 +676,16 @@ int main(void)
     assert(strstr(response, recording_path) && !app->state.recording);
     if (media_record_finalizing(app->media)) {
         COMMAND(app, false, "record", "start", recording_path);
+        COMMAND(app, false, "desktop-update", "prepare");
+        COMMAND(app, false, "desktop-update", "commit");
+        assert(!stopping && !app->desktop_update_until);
     }
+    /* Also cover the controller's pending-finalization flag deterministically. */
+    app->record_finalizing = true;
+    COMMAND(app, false, "desktop-update", "prepare");
+    COMMAND(app, false, "desktop-update", "commit");
+    assert(app->record_finalizing && !stopping && !app->desktop_update_until);
+    app->record_finalizing = false;
     wait_finalization(app);
     COMMAND(app, false, "record", "start", recording_path);
     COMMAND(app, false, "record", "toggle");
@@ -677,6 +694,9 @@ int main(void)
     COMMAND(app, true, "config", "reload");
     COMMAND(app, true, "record", "start", "/tmp/never-created-by-cancelled-cast-test.mkv");
     assert(app->countdown);
+    COMMAND(app, false, "desktop-update", "prepare");
+    COMMAND(app, false, "desktop-update", "commit");
+    assert(app->countdown && !stopping && !app->desktop_update_until);
     COMMAND(app, true, "pause");
     assert(!app->countdown);
     app->countdown_deadline = 0;

@@ -232,3 +232,11 @@ ifeq ($(EDITION):$(STT),pro:1)
 	install -d '$(DESTDIR)$(PREFIX)/libexec'
 	install -m755 '$(STT_HELPER)' '$(DESTDIR)$(PREFIX)/libexec/cast-pro-stt-helper'
 endif
+
+# Synthetic controller integration never requests desktop capture permissions.
+$(BUILD)/test_commands: tests/test_commands.c $(OBJECTS)
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -fobjc-arc -fblocks $(LDFLAGS) -o $@ tests/test_commands.c $(filter-out $(BUILD)/src/main.o $(BUILD)/src/panel.o,$(OBJECTS)) $(PKG_LIBS) $(LDLIBS)
+.PHONY: check-commands
+check-commands: $(OBJECTS) $(BUILD)/test_commands
+	$(BUILD)/test_commands > $(BUILD)/commands-status.json

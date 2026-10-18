@@ -1130,6 +1130,7 @@ int main(int argc, char **argv)
     if (argc > 1 && !strcmp(argv[1], "--desktop-update-helper")) {
         return cast_desktop_update_helper(argc - 1, argv + 1);
     }
+    cast_desktop_update_arguments(argc, argv);
 #ifdef CAST_PANEL_STATIC_X11
     /* The daemon also owns Pro Notes windows; keep every SDL window on the
      * static software X11 driver, including children started from a panel. */
