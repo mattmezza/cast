@@ -24,8 +24,12 @@ packages the complete runtime, and signs it with existing production update trus
 Pro publication starts from an authenticated accepted standalone kit. All signing
 and storage credentials remain on the existing protected production runner.
 
-The publication workflow stages by default. After application/update acceptance,
-explicit publication writes and reads back immutable artifacts before advancing
-the channel with an ETag condition and strictly increasing stable version.
+An hourly protected workflow automatically discovers newly published Free/Pro
+releases and advances each eligible edition/platform independently. It waits for
+complete release assets or authenticated accepted kit links, and skips drafts,
+prereleases and channels already at an equal/newer version. Manual staging and
+publication remain available. Publication writes and reads back immutable
+artifacts before advancing the channel with an ETag condition and strictly
+increasing stable version.
 Versions through 0.10.5 are rejected because they do not implement this updater.
 Implementing this flow does not publish an application or populate those channels.
