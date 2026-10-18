@@ -4,9 +4,16 @@
 void cast_desktop_update_arguments(int, char **);
 int cast_desktop_update_runtime_lock(char *, size_t);
 typedef struct CastDesktopUpdater CastDesktopUpdater;
-typedef enum { CAST_DESKTOP_IDLE, CAST_DESKTOP_CHECKING, CAST_DESKTOP_AVAILABLE,
-               CAST_DESKTOP_CURRENT, CAST_DESKTOP_DOWNLOADING, CAST_DESKTOP_RESTARTING,
-               CAST_DESKTOP_FAILED, CAST_DESKTOP_INELIGIBLE } CastDesktopUpdateState;
+typedef enum {
+    CAST_DESKTOP_IDLE,
+    CAST_DESKTOP_CHECKING,
+    CAST_DESKTOP_AVAILABLE,
+    CAST_DESKTOP_CURRENT,
+    CAST_DESKTOP_DOWNLOADING,
+    CAST_DESKTOP_RESTARTING,
+    CAST_DESKTOP_FAILED,
+    CAST_DESKTOP_INELIGIBLE
+} CastDesktopUpdateState;
 typedef struct {
     CastDesktopUpdateState state;
     char version[32], message[CAST_ERR];
