@@ -24,13 +24,13 @@ jobs:
         with:
           persist-credentials: false
       - name: Install local build dependencies
-        run: brew install pkgconf ffmpeg fontconfig freetype sdl3 sdl3_ttf
+        run: brew install pkgconf ffmpeg fontconfig freetype sdl3 sdl3_ttf libsodium curl libarchive
       - name: Build recorder and app
         run: |
           make -j4
           make macos-app
       - name: Run tests without capture permissions
-        run: make check-macos
+        run: make check-macos check-desktop-update-guard
       - name: Archive development bundle
         run: ditto -c -k --sequesterRsrc --keepParent "build/macos/Super Screencast.app" build/macos/SuperScreencast-dev.zip
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

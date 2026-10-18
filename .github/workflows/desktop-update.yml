@@ -1,0 +1,52 @@
+name: Desktop updater security
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'src/desktop_update*'
+      - 'tests/test_desktop_update.c'
+      - 'Makefile*'
+      - '.github/workflows/desktop-update.yml'
+  pull_request:
+    paths:
+      - 'src/desktop_update*'
+      - 'tests/test_desktop_update.c'
+      - 'Makefile*'
+      - '.github/workflows/desktop-update.yml'
+permissions:
+  contents: read
+jobs:
+  security:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Linux updater dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang pkg-config libsodium-dev libcurl4-openssl-dev libarchive-dev
+      - name: Install macOS updater dependencies
+        if: runner.os == 'macOS'
+        run: brew install pkgconf libsodium curl libarchive
+      - name: Compile and run security regressions with sanitizers
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            export PKG_CONFIG_PATH="$(brew --prefix)/opt/curl/lib/pkgconfig:$(brew --prefix)/opt/libarchive/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+            export ASAN_OPTIONS=detect_leaks=0
+          fi
+          mkdir -p build/updater-security
+          clang -std=gnu11 -O1 -g -Wall -Wextra -Wformat=2 -Wstrict-prototypes -Wmissing-prototypes -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            $(pkg-config --cflags libsodium libcurl libarchive) \
+            tests/test_desktop_update.c -o build/updater-security/test_desktop_update \
+            $(pkg-config --libs libsodium libcurl libarchive) -pthread
+          build/updater-security/test_desktop_update
