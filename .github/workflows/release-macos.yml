@@ -105,7 +105,7 @@ jobs:
           path: release-tools
           persist-credentials: false
       - name: Install build dependencies
-        run: brew install pkgconf fontconfig freetype sdl3 sdl3_ttf nasm ffmpeg
+        run: brew install pkgconf fontconfig freetype sdl3 sdl3_ttf nasm ffmpeg libsodium curl libarchive
       - name: Build and check exact release source
         shell: bash
         run: |
