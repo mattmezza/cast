@@ -99,6 +99,11 @@ jobs:
         with:
           ref: ${{ needs.source.outputs.commit }}
           persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          path: release-tools
+          persist-credentials: false
       - name: Install build dependencies
         run: brew install pkgconf fontconfig freetype sdl3 sdl3_ttf nasm ffmpeg
       - name: Build and check exact release source
@@ -133,6 +138,7 @@ jobs:
           prefix="cast-$RELEASE_VERSION-macos-arm64"
           python3 packaging/macos-sources.py --app "$app" --output "dist/macos/$prefix-homebrew-sources.tar.gz"
           ditto -c -k --sequesterRsrc --keepParent "$app" "dist/macos/$prefix.zip"
+          python3 release-tools/packaging/macos-dmg.py --app "$app" --output "dist/macos/$prefix.dmg"
           cp build/deps-lgpl-macos/corresponding-sources.tar.gz "dist/macos/$prefix-media-sources.tar.gz"
           tar -czf "dist/macos/$prefix-media-build-materials.tar.gz" -C build/deps-lgpl-macos build-materials profile.json
           git archive --format=tar.gz --prefix="cast-$RELEASE_VERSION/" HEAD > "dist/macos/$prefix-source.tar.gz"
@@ -144,7 +150,7 @@ jobs:
             printf '\nSigning: ad hoc; not notarized\n'
           } > "dist/macos/$prefix-build-info.txt"
           cd dist/macos
-          shasum -a 256 "$prefix.zip" "$prefix-source-commit.txt" "$prefix-build-info.txt" "$prefix-media-sources.tar.gz" "$prefix-media-build-materials.tar.gz" "$prefix-homebrew-sources.tar.gz" "$prefix-source.tar.gz" > "$prefix-SHA256SUMS"
+          shasum -a 256 "$prefix.dmg" "$prefix.zip" "$prefix-source-commit.txt" "$prefix-build-info.txt" "$prefix-media-sources.tar.gz" "$prefix-media-build-materials.tar.gz" "$prefix-homebrew-sources.tar.gz" "$prefix-source.tar.gz" > "$prefix-SHA256SUMS"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: cast-macos-arm64
@@ -179,7 +185,7 @@ jobs:
           prefix="cast-$RELEASE_VERSION-macos-arm64"
           [[ $(cat "$prefix-source-commit.txt") == "$SOURCE_COMMIT" ]]
           sha256sum -c "$prefix-SHA256SUMS"
-          assets=( "$prefix.zip" "$prefix-source-commit.txt" "$prefix-build-info.txt" "$prefix-SHA256SUMS" "$prefix-media-sources.tar.gz" "$prefix-media-build-materials.tar.gz" "$prefix-homebrew-sources.tar.gz" "$prefix-source.tar.gz" )
+          assets=( "$prefix.dmg" "$prefix.zip" "$prefix-source-commit.txt" "$prefix-build-info.txt" "$prefix-SHA256SUMS" "$prefix-media-sources.tar.gz" "$prefix-media-build-materials.tar.gz" "$prefix-homebrew-sources.tar.gz" "$prefix-source.tar.gz" )
           [[ $(find . -maxdepth 1 -type f | wc -l) == ${#assets[@]} ]]
           release=$(gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG")
           [[ $(jq -r '.id' <<< "$release") == "$RELEASE_ID" ]]

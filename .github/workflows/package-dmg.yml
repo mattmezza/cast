@@ -1,0 +1,52 @@
+name: Add DMG to existing macOS release
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        required: true
+        type: string
+permissions:
+  contents: write
+concurrency:
+  group: macos-dmg-${{ inputs.release_tag }}
+  cancel-in-progress: false
+jobs:
+  package:
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Download and verify published app
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ $(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft) == false ]]
+          prefix="cast-${RELEASE_TAG#v}-macos-arm64"
+          mkdir delivery dist
+          gh release download "$RELEASE_TAG" -p "$prefix.zip" -p "$prefix-SHA256SUMS" -D delivery
+          cd delivery
+          awk -v name="$prefix.zip" '$2 == name {print}' "$prefix-SHA256SUMS" > app.sha256
+          [[ $(wc -l < app.sha256) == 1 ]]
+          shasum -a 256 -c app.sha256
+          ditto -x -k "$prefix.zip" app
+      - name: Build and verify drag-to-Applications image
+        run: |
+          prefix="cast-${RELEASE_TAG#v}-macos-arm64"
+          python3 packaging/macos-dmg.py --app 'delivery/app/Super Screencast.app' --output "dist/$prefix.dmg"
+          cd dist
+          shasum -a 256 "$prefix.dmg" > "$prefix-DMG-SHA256SUMS"
+      - name: Attach additive assets without replacing existing files
+        run: |
+          prefix="cast-${RELEASE_TAG#v}-macos-arm64"
+          gh release upload "$RELEASE_TAG" "dist/$prefix.dmg" "dist/$prefix-DMG-SHA256SUMS"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: verified-community-dmg
+          path: dist/*
