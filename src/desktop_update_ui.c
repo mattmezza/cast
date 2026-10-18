@@ -61,11 +61,45 @@ static int executable(char *path, size_t n)
     return 0;
 #endif
 }
+static int gate_path(char *, size_t, char *, size_t);
+static void recovery_message(char *message, size_t n, bool save)
+{
+    char path[PATH_MAX], error[CAST_ERR];
+    if (gate_path(path, sizeof path, error, sizeof error))
+        return;
+    char *base = strrchr(path, '/');
+    if (!base || (size_t)(base - path) + 24 >= sizeof path)
+        return;
+    strcpy(base + 1, "last-update-error.txt");
+    if (save && !message[0]) {
+        unlink(path);
+        return;
+    }
+    int fd =
+        open(path, (save ? O_WRONLY | O_CREAT : O_RDONLY) | O_CLOEXEC | O_NOFOLLOW, 0600);
+    struct stat st;
+    if (fd < 0)
+        return;
+    if (!fstat(fd, &st) && S_ISREG(st.st_mode) && st.st_uid == getuid() && st.st_nlink == 1 && !(st.st_mode & 0077)) {
+        if (save) {
+            if (ftruncate(fd, 0)) { close(fd); return; }
+            (void)write(fd, message, strlen(message));
+            (void)fsync(fd);
+        } else {
+            ssize_t length = read(fd, message, n - 1);
+            if (length > 0)
+                message[length] = 0;
+        }
+    }
+    close(fd);
+}
 static void report(CastDesktopUpdater *u, CastDesktopUpdateState state, const char *version,
                    const char *message)
 {
     pthread_mutex_lock(&u->mutex);
     u->progress.state = state;
+    if (state == CAST_DESKTOP_CHECKING)
+        u->progress.recovery_error = false;
     snprintf(u->progress.version, sizeof u->progress.version, "%s", version ? version : "");
     snprintf(u->progress.message, sizeof u->progress.message, "%s", message);
     pthread_mutex_unlock(&u->mutex);
@@ -252,7 +286,7 @@ static void *worker(void *context)
     CastDesktopUpdater *u = context;
     cast_update_cancel_scope(&u->cancel);
     pthread_mutex_lock(&u->mutex);
-    time_t next_check = 0;
+    time_t next_check = u->progress.recovery_error ? time(NULL) + 600 : 0;
     while (!u->stop) {
         if (!u->request && time(NULL) < next_check) {
             struct timespec deadline = {.tv_sec = next_check};
@@ -305,6 +339,11 @@ CastDesktopUpdater *cast_desktop_updater_open(const Config *config)
     if (!u)
         return NULL;
     u->config = *config;
+    recovery_message(u->progress.message, sizeof u->progress.message, false);
+    if (u->progress.message[0]) {
+        u->progress.state = CAST_DESKTOP_FAILED;
+        u->progress.recovery_error = true;
+    }
     atomic_init(&u->cancel, false);
     pthread_mutex_init(&u->mutex, NULL);
     pthread_cond_init(&u->wake, NULL);
@@ -356,14 +395,8 @@ static int request(CastDesktopUpdater *u, int action)
     pthread_mutex_unlock(&u->mutex);
     return busy ? -1 : 0;
 }
-int cast_desktop_updater_check(CastDesktopUpdater *u)
-{
-    return request(u, 1);
-}
-int cast_desktop_updater_install(CastDesktopUpdater *u)
-{
-    return request(u, 2);
-}
+int cast_desktop_updater_check(CastDesktopUpdater *u) { return request(u, 1); }
+int cast_desktop_updater_install(CastDesktopUpdater *u) { return request(u, 2); }
 int cast_desktop_update_cli(int argc, char **argv, const Config *config, char *e, size_t n)
 {
     if (argc != 2)
@@ -651,12 +684,16 @@ int cast_desktop_update_helper(int argc, char **argv)
         goto failed;
     }
     cast_update_stage_cleanup(&stage);
+    char clear_error[1] = "";
+    recovery_message(clear_error, sizeof clear_error, true);
     return 0;
 failed:
-    fprintf(stderr, "Super Screencast update: %s\n",
-            error[0] ? error : "installation cancelled safely");
+    if (!error[0]) problem(error, sizeof error, "Update installation was cancelled safely.");
+    fprintf(stderr, "Super Screencast update: %s\n", error);
     /* Preserve staged evidence and existing rollback directories for recovery.
      * Reopen the previous app on failure when still present. */
-    launch_new(argv[3], argc - 8, argv + 8);
+    recovery_message(error, sizeof error, true);
+    if (getppid() != parent)
+        launch_new(argv[3], argc - 8, argv + 8);
     return 5;
 }

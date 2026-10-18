@@ -16,6 +16,7 @@ typedef enum {
 } CastDesktopUpdateState;
 typedef struct {
     CastDesktopUpdateState state;
+    bool recovery_error;
     char version[32], message[CAST_ERR];
 } CastDesktopUpdateProgress;
 CastDesktopUpdater *cast_desktop_updater_open(const Config *);

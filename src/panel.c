@@ -1321,7 +1321,8 @@ static void pinned_header(Panel *p)
                     p->view != VIEW_LICENSE && p->main_tab == 0);
         text_button(p, 6, "Compose", true, A_MAIN_TAB, 1,
                     p->view != VIEW_LICENSE && p->main_tab == 1);
-        text_button(p, 9200, p->update_progress.state == CAST_DESKTOP_AVAILABLE ? "Update available" :
+        text_button(p, 9200, p->update_progress.recovery_error ? "Update failed" :
+                    p->update_progress.state == CAST_DESKTOP_AVAILABLE ? "Update available" :
                     (cast_edition_identity()->pro ? "Pro · About" : "Community"), true,
                     A_LICENSE, 0, p->view == VIEW_LICENSE);
     }
