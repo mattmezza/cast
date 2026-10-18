@@ -67,7 +67,8 @@ def main():
 set diskPath to POSIX file (item 1 of argv)
 set appName to item 2 of argv
 tell application "Finder"
-set w to open folder diskPath
+open folder diskPath
+set w to container window of folder diskPath
 set current view of w to icon view
 set toolbar visible of w to false
 set statusbar visible of w to false
