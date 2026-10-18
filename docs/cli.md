@@ -171,6 +171,14 @@ virtual/record/stream state, path/active duration/countdown/finalization, audio 
 changing the system. `completions [bash|zsh|fish]` prints shell setup instructions;
 `completions --script SHELL` emits the embedded completion script. Both work without
 a daemon or configuration file.
+`update --check` checks the signed desktop channel for this edition/platform.
+`update --install` downloads the complete verified runtime and restarts the app
+only when recording, countdowns, finalization and streaming have finished. It
+refuses to stop active recordings. On macOS this replaces the entire app; Linux
+user-owned downloads migrate to a managed runtime while retaining the original
+command path. Package-managed installations use their package manager.
+See [desktop updates](desktop-updates.md) for notification and recovery behavior.
+
 `update [vMAJOR.MINOR[.PATCH]] [--download-only DIRECTORY]` downloads an official
 Arch x86_64 release package and verifies its SHA-256 checksum. With no version it
 selects the latest release. Installation uses pacman and asks for sudo when needed;

@@ -315,8 +315,10 @@ for cast_completion_command in cast cast-pro
     complete -c $cast_completion_command -n '__cast_at notes mode; and __cast_pro' -a 'timed speech'
     complete -c $cast_completion_command -n '__cast_at notes goto; and __cast_pro' -l line -r
     complete -c $cast_completion_command -n '__cast_at notes status; and __cast_pro' -l json
+    complete -c $cast_completion_command -n '__cast_command update' -l check -d 'Check for a signed desktop update'
+    complete -c $cast_completion_command -n '__cast_command update; and not __fish_seen_argument -l bundle' -l install -d 'Install verified desktop update and restart when idle'
     complete -c $cast_completion_command -n '__cast_command update; and __cast_pro' -l bundle -r -a '(__fish_complete_directories)'
-    complete -c $cast_completion_command -n '__cast_command update; and __cast_pro' -l install -r -F
+    complete -c $cast_completion_command -n '__cast_command update; and __cast_pro; and __fish_seen_argument -l bundle' -l install -r -F
     complete -c $cast_completion_command -n '__cast_command update; and __cast_pro' -l download-only -r -a '(__fish_complete_directories)'
     complete -c $cast_completion_command -n '__cast_command update; and __cast_pro' -l rollback
     complete -c $cast_completion_command -n '__cast_setting_value zoom.motion' -a 'legacy cinematic'

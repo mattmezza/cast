@@ -174,9 +174,9 @@ _cast_complete()
             update:*)
                 if ((pro)); then
                     case ${words[current-1]} in --bundle|--download-only) mode=directory ;; --install) mode=file ;;
-                        *) offer='--bundle --install --download-only --rollback' ;; esac
+                        *) offer='--check --bundle --install --download-only --rollback' ;; esac
                 elif [[ ${words[current-1]} == --download-only ]]; then mode=directory
-                else offer=--download-only
+                else offer='--check --install --download-only'
                 fi ;;
             settings:*)
                 if ((argument % 2)); then
