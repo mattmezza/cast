@@ -39,6 +39,7 @@ typedef struct App {
     uint64_t countdown_deadline;
     char countdown_path[PATH_MAX];
     bool record_finalizing;
+    uint64_t desktop_update_until;
     PanelTransport *panel;
     EditionService *edition;
     AppRuntime *runtime;

@@ -483,6 +483,9 @@ int app_recording_start(App *a, const char *path, char *e, size_t n)
 {
     /* Countdown frames may include its native preview; admit a fresh frame only. */
     frame_free(&a->record_raw);
+    if (a->desktop_update_until > cast_now_ns()) {
+        return app_error(e, n, "update installation is reserved; retry after it completes");
+    }
     if (media_record_start(a->media, &a->config, path, e, n)) {
         return -1;
     }
@@ -1060,6 +1063,37 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
     bool change = false;
     char applied_preset[sizeof a->current_preset] = "";
     out[0] = 0;
+    if (IS(0, "desktop-update")) {
+        ARITY(2);
+        if (IS(1, "cancel")) {
+            a->desktop_update_until = 0;
+            snprintf(out, n, "update reservation cancelled");
+            return 0;
+        }
+        if (!IS(1, "prepare") && !IS(1, "commit")) {
+            return app_error(out, n, "desktop-update prepare|commit|cancel");
+        }
+        StreamSnapshot stream;
+        media_stream_status(a->media, &stream);
+        if (a->state.recording || a->countdown || a->record_finalizing ||
+            media_record_finalizing(a->media) || stream.active) {
+            return app_error(out, n, "Finish recording, countdown, finalization and streaming before installing an update");
+        }
+        if (IS(1, "prepare")) {
+            a->desktop_update_until = cast_now_ns() + 30000000000ULL;
+            snprintf(out, n, "update installation reserved");
+            return 0;
+        }
+        if (a->desktop_update_until <= cast_now_ns()) {
+            return app_error(out, n, "update reservation expired; recording remains available");
+        }
+        int rc = app_shutdown_privacy(a, out, n);
+        if (!rc) {
+            app_request_stop();
+            snprintf(out, n, "stopping idle daemon for update");
+        }
+        return rc;
+    }
     if (IS(0, "edition") || IS(0, "features") || IS(0, "license")) {
         char error[CAST_ERR] = "";
         int rc = cast_edition_command(ac, av, c.licensing_file, true, out, n, error, sizeof error);
@@ -1289,6 +1323,9 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
         if (IS(1, "start")) {
             if (ac != 2 && ac != 3) {
                 return app_error(out, n, "record start [PATH]");
+            }
+            if (a->desktop_update_until > cast_now_ns()) {
+                return app_error(out, n, "update installation is reserved; recording was not started");
             }
             if (a->state.recording || a->countdown || media_record_finalizing(a->media)) {
                 return app_error(out, n, "a recording, countdown, or finalization already exists");

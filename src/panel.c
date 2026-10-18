@@ -3,6 +3,7 @@
 #include "ipc_identity.h"
 #include "panel_color_pick.h"
 #include "panel_lifecycle.h"
+#include "desktop_update_ui.h"
 #include "panel_transport.h"
 #ifdef WITH_PRO
 #include "model_install.h"
@@ -421,7 +422,9 @@ typedef enum {
     A_MODEL_DOWNLOAD,
     A_MODEL_VERIFY,
     A_MODEL_CANCEL,
-    A_MODEL_USE
+    A_MODEL_USE,
+    A_UPDATE_CHECK,
+    A_UPDATE_INSTALL
 } Action;
 typedef enum {
     ICON_NONE,
@@ -493,6 +496,8 @@ typedef struct {
     float density, input_scale;
     PanelClient *client;
     PanelLifecycle *lifecycle;
+    CastDesktopUpdater *updater;
+    CastDesktopUpdateProgress update_progress;
     PanelLifecycleSnapshot lifecycle_state;
     PanelSnapshot snapshot;
     FieldEdit edit[FIELD_CAPACITY + 1];
@@ -1316,6 +1321,9 @@ static void pinned_header(Panel *p)
                     p->view != VIEW_LICENSE && p->main_tab == 0);
         text_button(p, 6, "Compose", true, A_MAIN_TAB, 1,
                     p->view != VIEW_LICENSE && p->main_tab == 1);
+        if (p->update_progress.state == CAST_DESKTOP_AVAILABLE) {
+            text_button(p, 9402, "Update available", true, A_LICENSE, 0, false);
+        }
         text_button(p, 9200, cast_edition_identity()->pro ? "Pro · About" : "Community", true,
                     A_LICENSE, 0, p->view == VIEW_LICENSE);
     }
@@ -3056,6 +3064,26 @@ static const char *license_kind(const CastLicenseInfo *license)
     }
     return license->perpetual ? "Perpetual" : "Subscription";
 }
+static bool update_install_ready(const Panel *p)
+{
+    return p->snapshot.connected && !p->snapshot.state.recording && !p->snapshot.countdown &&
+           !p->snapshot.finalizing && !p->snapshot.stream.active && !p->daemon_stopping;
+}
+static void update_body(Panel *p)
+{
+    const CastDesktopUpdateProgress *u = &p->update_progress;
+    label("Software updates", 1, foreground);
+    text_wrapped(u->message[0] ? u->message : "Automatic checks run once a day.", secondary);
+    bool busy = u->state == CAST_DESKTOP_CHECKING || u->state == CAST_DESKTOP_DOWNLOADING ||
+                u->state == CAST_DESKTOP_RESTARTING;
+    button(p, 9400, "Check for updates", p->updater && !busy, false, A_UPDATE_CHECK, 0);
+    if (u->state == CAST_DESKTOP_AVAILABLE) {
+        label(format(p, "Version %s is available", u->version), 1, accent);
+        button(p, 9401, "Install and restart", update_install_ready(p), false, A_UPDATE_INSTALL, 0);
+        if (!update_install_ready(p))
+            text_wrapped("Finish recording, countdown, finalization and streaming before installing. Recording is never stopped for an update.", secondary);
+    }
+}
 static void license_body(Panel *p)
 {
     const CastEditionSnapshot *edition = &p->snapshot.edition;
@@ -3069,6 +3097,7 @@ static void license_body(Panel *p)
                      .padding = {16, 16, 16, 20},
                      .childGap = 10}})
     {
+        update_body(p);
         label(CAST_DISPLAY_NAME, 3, foreground);
         label(format(p, "%s · %s", identity->pro ? "Pro" : "Community", identity->version), 1,
               secondary);
@@ -4964,6 +4993,16 @@ static void panel_file_chosen(void *context, const char *const *files, int filte
 }
 static void activate(Panel *p, Widget *w)
 {
+    if (!w || !w->enabled) return;
+    if (w->action == A_UPDATE_CHECK) {
+        cast_desktop_updater_check(p->updater);
+        return;
+    }
+    if (w->action == A_UPDATE_INSTALL) {
+        if (update_install_ready(p)) cast_desktop_updater_install(p->updater);
+        return;
+    }
+
     if (!w || !w->enabled) {
         return;
     }
@@ -6090,6 +6129,7 @@ static void cleanup(Panel *p, void *clay_memory)
 #ifdef WITH_PRO
     cast_speech_model_install_abandon(p->model_install);
 #endif
+    cast_desktop_updater_close(p->updater);
     panel_color_pick_free(p->color_pick);
     panel_client_close(p->client);
     panel_lifecycle_destroy(p->lifecycle);
@@ -6394,6 +6434,7 @@ int panel_run_application(const Config *config, int startup_argc, const char *co
         /* Keep the window available to explain startup failure and permit retry. */
         p->daemon_stopped = true;
     }
+    p->updater = cast_desktop_updater_open(config);
     const char *smoke = getenv("CAST_PANEL_SMOKE_MS"),
                *screenshot = getenv("CAST_PANEL_SCREENSHOT"),
                *ui_state = getenv("CAST_PANEL_UI_STATE");
@@ -6455,6 +6496,8 @@ int panel_run_application(const Config *config, int startup_argc, const char *co
         p->scroll = 0;
         poll_client(p);
         poll_lifecycle(p);
+        cast_desktop_updater_poll(p->updater, &p->update_progress);
+        if (p->update_progress.state == CAST_DESKTOP_RESTARTING) p->quit = true;
         poll_color_pick(p);
 #ifdef WITH_PRO
         if (p->model_install) {
