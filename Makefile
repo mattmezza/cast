@@ -470,4 +470,17 @@ check-os-compat: $(BUILD)/test_os_compat $(BUILD)/test_os_stream_ipc
 	$(BUILD)/test_os_stream_ipc
 check-unit: check-os-compat
 
+
+$(BUILD)/test_desktop_update: tests/test_desktop_update.c src/desktop_update.c src/desktop_update.h src/desktop_update_keys.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 $(LDFLAGS) -o $@ tests/test_desktop_update.c $(PKG_LIBS) $(LDLIBS)
+.PHONY: check-desktop-update
+check-desktop-update: $(BUILD)/test_desktop_update
+	$(BUILD)/test_desktop_update
+
+
+.PHONY: check-desktop-update-guard
+check-desktop-update-guard: $(BUILD)/test_commands
+	CAST_TEST_DESKTOP_UPDATE_GUARD_ONLY=1 $(BUILD)/test_commands
+
 endif # Darwin uses Makefile.macos
