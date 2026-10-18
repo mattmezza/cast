@@ -59,16 +59,18 @@ jobs:
             export PKG_CONFIG_PATH="$(brew --prefix)/opt/curl/lib/pkgconfig:$(brew --prefix)/opt/libarchive/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
             export ASAN_OPTIONS=detect_leaks=0
           fi
+          archive_libs=$(pkg-config --libs libarchive)
+          if [ "$RUNNER_OS" = Linux ]; then archive_libs=$(pkg-config --libs --static libarchive); fi
           mkdir -p build/updater-security
           clang -std=gnu11 -O1 -g -Wall -Wextra -Wformat=2 -Wstrict-prototypes -Wmissing-prototypes -Werror \
             -fsanitize=address,undefined -fno-omit-frame-pointer \
             $(pkg-config --cflags libsodium libcurl libarchive) \
             tests/test_desktop_update.c -o build/updater-security/test_desktop_update \
-            $(pkg-config --libs libsodium libcurl) $(pkg-config --libs --static libarchive) -pthread
+            $(pkg-config --libs libsodium libcurl) $archive_libs -pthread
           build/updater-security/test_desktop_update
           clang -std=gnu11 -O1 -g -Wall -Wextra -Wformat=2 -Wstrict-prototypes -Wmissing-prototypes -Werror \
             -fsanitize=address,undefined -fno-omit-frame-pointer -Isrc -Ivendor/inih \
             $(pkg-config --cflags libsodium libcurl libarchive) \
             tests/test_desktop_update_lifecycle.c -o build/updater-security/test_desktop_update_lifecycle \
-            $(pkg-config --libs libsodium libcurl) $(pkg-config --libs --static libarchive) -pthread
+            $(pkg-config --libs libsodium libcurl) $archive_libs -pthread
           build/updater-security/test_desktop_update_lifecycle
