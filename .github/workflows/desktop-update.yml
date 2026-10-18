@@ -4,7 +4,7 @@ on:
   push:
     paths:
       - 'src/desktop_update*'
-      - 'tests/test_desktop_update.c'
+      - 'tests/test_desktop_update*.c'
       - 'Makefile*'
       - 'packaging/static-update-archive.py'
       - 'packaging/static-linux-lock.json'
@@ -12,7 +12,7 @@ on:
   pull_request:
     paths:
       - 'src/desktop_update*'
-      - 'tests/test_desktop_update.c'
+      - 'tests/test_desktop_update*.c'
       - 'Makefile*'
       - 'packaging/static-update-archive.py'
       - 'packaging/static-linux-lock.json'
@@ -66,3 +66,9 @@ jobs:
             tests/test_desktop_update.c -o build/updater-security/test_desktop_update \
             $(pkg-config --libs libsodium libcurl) $(pkg-config --libs --static libarchive) -pthread
           build/updater-security/test_desktop_update
+          clang -std=gnu11 -O1 -g -Wall -Wextra -Wformat=2 -Wstrict-prototypes -Wmissing-prototypes -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer -Isrc -Ivendor/inih \
+            $(pkg-config --cflags libsodium libcurl libarchive) \
+            tests/test_desktop_update_lifecycle.c -o build/updater-security/test_desktop_update_lifecycle \
+            $(pkg-config --libs libsodium libcurl) $(pkg-config --libs --static libarchive) -pthread
+          build/updater-security/test_desktop_update_lifecycle
