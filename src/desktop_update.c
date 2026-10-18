@@ -266,7 +266,8 @@ static int copy_tree(const char *root,const char *src,const char *dst,char *err,
         char a[CAST_UPDATE_PATH_MAX],b[CAST_UPDATE_PATH_MAX];if(pathcat(a,sizeof(a),src,v->d_name)||pathcat(b,sizeof(b),dst,v->d_name)||copy_tree(root,a,b,err,en)){rc=-1;break;}}
     closedir(d);return rc;
 }
-int cast_update_install(const char *payload,const char *target,char *err,size_t en) {
+int cast_update_install_with_backup(const char *payload,const char *target,char *backup_path,size_t backup_size,char *err,size_t en) {
+    if(backup_path && backup_size)backup_path[0]=0;
     if(!payload||!target||target[0]!='/'||strlen(target)>=CAST_UPDATE_PATH_MAX)return fail(err,en,"Invalid update installation target");
     char source[CAST_UPDATE_PATH_MAX],canonical[CAST_UPDATE_PATH_MAX],parent[CAST_UPDATE_PATH_MAX];struct stat st;
     if(!realpath(payload,source)||lstat(source,&st)||!S_ISDIR(st.st_mode)||st.st_uid!=getuid())return fail(err,en,"Unsafe update payload");
@@ -278,13 +279,18 @@ int cast_update_install(const char *payload,const char *target,char *err,size_t 
     if(pathcat(pending,sizeof(pending),parent,".cast-update-new-XXXXXX")||!mkdtemp(pending))return fail(err,en,"Cannot prepare update installation");
     if(pathcat(newroot,sizeof(newroot),pending,"runtime")||copy_tree(source,source,newroot,err,en)){remove_tree(pending);return -1;}
     if(pathcat(backup,sizeof(backup),parent,".cast-update-previous-XXXXXX")||!mkdtemp(backup)){remove_tree(pending);return fail(err,en,"Cannot reserve update rollback location");}
+    if(backup_path && strlen(backup)>=backup_size){remove_tree(pending);remove_tree(backup);return fail(err,en,"Rollback path output buffer too small");}
     if(rmdir(backup)||rename(target,backup)){remove_tree(pending);remove_tree(backup);return fail(err,en,"Cannot preserve previous installation");}
     if(rename(newroot,target)) {
         int saved=errno;int rolled_back=rename(backup,target);remove_tree(pending);
         return fail(err,en,rolled_back?"Update install failed and rollback requires recovery from %s":"Update install failed; previous installation restored (%s)",rolled_back?backup:strerror(saved));
     }
     int fd=open(parent,O_RDONLY);if(fd>=0){(void)fsync(fd);close(fd);}
+    if(backup_path)strcpy(backup_path,backup);
     remove_tree(pending);return 0;
+}
+int cast_update_install(const char *payload,const char *target,char *err,size_t en) {
+    return cast_update_install_with_backup(payload,target,NULL,0,err,en);
 }
 
 int cast_update_stage_verify(CastDesktopUpdateStage *s,const char *edition,const char *platform,

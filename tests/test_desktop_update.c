@@ -41,7 +41,10 @@ int main(void) {
     for(int attack=0;attack<4;attack++){make_archive(arc,attack);assert(!mkdir(dir,0700));int rc=cast_update_extract(arc,dir,"cast",err,sizeof(err));assert((attack==1||attack==2)?rc<0:rc==0);remove_tree(dir);}
     make_archive(arc,3);assert(!mkdir(dir,0700));assert(!cast_update_extract(arc,dir,"cast",err,sizeof(err)));
     char payload[CAST_UPDATE_PATH_MAX];assert(!pathcat(payload,sizeof(payload),dir,"payload"));assert(!pathcat(target,sizeof(target),root,"installed"));assert(!mkdir(target,0755));
-    assert(!cast_update_install(payload,target,err,sizeof(err)));char exe[CAST_UPDATE_PATH_MAX];assert(!pathcat(exe,sizeof(exe),target,"cast"));assert(!access(exe,X_OK));
+    char small_backup[2], retained_backup[CAST_UPDATE_PATH_MAX];
+    assert(cast_update_install_with_backup(payload,target,small_backup,sizeof(small_backup),err,sizeof(err))<0);
+    assert(!cast_update_install_with_backup(payload,target,retained_backup,sizeof(retained_backup),err,sizeof(err)));
+    struct stat retained;assert(!lstat(retained_backup,&retained)&&S_ISDIR(retained.st_mode));char exe[CAST_UPDATE_PATH_MAX];assert(!pathcat(exe,sizeof(exe),target,"cast"));assert(!access(exe,X_OK));
     assert(cast_update_install(payload,exe,err,sizeof(err))<0);assert(!access(exe,X_OK));
     char notcanonical[CAST_UPDATE_PATH_MAX];assert(!pathcat(notcanonical,sizeof(notcanonical),root,"alias"));assert(!symlink(target,notcanonical));assert(cast_update_install(payload,notcanonical,err,sizeof(err))<0);
     CastDesktopUpdateStage stage={0};strcpy(stage.directory,root);char digest[65];uint64_t size;hash_file(arc,digest,&size);sign_manifest(manifest,&len,"community","linux-x86_64","cast",digest,size);

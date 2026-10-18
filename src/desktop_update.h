@@ -42,5 +42,7 @@ int cast_update_extract(const char *archive_path, const char *directory,
  * .cast-update-previous-* directory for rollback.
  */
 int cast_update_install(const char *payload, const char *target, char *, size_t);
+int cast_update_install_with_backup(const char *payload, const char *target,
+    char *backup_path, size_t backup_path_size, char *, size_t);
 void cast_update_stage_cleanup(CastDesktopUpdateStage *);
 #endif
