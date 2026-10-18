@@ -1,6 +1,12 @@
-#define _DARWIN_C_SOURCE
+#ifndef _DARWIN_C_SOURCE
+#define _DARWIN_C_SOURCE 1
+#endif
+#ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
+#endif
+#ifndef _XOPEN_SOURCE
 #define _XOPEN_SOURCE 700
+#endif
 #include "desktop_update.h"
 #include "desktop_update_keys.h"
 #include <archive.h>
@@ -22,6 +28,7 @@
 #define MAX_ARCHIVE ((uint64_t)2 * 1024 * 1024 * 1024)
 #define MAX_EXPANDED ((uint64_t)8 * 1024 * 1024 * 1024)
 #define MAX_ENTRIES 100000
+static int fail(char *e, size_t n, const char *fmt, ...) __attribute__((format(printf,3,4)));
 static int fail(char *e, size_t n, const char *fmt, ...) {
     if (e && n) { va_list ap; va_start(ap,fmt); vsnprintf(e,n,fmt,ap); va_end(ap); }
     return -1;
@@ -97,8 +104,15 @@ int cast_update_parse_manifest(const unsigned char *data,size_t len,const char *
     for(int i=0;i<3;i++){if(next[i]>old[i])return 0;if(next[i]<old[i])return 1;}return 1;
 }
 
+static _Thread_local const atomic_bool *cancel_flag;
+void cast_update_cancel_scope(const atomic_bool *flag) { cancel_flag=flag; }
+static int cancelled(void) { return cancel_flag && atomic_load_explicit(cancel_flag,memory_order_relaxed); }
+static int transfer_progress(void *unused,curl_off_t total,curl_off_t now,curl_off_t utotal,curl_off_t unow) {
+    (void)unused;(void)total;(void)now;(void)utotal;(void)unow;return cancelled();
+}
 typedef struct { unsigned char *buf; size_t used,limit; FILE *file; } Download;
 static size_t receive(void *ptr,size_t a,size_t b,void *ctx) {
+    if(cancelled())return 0;
     Download *d=ctx;if(a && b>SIZE_MAX/a)return 0;size_t n=a*b;
     if(n>d->limit-d->used)return 0;
     if(d->file) {if(fwrite(ptr,1,n,d->file)!=n)return 0;}else memcpy(d->buf+d->used,ptr,n);
@@ -107,7 +121,8 @@ static size_t receive(void *ptr,size_t a,size_t b,void *ctx) {
 static pthread_once_t curl_once=PTHREAD_ONCE_INIT;
 static CURLcode curl_init_result=CURLE_FAILED_INIT;
 static void initialize_curl(void) { curl_init_result=curl_global_init(CURL_GLOBAL_DEFAULT); }
-static int download(const char *url,Download *d,char *err,size_t en) {
+static int download(const char *url,Download *d,int channel,char *err,size_t en) {
+    if(cancelled())return fail(err,en,"Update cancelled");
     if(!https_url(url))return fail(err,en,"Update download requires HTTPS");
     pthread_once(&curl_once,initialize_curl);
     if(curl_init_result!=CURLE_OK)return fail(err,en,"Cannot initialize update networking");
@@ -119,17 +134,19 @@ static int download(const char *url,Download *d,char *err,size_t en) {
     curl_easy_setopt(c,CURLOPT_PROTOCOLS,(long)CURLPROTO_HTTPS);curl_easy_setopt(c,CURLOPT_REDIR_PROTOCOLS,(long)CURLPROTO_HTTPS);
 #endif
     curl_easy_setopt(c,CURLOPT_FOLLOWLOCATION,1L);curl_easy_setopt(c,CURLOPT_MAXREDIRS,3L);curl_easy_setopt(c,CURLOPT_CONNECTTIMEOUT,15L);
-    curl_easy_setopt(c,CURLOPT_TIMEOUT,600L);curl_easy_setopt(c,CURLOPT_LOW_SPEED_LIMIT,1024L);curl_easy_setopt(c,CURLOPT_LOW_SPEED_TIME,30L);
+    curl_easy_setopt(c,CURLOPT_TIMEOUT,channel?30L:600L);curl_easy_setopt(c,CURLOPT_LOW_SPEED_LIMIT,1024L);curl_easy_setopt(c,CURLOPT_LOW_SPEED_TIME,30L);
     curl_easy_setopt(c,CURLOPT_NOSIGNAL,1L);curl_easy_setopt(c,CURLOPT_FAILONERROR,1L);curl_easy_setopt(c,CURLOPT_WRITEFUNCTION,receive);curl_easy_setopt(c,CURLOPT_WRITEDATA,d);
+    curl_easy_setopt(c,CURLOPT_NOPROGRESS,0L);curl_easy_setopt(c,CURLOPT_XFERINFOFUNCTION,transfer_progress);
     curl_easy_setopt(c,CURLOPT_USERAGENT,"Cast-desktop-updater/1");
     CURLcode r=curl_easy_perform(c);long status=0;curl_easy_getinfo(c,CURLINFO_RESPONSE_CODE,&status);curl_easy_cleanup(c);
+    if(channel&&status==404)return 2;
     return r==CURLE_OK && status==200 ? 0:fail(err,en,"Update download failed (%s, HTTP %ld)",curl_easy_strerror(r),status);
 }
 int cast_update_check(const char *edition,const char *platform,const char *current,CastDesktopUpdate *out,char *err,size_t en) {
     if(!valid_context(edition,platform))return fail(err,en,"Unsupported update platform");
     char url[256];snprintf(url,sizeof(url),"https://downloads.superscreencast.com/cast/desktop/%s/%s/stable.manifest",edition,platform);
     unsigned char buf[CAST_UPDATE_MANIFEST_MAX];Download d={buf,0,sizeof(buf),NULL};
-    if(download(url,&d,err,en))return -1;
+    int result=download(url,&d,1,err,en);if(result)return result;
     return cast_update_parse_manifest(buf,d.used,edition,platform,current,out,err,en);
 }
 static void remove_tree(const char *path) {
@@ -161,6 +178,7 @@ int cast_update_extract(const char *file,const char *dir,const char *binary,char
     int rc=-1,r;uint64_t expanded=0;unsigned count=0;struct archive_entry *ent;
     char **links=NULL,**targets=NULL;size_t nlinks=0;
     while((r=archive_read_next_header(a,&ent))==ARCHIVE_OK) {
+        if(cancelled())goto bad;
         const char *raw=archive_entry_pathname(ent);char rel[CAST_UPDATE_PATH_MAX],dest[CAST_UPDATE_PATH_MAX];
         if(!raw||strlen(raw)>=sizeof(rel))goto bad;strcpy(rel,raw);size_t n=strlen(rel);if(n && rel[n-1]=='/')rel[--n]=0;
         if(!safe_relative(rel)||(strcmp(rel,"payload")&&strncmp(rel,"payload/",8))||++count>MAX_ENTRIES||archive_entry_hardlink(ent))goto bad;
@@ -181,6 +199,7 @@ int cast_update_extract(const char *file,const char *dir,const char *binary,char
         int fd=open(dest,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);if(fd<0)goto bad;
         char buf[65536];la_ssize_t got;int io=0;uint64_t actual=0;
         while((got=archive_read_data(a,buf,sizeof(buf)))>0) {
+            if(cancelled()){io=1;break;}
             actual+=(uint64_t)got;if(actual>MAX_EXPANDED-expanded){io=1;break;}
             size_t off=0;while(off<(size_t)got){ssize_t w=write(fd,buf+off,(size_t)got-off);if(w<=0){io=1;break;}off+=(size_t)w;}if(io)break;
         }
@@ -208,10 +227,10 @@ int cast_update_stage(const CastDesktopUpdate *m,CastDesktopUpdateStage *s,char 
     if(!mkdtemp(s->directory)){memset(s,0,sizeof(*s));return fail(err,en,"Cannot create update staging directory");}
     char file[CAST_UPDATE_PATH_MAX],extract[CAST_UPDATE_PATH_MAX];pathcat(file,sizeof(file),s->directory,"archive");pathcat(extract,sizeof(extract),s->directory,"unpacked");
     FILE *f=fopen(file,"wb");if(!f){cast_update_stage_cleanup(s);return fail(err,en,"Cannot create update download");}
-    Download d={NULL,0,(size_t)m->archive_size,f};int rc=download(m->archive_url,&d,err,en);if(fclose(f)&&!rc)rc=fail(err,en,"Cannot finish update download");
+    Download d={NULL,0,(size_t)m->archive_size,f};int rc=download(m->archive_url,&d,0,err,en);if(fclose(f)&&!rc)rc=fail(err,en,"Cannot finish update download");
     if(!rc&&d.used!=m->archive_size)rc=fail(err,en,"Update archive size mismatch");
     if(!rc){crypto_hash_sha256_state state;crypto_hash_sha256_init(&state);f=fopen(file,"rb");if(!f)rc=fail(err,en,"Cannot verify update download");else{
-        unsigned char buf[65536],digest[32],expected[32];size_t n;while((n=fread(buf,1,sizeof(buf),f)))crypto_hash_sha256_update(&state,buf,n);
+        unsigned char buf[65536],digest[32],expected[32];size_t n;while((n=fread(buf,1,sizeof(buf),f))){if(cancelled()){rc=fail(err,en,"Update cancelled");break;}crypto_hash_sha256_update(&state,buf,n);}
         if(ferror(f))rc=fail(err,en,"Cannot read update download");fclose(f);crypto_hash_sha256_final(&state,digest);size_t used;
         if(strlen(m->archive_sha256)!=64||sodium_hex2bin(expected,32,m->archive_sha256,64,NULL,&used,NULL)||used!=32||sodium_memcmp(digest,expected,32))rc=fail(err,en,"Update archive checksum mismatch");
     }}

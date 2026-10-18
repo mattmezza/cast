@@ -2,9 +2,12 @@
 #define CAST_DESKTOP_UPDATE_H
 #include <stddef.h>
 #include <stdint.h>
+#include <stdatomic.h>
+#include <stdbool.h>
 #define CAST_UPDATE_PATH_MAX 4096
 #define CAST_UPDATE_MANIFEST_MAX 8192
-/* Success is zero, errors -1. Check also returns 1 when no newer version exists.
+/* Success is zero, errors -1. Check also returns 1 when no newer version exists,
+ * or 2 when the platform channel has not yet been published (HTTP 404).
  * All work is synchronous: callers must use a worker and gate install on idle recording.
  * The caller must check Pro release eligibility against released_at before staging.
  */
@@ -17,6 +20,9 @@ typedef struct {
     size_t manifest_size;
 } CastDesktopUpdate;
 typedef struct { char directory[CAST_UPDATE_PATH_MAX], payload[CAST_UPDATE_PATH_MAX]; } CastDesktopUpdateStage;
+/* Set per-worker cancellation flag; its lifetime must cover all worker calls.
+ * Pass NULL to clear before the flag is destroyed. */
+void cast_update_cancel_scope(const atomic_bool *flag);
 int cast_update_parse_manifest(const unsigned char *, size_t, const char *edition,
     const char *platform, const char *current_version, CastDesktopUpdate *, char *, size_t);
 int cast_update_check(const char *edition, const char *platform, const char *current_version,

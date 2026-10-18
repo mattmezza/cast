@@ -48,5 +48,10 @@ int main(void) {
     char mf[CAST_UPDATE_PATH_MAX];assert(!pathcat(mf,sizeof(mf),root,"manifest"));FILE *f=fopen(mf,"wb");assert(f&&fwrite(manifest,1,len,f)==len);assert(!fclose(f));
     assert(!cast_update_stage_verify(&stage,"community","linux-x86_64","1.2.3",&m,err,sizeof(err)));
     f=fopen(arc,"r+b");assert(f);assert(fputc('X',f)!=EOF);assert(!fclose(f));assert(cast_update_stage_verify(&stage,"community","linux-x86_64","1.2.3",&m,err,sizeof(err))<0);
+    atomic_bool stop=ATOMIC_VAR_INIT(true);cast_update_cancel_scope(&stop);
+    assert(cancelled());assert(transfer_progress(NULL,0,0,0,0));
+    Download cancelled_download={NULL,0,100,NULL};
+    assert(download("https://example.com/",&cancelled_download,0,err,sizeof(err))<0);
+    atomic_store(&stop,false);assert(!cancelled());assert(!transfer_progress(NULL,0,0,0,0));cast_update_cancel_scope(NULL);
     remove_tree(root);puts("desktop update security tests passed");return 0;
 }
