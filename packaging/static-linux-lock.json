@@ -65,6 +65,18 @@
         "COPYING"
       ],
       "hash_evidence": "SHA256 of original upstream HTTPS source archive, verified 2026-10-17; https://curl.se/download.html"
+    },
+    {
+      "name": "libarchive",
+      "version": "3.8.10",
+      "archive": "libarchive-3.8.10.tar.xz",
+      "url": "https://www.libarchive.org/downloads/libarchive-3.8.10.tar.xz",
+      "sha256": "56cad765459d5ee25a3b761f90c47d99379d28297fbfb72d908880d6b875fb96",
+      "license": "BSD-2-Clause",
+      "license_files": [
+        "COPYING"
+      ],
+      "hash_evidence": "SHA256 of original upstream HTTPS archive verified 2026-10-18; stable release linked at https://www.libarchive.org/"
     }
   ]
 }

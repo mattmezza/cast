@@ -125,7 +125,7 @@ jobs:
             build/static-linux/prefix
             build/static-linux/upstream
             build/static-linux/sdk.identity
-          key: static-linux-ubuntu24-${{ steps.toolchain.outputs.packages }}-${{ hashFiles('packaging/static-linux-lock.json', 'packaging/media-lgpl-lock.json', 'packaging/static-linux-sdk.py', 'packaging/static-pipewire.py', 'packaging/static-desktop-sdk.py') }}
+          key: static-linux-ubuntu24-${{ steps.toolchain.outputs.packages }}-${{ hashFiles('packaging/static-linux-lock.json', 'packaging/media-lgpl-lock.json', 'packaging/static-linux-sdk.py', 'packaging/static-pipewire.py', 'packaging/static-desktop-sdk.py', 'packaging/static-model-https.py', 'packaging/static-update-archive.py') }}
           restore-keys: static-linux-ubuntu24-${{ steps.toolchain.outputs.packages }}-
       - name: Build verified-source static dependency SDK
         id: sdk-build

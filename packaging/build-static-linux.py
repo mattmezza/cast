@@ -56,7 +56,8 @@ def main():
                               (ROOT / 'packaging/media-lgpl-lock.json').read_bytes() +
                               (ROOT / 'packaging/static-linux-sdk.py').read_bytes() + (ROOT / 'packaging/static-pipewire.py').read_bytes() +
                               (ROOT / 'packaging/static-desktop-sdk.py').read_bytes() +
-                              (ROOT / 'packaging/static-model-https.py').read_bytes() + toolchain).hexdigest()
+                              (ROOT / 'packaging/static-model-https.py').read_bytes() +
+                              (ROOT / 'packaging/static-update-archive.py').read_bytes() + toolchain).hexdigest()
     marker = base / 'sdk.identity'
     reuse = args.reuse_sdk and marker.is_file() and marker.read_text().strip() == identity
 

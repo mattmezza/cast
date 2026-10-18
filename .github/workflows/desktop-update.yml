@@ -6,12 +6,16 @@ on:
       - 'src/desktop_update*'
       - 'tests/test_desktop_update.c'
       - 'Makefile*'
+      - 'packaging/static-update-archive.py'
+      - 'packaging/static-linux-lock.json'
       - '.github/workflows/desktop-update.yml'
   pull_request:
     paths:
       - 'src/desktop_update*'
       - 'tests/test_desktop_update.c'
       - 'Makefile*'
+      - 'packaging/static-update-archive.py'
+      - 'packaging/static-linux-lock.json'
       - '.github/workflows/desktop-update.yml'
 permissions:
   contents: read
@@ -33,6 +37,18 @@ jobs:
       - name: Install macOS updater dependencies
         if: runner.os == 'macOS'
         run: brew install pkgconf libsodium curl libarchive
+      - name: Build and verify minimal Linux static archive closure
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          python3 -c 'import hashlib,json,pathlib,tarfile,urllib.request; s=next(s for s in json.load(open("packaging/static-linux-lock.json"))["sources"] if s["name"]=="libarchive"); p=pathlib.Path("build/updater-archive"); p.mkdir(parents=True,exist_ok=True); a=p/s["archive"]; a.write_bytes(urllib.request.urlopen(s["url"],timeout=120).read()); assert hashlib.sha256(a.read_bytes()).hexdigest()==s["sha256"]; tarfile.open(a).extractall(p,filter="data")'
+          python3 packaging/static-update-archive.py --source build/updater-archive/libarchive-3.8.10 --prefix "$PWD/build/updater-archive/prefix" --jobs 2
+          export PKG_CONFIG_PATH="$PWD/build/updater-archive/prefix/lib/pkgconfig"
+          printf '%s\n' '#include <archive.h>' 'int main(void) { struct archive *a=archive_read_new(); archive_read_support_filter_gzip(a); archive_read_support_format_tar(a); archive_read_support_format_zip(a); return archive_read_free(a); }' > build/updater-archive/static-smoke.c
+          cc -static $(pkg-config --cflags libarchive) build/updater-archive/static-smoke.c -o build/updater-archive/static-smoke $(pkg-config --libs --static libarchive)
+          if readelf -l build/updater-archive/static-smoke | grep -q INTERP; then exit 1; fi
+          build/updater-archive/static-smoke
+          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
       - name: Compile and run security regressions with sanitizers
         shell: bash
         env:

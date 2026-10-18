@@ -110,7 +110,9 @@ libcurl for HTTPS downloads and libarchive for extraction. Pro also uses libsodi
 for license verification. The actual shared package versions and dependency closure
 are recorded by the artifact audit. Static builds require all three archives and
 their transitive archives; their exact distribution source packages are collected
-from the linker map alongside the pinned curl source and build recipe. Production
+from the linker map alongside the pinned curl and libarchive sources and build
+recipes. The Linux static SDK builds libarchive with zlib as its only external
+codec and verifies that its static dependency flags contain only archive and z. Production
 artifacts must preserve source/build provenance for their actual linked versions.
 
 `packaging/audit.py inventory` walks the resolved ELF dependency closure and records
