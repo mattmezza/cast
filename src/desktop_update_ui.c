@@ -5,6 +5,8 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <poll.h>
+#include <sys/socket.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <spawn.h>
@@ -128,7 +130,7 @@ static int launch_helper(const Config *config, const CastDesktopUpdateStage *sta
                          char *e, size_t n)
 {
     int pipefd[2];
-    if (pipe(pipefd)) return problem(e, n, "Cannot create the update handoff.");
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, pipefd)) return problem(e, n, "Cannot create the update handoff.");
     fcntl(pipefd[0], F_SETFD, FD_CLOEXEC);
     fcntl(pipefd[1], F_SETFD, FD_CLOEXEC);
     char parent[32];
@@ -161,13 +163,23 @@ static int launch_helper(const Config *config, const CastDesktopUpdateStage *sta
     posix_spawn_file_actions_destroy(&actions);
     close(pipefd[0]);
     if (rc) { close(pipefd[1]); return problem(e, n, "Cannot start the update installer."); }
+    struct pollfd ready = {.fd = pipefd[1], .events = POLLIN};
+    char acknowledged = 0;
+    if (poll(&ready, 1, 35000) <= 0 || recv(pipefd[1], &acknowledged, 1, 0) != 1 || acknowledged != 'R') {
+        close(pipefd[1]);
+        return problem(e, n, "Installer could not verify the staged update; app remains running.");
+    }
     if (daemon && daemon_action(config, "commit", e, n)) {
         close(pipefd[1]);
         waitpid(child, NULL, 0);
         return -1;
     }
     char authorized = 'Y';
-    ssize_t sent = write(pipefd[1], &authorized, 1);
+    #ifdef __APPLE__
+    int no_sigpipe = 1;
+    setsockopt(pipefd[1], SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe, sizeof no_sigpipe);
+#endif
+    ssize_t sent = send(pipefd[1], &authorized, 1, MSG_NOSIGNAL);
     close(pipefd[1]);
     if (sent != 1) return problem(e, n, "Update installer handoff failed.");
     return 0;
@@ -350,6 +362,40 @@ static int launch_new(const char *binary, int argc, char **argv)
     free(arguments);
     return rc ? -1 : 0;
 }
+static int preflight(const char *binary, const char *version, char *e, size_t n)
+{
+    int output[2];
+    if (pipe(output)) return problem(e, n, "Cannot test the updated executable.");
+    fcntl(output[0], F_SETFD, FD_CLOEXEC);
+    fcntl(output[1], F_SETFD, FD_CLOEXEC);
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_adddup2(&actions, output[1], STDOUT_FILENO);
+    posix_spawn_file_actions_adddup2(&actions, output[1], STDERR_FILENO);
+    posix_spawn_file_actions_addclose(&actions, output[0]);
+    if (output[1] > STDERR_FILENO) posix_spawn_file_actions_addclose(&actions, output[1]);
+    char *arguments[] = {(char *)binary, "--version", NULL};
+    pid_t child;
+    int rc = posix_spawn(&child, binary, &actions, NULL, arguments, environ);
+    posix_spawn_file_actions_destroy(&actions);
+    close(output[1]);
+    if (rc) { close(output[0]); return problem(e, n, "The updated executable cannot start; existing app preserved."); }
+    int status = 0;
+    bool finished = false;
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        if (waitpid(child, &status, WNOHANG) == child) { finished = true; break; }
+        struct timespec pause = {.tv_nsec = 100000000}; nanosleep(&pause, NULL);
+    }
+    if (!finished) { kill(child, SIGKILL); waitpid(child, &status, 0); close(output[0]); return problem(e, n, "The updated executable failed its startup check."); }
+    char text[256] = {0};
+    ssize_t length = read(output[0], text, sizeof text - 1);
+    close(output[0]);
+    char expected[128];
+    snprintf(expected, sizeof expected, "%s %s\n", cast_edition_identity()->pro ? "cast-pro" : "cast", version);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) || length <= 0 || strcmp(text, expected))
+        return problem(e, n, "The updated executable failed its version or library startup check.");
+    return 0;
+}
 int cast_desktop_update_helper(int argc, char **argv)
 {
     /* Private invocation requires a live, inherited authorization pipe. The
@@ -359,12 +405,7 @@ int cast_desktop_update_helper(int argc, char **argv)
     long parent = strtol(argv[6], &end, 10);
     if (!end || *end || parent <= 1 || parent != getppid() || strcmp(argv[7], "3")) return 2;
     struct stat pipe_stat;
-    if (fstat(3, &pipe_stat) || !S_ISFIFO(pipe_stat.st_mode)) return 2;
-    char authorized = 0;
-    ssize_t got;
-    do { got = read(3, &authorized, 1); } while (got < 0 && errno == EINTR);
-    close(3);
-    if (got != 1 || authorized != 'Y') return 5;
+    if (fstat(3, &pipe_stat) || !S_ISSOCK(pipe_stat.st_mode)) return 2;
     char error[CAST_ERR] = "";
     CastDesktopUpdateStage stage = {0};
     if (strlen(argv[1]) >= sizeof stage.directory) return 2;
@@ -375,7 +416,29 @@ int cast_desktop_update_helper(int argc, char **argv)
     if (strlen(argv[5]) >= sizeof config.licensing_file) return 2;
     strcpy(config.licensing_file, argv[5]);
     if (cast_update_stage_verify(&stage, id->edition, id->platform, id->version, &update, error, sizeof error) ||
-        eligible(&config, &update, error, sizeof error)) goto failed;
+        eligible(&config, &update, error, sizeof error)) {
+        close(3);
+        fprintf(stderr, "Super Screencast update: %s\n", error);
+        return 5;
+    }
+#ifdef __APPLE__
+    int no_sigpipe = 1;
+    setsockopt(3, SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe, sizeof no_sigpipe);
+#endif
+    char staged_binary[PATH_MAX];
+    if (snprintf(staged_binary, sizeof staged_binary, "%s/%s", stage.payload, update.binary) >= (int)sizeof staged_binary ||
+        preflight(staged_binary, update.version, error, sizeof error)) {
+        close(3);
+        fprintf(stderr, "Super Screencast update: %s\n", error);
+        return 5;
+    }
+    char ready = 'R';
+    if (send(3, &ready, 1, MSG_NOSIGNAL) != 1) { close(3); return 5; }
+    char authorized = 0;
+    ssize_t got;
+    do { got = read(3, &authorized, 1); } while (got < 0 && errno == EINTR);
+    close(3);
+    if (got != 1 || authorized != 'Y') return 5;
     /* Wait without signalling or killing any process. A timeout leaves the
      * installed app untouched. The parent's UI must exit voluntarily. */
     for (int attempt = 0; attempt < 300 && getppid() == parent; ++attempt) {
