@@ -23,7 +23,7 @@ CHOICES = {
  'whisper-cpp': 'MIT', 'ggml': 'MIT', 'vulkan-icd-loader': 'Apache-2.0',
  'glib2': 'LGPL-2.1-or-later', 'glib2-devel': 'LGPL-2.1-or-later',
  'libpipewire': 'MIT', 'pipewire': 'MIT', 'graphite': 'LGPL-2.1-or-later', 'harfbuzz': 'MIT', 'libsodium': 'ISC',
- 'openh264': 'BSD-2-Clause', 'openssl': 'Apache-2.0', 'curl': 'curl', 'sdl3': 'Zlib', 'sdl3_ttf': 'Zlib',
+ 'openh264': 'BSD-2-Clause', 'openssl': 'Apache-2.0', 'curl': 'curl', 'libarchive': 'BSD-2-Clause', 'sdl3': 'Zlib', 'sdl3_ttf': 'Zlib',
  'expat': 'MIT', 'zlib': 'Zlib', 'libpng': 'Libpng-2.0', 'bzip2': 'bzip2-1.0.6',
  'brotli': 'MIT', 'libffi': 'MIT', 'pcre2': 'BSD-3-Clause', 'libx11': 'MIT',
  'libxext': 'MIT', 'libxrandr': 'MIT', 'libxi': 'MIT', 'libxfixes': 'MIT',

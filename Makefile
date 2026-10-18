@@ -27,7 +27,7 @@ SUSTAINED_HEIGHT = 1080
 LOOPBACK_DEVICE =
 CFLAGS = -O2 -g
 WARN = -Wall -Wextra -Wformat=2 -Wstrict-prototypes -Wmissing-prototypes
-BASE_PACKAGES = fontconfig freetype2 libavcodec libavformat libavutil libswscale libswresample libpipewire-0.3
+BASE_PACKAGES = libsodium libcurl libarchive fontconfig freetype2 libavcodec libavformat libavutil libswscale libswresample libpipewire-0.3
 PACKAGES = $(BASE_PACKAGES)
 EDITION = community
 MEDIA_PROFILE = system
@@ -68,8 +68,6 @@ endif
 PRO_SOURCES = $(PRO_DIR)/src/pro_provider.c $(PRO_DIR)/src/license_verifier.c $(PRO_DIR)/src/bounded_json.c $(wildcard $(PRO_DIR)/src/cinematic_motion/*.c $(PRO_DIR)/src/speech/*.c $(PRO_DIR)/src/notes/*.c)
 CPPFLAGS += $(if $(filter 1,$(PRODUCTION_LICENSE_ACCEPTANCE)),-DCAST_PRODUCTION_LICENSE_ACCEPTANCE=1)
 CPPFLAGS += -DCAST_EDITION_PRO=1 -DWITH_PRO -I$(PRO_DIR)/src -DCAST_TRUST_HEADER='"$(PRO_TRUST_HEADER)"'
-LDLIBS += $(shell $(PKG_CONFIG) --libs libsodium libcurl)
-CPPFLAGS += $(shell $(PKG_CONFIG) --cflags libsodium libcurl)
 endif
 ifeq ($(MEDIA_PROFILE),lgpl)
 CPPFLAGS += -DCAST_MEDIA_PROFILE_LGPL=1
@@ -81,7 +79,7 @@ override LDFLAGS += -Wl,-rpath,$(LGPL_ROOT)/prefix/lib
 endif
 endif
 CPPFLAGS += -DCAST_APPLICATION_NAME='"$(BINARY)"' -DCAST_MEDIA_PROFILE='"$(MEDIA_PROFILE)"' -DCAST_PLATFORM='"linux-$(shell uname -m)"' -DCAST_CORE_REVISION='"$(CORE_REVISION)"' -DCAST_PRIVATE_REVISION='"$(PRIVATE_REVISION)"' -DCAST_RELEASE_TIMESTAMP=$(RELEASE_TIMESTAMP) -DCAST_OFFICIAL_RELEASE=$(OFFICIAL_RELEASE)
-SOURCES = src/os_compat.c src/main.c src/commands.c src/config.c src/config_migrate.c src/state.c src/compositor.c src/composition_assets.c src/presentation_text.c src/platform.c src/media.c src/webcam.c src/audio.c src/record.c src/stream.c src/panel_transport.c src/panel_lifecycle.c src/help_commands.c src/update.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/edition_service.c src/media_codec.c src/app_runtime.c vendor/inih/ini.c
+SOURCES = src/os_compat.c src/main.c src/commands.c src/config.c src/config_migrate.c src/state.c src/compositor.c src/composition_assets.c src/presentation_text.c src/platform.c src/media.c src/webcam.c src/audio.c src/record.c src/stream.c src/panel_transport.c src/panel_lifecycle.c src/help_commands.c src/update.c src/desktop_update.c src/desktop_update_ui.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/edition_service.c src/media_codec.c src/app_runtime.c vendor/inih/ini.c
 INI_FLAGS = -DINI_HANDLER_LINENO=1 -DINI_CALL_HANDLER_ON_NEW_SECTION=1 -DINI_ALLOW_MULTILINE=0 -DINI_ALLOW_INLINE_COMMENTS=0 -DINI_STOP_ON_FIRST_ERROR=1 -DINI_MAX_LINE=8192
 CPPFLAGS += $(if $(filter 1,$(STATIC_PANEL_X11)),-DCAST_PANEL_STATIC_X11=1)
 CPPFLAGS += -Isrc -Ivendor/inih $(INI_FLAGS) -D_GNU_SOURCE

@@ -102,11 +102,9 @@ def main():
         (base / 'profile.json').write_text(json.dumps({'schema': 1, 'profile': 'lgpl',
             'linkage': 'static', 'release_eligible': False, 'libraries': libraries,
             'configure_flags': [x for x in media['ffmpeg_flags'] if x not in ('--enable-shared', '--disable-static')] + ['--enable-static', '--disable-shared']}))
-    packages = ['fontconfig', 'freetype2', 'libavcodec', 'libavformat', 'libavutil',
+    packages = ['libsodium', 'libcurl', 'libarchive', 'fontconfig', 'freetype2', 'libavcodec', 'libavformat', 'libavutil',
                 'libswscale', 'libswresample', 'libpipewire-0.3', 'x11', 'xext', 'xrandr',
                 'xi', 'xfixes', 'xcomposite', 'gio-2.0', 'gio-unix-2.0', 'sdl3', 'sdl3-ttf', 'xcursor']
-    if args.edition == 'pro':
-        packages += ['libsodium', 'libcurl']
     libs = subprocess.check_output(['pkg-config', '--libs', '--static', *packages],
                                    env=environment, text=True).strip()
     # A linker group resolves cycles between all static media/UI dependencies.

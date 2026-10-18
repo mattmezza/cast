@@ -1,7 +1,9 @@
 # Local macOS recorder build. Linux keeps its existing build and release pipeline.
 .DEFAULT_GOAL := all
 CC = clang
-PKG_CONFIG ?= pkg-config
+BREW_PREFIX := $(shell command -v brew >/dev/null 2>&1 && brew --prefix)
+MACOS_UPDATE_PKGCONFIG = $(BREW_PREFIX)/opt/curl/lib/pkgconfig:$(BREW_PREFIX)/opt/libarchive/lib/pkgconfig
+PKG_CONFIG ?= env PKG_CONFIG_PATH=$(MACOS_UPDATE_PKGCONFIG):$(PKG_CONFIG_PATH) pkg-config
 EDITION ?= community
 PANEL ?= 1
 MACOS_MIN ?= 13.0
@@ -72,23 +74,20 @@ PRIVATE_REVISION = $(shell git -C '$(PRO_ROOT)' rev-parse HEAD)
 CPPFLAGS += -DCAST_EDITION_PRO=1 -DWITH_PRO -I$(PRO_DIR)/src -DCAST_TRUST_HEADER='"$(PRO_TRUST_HEADER)"'
 endif
 ifeq ($(MEDIA_PROFILE),lgpl)
-PKG_CONFIG = env PKG_CONFIG_PATH=$(LGPL_ROOT)/prefix/lib/pkgconfig pkg-config
+PKG_CONFIG = env PKG_CONFIG_PATH=$(LGPL_ROOT)/prefix/lib/pkgconfig:$(MACOS_UPDATE_PKGCONFIG):$(PKG_CONFIG_PATH) pkg-config
 CPPFLAGS += -DCAST_MEDIA_PROFILE_LGPL=1
 LDFLAGS += -Wl,-rpath,$(LGPL_ROOT)/prefix/lib
 endif
 ifneq ($(filter-out 0 1,$(PANEL)),)
 $(error PANEL must be 0 or 1)
 endif
-PACKAGES = fontconfig freetype2 libavcodec libavformat libavutil libswscale libswresample
+PACKAGES = libsodium libcurl libarchive fontconfig freetype2 libavcodec libavformat libavutil libswscale libswresample
 ifeq ($(PANEL),1)
 PACKAGES += sdl3 sdl3-ttf
 endif
-ifeq ($(EDITION),pro)
-PACKAGES += libsodium
-endif
 ifeq ($(filter clean deps-lgpl deps-stt,$(MAKECMDGOALS)),)
 ifeq ($(shell $(PKG_CONFIG) --exists $(PACKAGES) 'libavcodec >= 61.19.100' && echo yes),)
-$(error Missing macOS build dependencies or FFmpeg is too old; run brew install pkgconf ffmpeg fontconfig freetype sdl3 sdl3_ttf libsodium; Pro also needs make deps-lgpl)
+$(error Missing macOS build dependencies or FFmpeg is too old; run brew install pkgconf ffmpeg fontconfig freetype sdl3 sdl3_ttf libsodium curl libarchive; Pro also needs make deps-lgpl)
 endif
 endif
 PKG_CFLAGS := $(shell $(PKG_CONFIG) --cflags $(PACKAGES))
@@ -110,7 +109,7 @@ LDLIBS = -lm -lpthread -framework Foundation -framework AVFoundation \
 SOURCES = src/main.c src/commands.c src/config.c src/config_migrate.c src/state.c \
  src/compositor.c src/composition_assets.c src/presentation_text.c src/platform.c \
  src/media.c src/record.c src/stream.c src/panel_transport.c src/panel_lifecycle.c \
- src/help_commands.c src/update.c src/edition.c src/license_store.c src/edition_extensions.c \
+ src/help_commands.c src/update.c src/desktop_update.c src/desktop_update_ui.c src/edition.c src/license_store.c src/edition_extensions.c \
  src/workflow_schema.c src/edition_service.c src/media_codec.c src/app_runtime.c \
  src/os_compat.c vendor/inih/ini.c $(PRO_SOURCES)
 OBJC_SOURCES = $(if $(filter pro,$(EDITION)),$(PRO_DIR)/src/speech/model_fetch_macos.m) src/platform_macos.m src/audio_macos.m src/webcam_macos.m src/preview_macos.m

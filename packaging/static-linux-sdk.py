@@ -62,7 +62,7 @@ def build(args, base, prefix, sources, environment, jobs, ROOT, run, static_desk
         run('make', jobs, cwd=sources['ffmpeg'], env=environment)
         run('make', 'install', cwd=sources['ffmpeg'], env=environment)
     def model_https():
-        # Only Pro links this archive; the shared SDK also serves Community.
+        # Both editions use this HTTPS transport for signed desktop updates.
         run('python3', ROOT / 'packaging/static-model-https.py', '--prefix', prefix,
             '--source', sources['curl'], '--jobs', args.jobs, env=environment)
     def sdl():

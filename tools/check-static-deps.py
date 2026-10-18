@@ -25,7 +25,7 @@ def main():
             parser.error('Pro requires --lgpl-root pointing to its controlled media SDK')
         metadata = args.lgpl_root.resolve() / 'prefix/lib/pkgconfig'
         environment['PKG_CONFIG_PATH'] = str(metadata)
-    packages = ['fontconfig', 'freetype2', 'libavcodec', 'libavformat', 'libavutil',
+    packages = ['libsodium', 'libcurl', 'libarchive', 'fontconfig', 'freetype2', 'libavcodec', 'libavformat', 'libavutil',
                 'libswscale', 'libswresample', 'libpipewire-0.3']
     if args.x11 == '1':
         packages += ['x11', 'xext', 'xrandr', 'xi', 'xfixes', 'xcomposite']
@@ -34,7 +34,6 @@ def main():
     if args.panel == '1':
         packages += ['sdl3', 'sdl3-ttf']
     if args.edition == 'pro':
-        packages += ['libsodium', 'libcurl']
         if args.stt == '1':
             packages += ['whisper']
     compiler = shlex.split(environment.get('CC', 'cc'))

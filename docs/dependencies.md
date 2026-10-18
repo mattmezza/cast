@@ -9,6 +9,9 @@ licenses of the dynamically linked libraries below.
 
 | Dependency | Purpose | License/source |
 |---|---|---|
+| libsodium | Verify signed desktop update metadata in both editions | ISC |
+| libcurl | HTTPS desktop update transport in both editions | curl license |
+| libarchive | Extract verified desktop update bundles in both editions | BSD family; linked compression dependencies retain their licenses |
 | inih r60 | INI parsing with source-line callbacks | BSD-3-Clause, bundled LICENSE.txt |
 | FFmpeg libavcodec/libavformat/libavutil/libswscale/libswresample | MJPEG/local logo decode, conversion, software encoding, audio resampling and muxing | LGPL-2.1-or-later baseline; GPL build options can change the effective license |
 | Fontconfig | Resolve configured system font patterns and fallback glyphs | Distribution COPYING (MIT/permissive notices), installed with cast |
@@ -102,10 +105,13 @@ buys a commercial x264 license. H.264/AAC and optional SDK patent/distribution
 terms require review for the exact commercial offering. See
 [Cisco's binary conditions](https://www.openh264.org/BINARY_LICENSE.txt).
 
-Pro-only license/update verification uses libsodium 1.0.22 under ISC. Community
-has no direct crypto/model dependency. The actual system shared package version
-is recorded by the artifact audit; production must supply pinned crypto source/build
-provenance, rather than pretend an arbitrary installed library is the pinned release.
+Both editions use libsodium (ISC) for desktop update signature verification,
+libcurl for HTTPS downloads and libarchive for extraction. Pro also uses libsodium
+for license verification. The actual shared package versions and dependency closure
+are recorded by the artifact audit. Static builds require all three archives and
+their transitive archives; their exact distribution source packages are collected
+from the linker map alongside the pinned curl source and build recipe. Production
+artifacts must preserve source/build provenance for their actual linked versions.
 
 `packaging/audit.py inventory` walks the resolved ELF dependency closure and records
 library paths/hashes, package/version/evidence, chosen library-level license,
