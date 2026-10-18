@@ -54,7 +54,8 @@ def main():
             raise RuntimeError('App icon missing')
         shutil.copy2(icon, stage / '.VolumeIcon.icns')
         # kHasCustomIcon on the volume root, inherited by the disk image.
-        os.setxattr(stage, 'com.apple.FinderInfo', bytes(8) + b'\x04\x00' + bytes(22))
+        run('xattr', '-wx', 'com.apple.FinderInfo',
+            (bytes(8) + b'\x04\x00' + bytes(22)).hex(), str(stage))
         writable = temporary / 'layout.dmg'
         run('hdiutil', 'create', '-quiet', '-fs', 'HFS+', '-volname', app.stem,
             '-srcfolder', str(stage), '-format', 'UDRW', str(writable))
