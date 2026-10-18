@@ -64,5 +64,5 @@ jobs:
             -fsanitize=address,undefined -fno-omit-frame-pointer \
             $(pkg-config --cflags libsodium libcurl libarchive) \
             tests/test_desktop_update.c -o build/updater-security/test_desktop_update \
-            $(pkg-config --libs libsodium libcurl libarchive) -pthread
+            $(pkg-config --libs libsodium libcurl) $(pkg-config --libs --static libarchive) -pthread
           build/updater-security/test_desktop_update
