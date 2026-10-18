@@ -396,6 +396,16 @@ static int preflight(const char *binary, const char *version, char *e, size_t n)
         return problem(e, n, "The updated executable failed its version or library startup check.");
     return 0;
 }
+static void restore_previous(const char *target, const char *backup, char *e, size_t n)
+{
+    char failed[PATH_MAX];
+    if (!backup[0] || snprintf(failed, sizeof failed, "%s.failed-XXXXXX", target) >= (int)sizeof failed ||
+        !mkdtemp(failed) || rmdir(failed) || rename(target, failed) || rename(backup, target)) {
+        snprintf(e, n, "Update failed; recover the previous installation from %.350s", backup);
+        return;
+    }
+    problem(e, n, "Updated app failed its installed startup check; previous version restored.");
+}
 int cast_desktop_update_helper(int argc, char **argv)
 {
     /* Private invocation requires a live, inherited authorization pipe. The
@@ -459,26 +469,27 @@ int cast_desktop_update_helper(int argc, char **argv)
     if (!stopped) { close(lock); problem(error, sizeof error, "Recording daemon is still running; update cancelled."); goto failed; }
     int gate = safety_lock(true, error, sizeof error);
     if (gate < 0) { close(lock); goto failed; }
-    if (cast_update_install(stage.payload, argv[2], error, sizeof error)) { close(gate); close(lock); goto failed; }
+    char backup_runtime[PATH_MAX] = "";
+    if (cast_update_install_with_backup(stage.payload, argv[2], backup_runtime, sizeof backup_runtime, error, sizeof error)) {
+        close(gate); close(lock); goto failed;
+    }
     char restart[PATH_MAX];
-#ifdef __APPLE__
-    if (snprintf(restart, sizeof restart, "%s/%s", argv[2], update.binary) >= (int)sizeof restart) {
+    if (snprintf(restart, sizeof restart, "%s/%s", argv[2], update.binary) >= (int)sizeof restart ||
+        preflight(restart, update.version, error, sizeof error)) {
+        restore_previous(argv[2], backup_runtime, error, sizeof error);
         close(gate); close(lock); goto failed;
     }
-#else
-    if (snprintf(restart, sizeof restart, "%s/%s", argv[2], update.binary) >= (int)sizeof restart) {
-        close(gate); close(lock); goto failed;
-    }
+#ifndef __APPLE__
     if (strcmp(argv[3], restart)) {
         /* Keep the original command path usable without replacing its parent.
          * A hard-link backup retains the original loose executable. */
-        char backup[PATH_MAX], replacement[PATH_MAX];
+        char backup[PATH_MAX] = "", replacement[PATH_MAX] = "";
         if (snprintf(backup, sizeof backup, "%s.before-desktop-update", argv[3]) >= (int)sizeof backup ||
             snprintf(replacement, sizeof replacement, "%s.update-%ld", argv[3], (long)getpid()) >= (int)sizeof replacement ||
             link(argv[3], backup) || symlink(restart, replacement) || rename(replacement, argv[3])) {
-            unlink(replacement);
+            if (replacement[0]) unlink(replacement);
+            restore_previous(argv[2], backup_runtime, error, sizeof error);
             close(gate); close(lock);
-            problem(error, sizeof error, "New runtime installed, but original launcher could not be migrated; previous executable preserved.");
             goto failed;
         }
     }

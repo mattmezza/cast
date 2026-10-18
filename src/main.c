@@ -108,6 +108,7 @@ static const char help[] =
     "  notes goto --line NUMBER; notes status [--json]\n"
     "  panel (optional native control panel)\n"
     "  setup; completions [bash|zsh|fish]; completions --script bash|zsh|fish\n"
+    "  update --check|--install (signed desktop update; install and restart when idle)\n"
     "  update [VERSION] [--download-only DIRECTORY] (Arch release package)\n"
     "  reset; quit; --help; --version\n"
     "Virtual camera starts privacy-paused. Recording toggle only pauses/resumes an existing "

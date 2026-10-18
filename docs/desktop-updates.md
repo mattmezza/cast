@@ -6,6 +6,41 @@ programs and sibling resources. An archive contains `payload/`, with either the
 app contents or the Linux runtime inside. The entry point is
 `Contents/MacOS/cast` on macOS and `cast` on Linux (Pro uses `cast-pro`).
 
+## Using updates
+
+The panel checks in the background when opened, then once a day. **Update available**
+replaces the About button when a newer eligible release is found. Open it to see
+the version and choose **Install and restart**. **Check for updates** is also in
+Community/About or Pro/About. Network checks never block recording or the UI.
+
+Installation is disabled during recording (including paused recordings), countdowns,
+finalization or streaming. The daemon checks again after downloading and reserves
+installation before stopping. All recorder sessions of the same edition share a
+runtime lock, so another session cannot start recording while files are replaced.
+The installer never kills a recorder. If another session still owns its runtime,
+installation fails safely and the app reopens.
+
+Updates verify signed metadata, the entire archive and the new executable's version
+before shutdown. The installer authenticates the staged download again in a separate
+process, waits for the old app and daemon to exit, then replaces the whole runtime.
+A startup check after replacement restores the prior runtime if the new executable
+cannot load. Successful updates retain a `.cast-update-previous-*` backup beside
+the installed app/runtime. Configuration, licenses, speech models and recordings
+are stored separately and are preserved.
+
+On Linux, a loose user-owned executable migrates to
+`~/.local/share/cast/desktop/community/runtime` (or `pro/runtime`). Its original
+command path becomes a symlink to that complete installation; the original file
+is retained with `.before-desktop-update`. Package-managed `/usr` and `/opt`
+installations continue to use their package manager. On macOS, install the app in
+a writable Applications folder first; the complete `.app` is replaced in place.
+No administrative privilege is requested by the updater.
+
+CLI equivalents are `cast update --check` and `cast update --install`, or
+`cast-pro update --check` / `cast-pro update --install`. The install command also
+restarts the app. Existing Arch `cast update [VERSION]` and Pro offline
+`update --bundle` commands remain available.
+
 The stable Free discovery URLs are:
 
 - `https://downloads.superscreencast.com/cast/desktop/community/macos-arm64/stable.manifest`
