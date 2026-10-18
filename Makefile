@@ -477,6 +477,9 @@ $(BUILD)/test_desktop_update: tests/test_desktop_update.c src/desktop_update.c s
 $(BUILD)/test_desktop_update_lifecycle: tests/test_desktop_update_lifecycle.c tests/test_desktop_update.c src/desktop_update.c src/desktop_update_ui.c src/desktop_update.h src/desktop_update_ui.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 $(LDFLAGS) -o $@ tests/test_desktop_update_lifecycle.c $(PKG_LIBS) $(LDLIBS)
+.PHONY: check-desktop-update-lifecycle
+check-desktop-update-lifecycle: $(BUILD)/test_desktop_update_lifecycle
+	$(BUILD)/test_desktop_update_lifecycle
 .PHONY: check-desktop-update
 check-desktop-update: $(BUILD)/test_desktop_update $(BUILD)/test_desktop_update_lifecycle
 	$(BUILD)/test_desktop_update
