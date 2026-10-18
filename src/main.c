@@ -898,6 +898,9 @@ static void doctor(const Config *c)
 static int run_daemon(Config config, Startup startup)
 {
     char e[CAST_ERR];
+    if (cast_desktop_update_runtime_lock(e, sizeof e)) {
+        return fprintf(stderr, "cast: %s\n", e), 1;
+    }
     if (media_profile_validate(cast_edition_identity()->pro, e, sizeof e)) {
         return fprintf(stderr, "cast: %s\n", e), 1;
     }
