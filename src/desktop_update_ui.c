@@ -388,6 +388,7 @@ static int preflight(const char *binary, const char *version, char *e, size_t n)
     }
     if (!finished) { kill(child, SIGKILL); waitpid(child, &status, 0); close(output[0]); return problem(e, n, "The updated executable failed its startup check."); }
     char text[256] = {0};
+    fcntl(output[0], F_SETFL, O_NONBLOCK);
     ssize_t length = read(output[0], text, sizeof text - 1);
     close(output[0]);
     char expected[128];
