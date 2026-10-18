@@ -6,19 +6,75 @@ int engine_security_test_main(void);
 #undef main
 #include "../src/desktop_update_ui.c"
 
+static CastEditionIdentity test_identity = {
+    .edition = "community", .platform = "linux-x86_64", .version = "1.2.3"};
+static CastLicenseInfo inspected_license;
+static int inspection_result, inspection_calls;
 const CastEditionIdentity *cast_edition_identity(void)
 {
-    static const CastEditionIdentity identity = {
-        .edition = "community", .platform = "linux-x86_64", .version = "1.2.3"};
-    return &identity;
+    return &test_identity;
 }
 int cast_license_inspect(const char *path, int64_t now, CastLicenseInfo *license, char *error,
                          size_t n)
 {
-    (void)path;
     (void)now;
-    (void)license;
-    return problem(error, n, "Test community helper must not inspect a Pro license");
+    ++inspection_calls;
+    assert(test_identity.pro);
+    assert(!strcmp(path, "test-license-location"));
+    if (inspection_result) {
+        return problem(error, n, "Invalid test license signature");
+    }
+    *license = inspected_license;
+    return 0;
+}
+static void pro_eligibility_regressions(void)
+{
+    Config config = {0};
+    strcpy(config.licensing_file, "test-license-location");
+    CastDesktopUpdate candidate = {.released_at = 200};
+    char error[CAST_ERR];
+    inspection_calls = 0;
+    assert(!eligible(&config, &candidate, error, sizeof error));
+    assert(!inspection_calls);
+    test_identity.pro = true;
+    strcpy(test_identity.edition, "pro");
+    inspected_license = (CastLicenseInfo){.state = CAST_LICENSE_VALID,
+                                          .platform_supported = true,
+                                          .perpetual = true,
+                                          .updates_until = 200,
+                                          .expires_at = 100};
+    /* Perpetual usage survives expiry; update eligibility includes the cutoff. */
+    assert(!eligible(&config, &candidate, error, sizeof error));
+    candidate.released_at = 199;
+    assert(!eligible(&config, &candidate, error, sizeof error));
+    candidate.released_at = 201;
+    assert(eligible(&config, &candidate, error, sizeof error) < 0);
+    candidate.released_at = 200;
+    inspected_license.perpetual = false;
+    inspected_license.expires_at = 200;
+    assert(!eligible(&config, &candidate, error, sizeof error));
+    inspected_license.expires_at = 199;
+    assert(eligible(&config, &candidate, error, sizeof error) < 0);
+    inspected_license.expires_at = 300;
+    const CastLicenseState refused[] = {CAST_LICENSE_MISSING,       CAST_LICENSE_INVALID,
+                                        CAST_LICENSE_NOT_YET_VALID, CAST_LICENSE_EXPIRED,
+                                        CAST_LICENSE_INELIGIBLE,    CAST_LICENSE_UNAVAILABLE};
+    for (size_t i = 0; i < sizeof refused / sizeof refused[0]; ++i) {
+        inspected_license.state = refused[i];
+        assert(eligible(&config, &candidate, error, sizeof error) < 0);
+    }
+    inspected_license.state = CAST_LICENSE_VALID;
+    inspected_license.platform_supported = false;
+    assert(eligible(&config, &candidate, error, sizeof error) < 0);
+    inspected_license.platform_supported = true;
+    inspection_result = -1;
+    assert(eligible(&config, &candidate, error, sizeof error) < 0);
+    assert(strstr(error, "Invalid test license signature"));
+    inspection_result = 0;
+    assert(!eligible(&config, &candidate, error, sizeof error));
+    assert(inspection_calls > 10);
+    test_identity.pro = false;
+    strcpy(test_identity.edition, "community");
 }
 int app_runtime_client(const Config *config, int argc, const char *const *argv, char *error,
                        size_t n)
@@ -169,9 +225,11 @@ static int lifecycle_case(bool rollback, bool migrate)
     assert(d);
     struct dirent *entry;
     int previous = 0;
-    while ((entry = readdir(d)))
-        if (!strncmp(entry->d_name, ".cast-update-previous-", 22))
+    while ((entry = readdir(d))) {
+        if (!strncmp(entry->d_name, ".cast-update-previous-", 22)) {
             previous = 1;
+        }
+    }
     closedir(d);
     assert(rollback || previous);
     remove_tree(root);
@@ -180,6 +238,7 @@ static int lifecycle_case(bool rollback, bool migrate)
 int main(void)
 {
     assert(engine_security_test_main() == 0);
+    pro_eligibility_regressions();
     assert(!lifecycle_case(false, false));
     assert(!lifecycle_case(true, false));
 #ifndef __APPLE__
