@@ -7,6 +7,7 @@
 #include "media_codec.h"
 #include "panel_lifecycle.h"
 #include "update.h"
+#include "desktop_update_ui.h"
 #ifdef WITH_PANEL
 #include "panel.h"
 #endif
@@ -1126,6 +1127,9 @@ cleanup:
 }
 int main(int argc, char **argv)
 {
+    if (argc > 1 && !strcmp(argv[1], "--desktop-update-helper")) {
+        return cast_desktop_update_helper(argc - 1, argv + 1);
+    }
 #ifdef CAST_PANEL_STATIC_X11
     /* The daemon also owns Pro Notes windows; keep every SDL window on the
      * static software X11 driver, including children started from a panel. */
@@ -1226,7 +1230,9 @@ int main(int argc, char **argv)
                            argv[first]),
                    5;
         }
-        if (!strcmp(argv[first], "update") && !cast_edition_identity()->pro) {
+        if (!strcmp(argv[first], "update") && !cast_edition_identity()->pro &&
+            !(argc - first == 2 && (!strcmp(argv[first + 1], "--check") ||
+                                    !strcmp(argv[first + 1], "--install")))) {
             result = cast_update(argc - first, argv + first, e, sizeof e);
             if (result) {
                 fprintf(stderr, "cast: %s\n", e);
@@ -1394,8 +1400,14 @@ int main(int argc, char **argv)
         if (app_socket_path(&config, e, sizeof e)) {
             return fprintf(stderr, "cast: %s\n", e), 5;
         }
-        int result = cast_update_with_context(argc - first, argv + first, config.licensing_file,
+        int result;
+        if (argc - first == 2 && (!strcmp(argv[first + 1], "--check") ||
+                                 !strcmp(argv[first + 1], "--install"))) {
+            result = cast_desktop_update_cli(argc - first, argv + first, &config, e, sizeof e);
+        } else {
+            result = cast_update_with_context(argc - first, argv + first, config.licensing_file,
                                               config.socket_path, e, sizeof e);
+        }
         if (result) {
             fprintf(stderr, "cast: %s\n", e);
         }
