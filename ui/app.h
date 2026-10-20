@@ -27,6 +27,8 @@ typedef struct AppState {
     bool settings_initialized;
     unsigned settings_category;
     cui_surface_state settings;
+    cui_overlay zoom_popup;
+    bool zoom_popup_initialized;
     cui_scroll_state settings_scroll, settings_rail_scroll;
     cui_menu_tree_state menus[6];
     bool menus_initialized, quit_requested;

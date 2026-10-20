@@ -233,5 +233,69 @@ int main(void)
  bridge_poll(b,0,&live);assert(live.devices.error[0]);
  strcpy(snap.config.monitor,"DP-1\nunsafe");bridge_poll(b,0,&live);
  assert(!strchr(live.screen_name,'\n') && strchr(live.screen_name,'?'));
+ /* Look edits are bounded, allowlisted, and never optimistically applied. */
+ snap.connected=true;snap.command_completed=snap.command_queued;++snap.daemon_generation;
+ snap.config.zoom_min=1;snap.config.zoom_max=8;snap.config.zoom_factor=2;
+ strcpy(snap.config.background_source,"screen");strcpy(snap.config.screen_background,"gradient");
+ strcpy(snap.config.camera_background,"solid");snap.config.screen_background_color=0x123456;
+ snap.config.gradient_from=0xabcdef;snap.config.gradient_to=0x010203;
+ snap.config.gradient_angle=135;snap.config.gradient_waypoint=50;snap.config.gradient_via_enabled=true;
+ bridge_poll(b,0,&live);
+ assert(!strcmp(live.background_source,"screen") && !strcmp(live.screen_background,"gradient"));
+ assert(live.screen_background_color==0x123456 && live.gradient_from==0xabcdef);
+ assert(live.gradient_angle==135 && live.gradient_via_enabled && live.zoom_factor==2 && live.zoom_max==8);
+ assert(!live.pro && !live.cinematic_zoom_available && !live.can_zoom_follow);
+ int previous=settings;
+ const char *bad_numbers[]={"", ".", "nan", "inf", "2e0", " 2", "2 ", "-2", "+2", "2;quit", "1.2.3", "21"};
+ for(unsigned i=0;i<sizeof bad_numbers/sizeof *bad_numbers;++i)
+     assert(bridge_edit(b,APP_EDIT_ZOOM_FACTOR,bad_numbers[i],error,sizeof error)<0);
+ assert(bridge_edit(b,APP_EDIT_ZOOM_FACTOR,"9",error,sizeof error)<0);
+ assert(bridge_edit(b,APP_EDIT_ZOOM_MIN,"3",error,sizeof error)<0);
+ assert(bridge_edit(b,APP_EDIT_ZOOM_MAX,"1",error,sizeof error)<0);
+ assert(bridge_edit(b,APP_EDIT_ZOOM_FOLLOW,"true",error,sizeof error)<0);
+ assert(bridge_edit(b,APP_EDIT_GRADIENT_FROM,"#12345g",error,sizeof error)<0);
+ assert(bridge_edit(b,APP_EDIT_GRADIENT_FROM,"#12345678",error,sizeof error)<0);
+ assert(bridge_edit(b,APP_EDIT_SCREEN_BACKGROUND,"image",error,sizeof error)<0);
+ assert(bridge_edit(b,APP_EDIT_BACKGROUND_SOURCE,"wallpaper",error,sizeof error)<0);
+ assert(bridge_edit(b,APP_EDIT_GRADIENT_ANGLE,"361",error,sizeof error)<0);
+ assert(bridge_edit(b,APP_EDIT_GRADIENT_WAYPOINT,"0",error,sizeof error)<0);
+ assert(settings==previous);
+ struct { AppEdit edit; const char *value,*key; } edits[]={
+  {APP_EDIT_BACKGROUND_SOURCE,"camera","background.source"},
+  {APP_EDIT_SCREEN_BACKGROUND,"blurred","screen.background"},
+  {APP_EDIT_CAMERA_BACKGROUND,"solid","camera.background"},
+  {APP_EDIT_SCREEN_BACKGROUND_COLOR,"#Ff0011","screen.background_color"},
+  {APP_EDIT_CAMERA_BACKGROUND_COLOR,"#ffffff","camera.background_color"},
+  {APP_EDIT_GRADIENT_FROM,"#123456","background.gradient_from"},
+  {APP_EDIT_GRADIENT_VIA,"#abcdef","background.gradient_via"},
+  {APP_EDIT_GRADIENT_TO,"#000000","background.gradient_to"},
+  {APP_EDIT_GRADIENT_VIA_ENABLED,"false","background.gradient_via_enabled"},
+  {APP_EDIT_GRADIENT_ANGLE,"360","background.gradient_angle"},
+  {APP_EDIT_GRADIENT_WAYPOINT,"99","background.gradient_waypoint"},
+  {APP_EDIT_ZOOM_MIN,"1","zoom.min"},{APP_EDIT_ZOOM_MAX,"20","zoom.max"},
+  {APP_EDIT_ZOOM_FACTOR,"8","zoom set"},{APP_EDIT_ZOOM_FOLLOW,"false","zoom follow"}};
+ for(unsigned i=0;i<sizeof edits/sizeof *edits;++i) {
+     assert(!bridge_edit(b,edits[i].edit,edits[i].value,error,sizeof error));
+     assert(!strcmp(setting_key,edits[i].key));
+     assert(bridge_edit(b,APP_EDIT_SCREEN_BACKGROUND,"solid",error,sizeof error)<0);
+     bridge_poll(b,0,&live);assert(live.pending && live.zoom_factor==2);
+     snap.command_completed=snap.command_queued;bridge_poll(b,0,&live);assert(!live.pending);
+ }
+ snap.capabilities.cursor_metadata=true;
+ assert(!bridge_edit(b,APP_EDIT_ZOOM_FOLLOW,"true",error,sizeof error));
+ assert(!strcmp(setting_key,"zoom follow") && !strcmp(setting_value,"on"));
+ snap.command_completed=snap.command_queued;snap.command_failed=true;
+ bridge_poll(b,0,&live);assert(!live.pending && live.edit_error[0] && !live.zoom_follow);
+ snap.command_failed=false;
+ strcpy(snap.edition.features[0].id,"cinematic_zoom");snap.edition.features[0].active=true;
+ snap.cinematic_active=true;bridge_poll(b,0,&live);
+ assert(live.can_zoom_follow && live.cinematic_zoom_available && live.cinematic_zoom_active);
+ assert(!bridge_edit(b,APP_EDIT_GRADIENT_FROM,"#123456",error,sizeof error));
+ ++snap.daemon_generation;bridge_poll(b,0,&live);assert(!live.pending && live.edit_error[0]);
+ snap.command_completed=snap.command_queued;
+ assert(!bridge_edit(b,APP_EDIT_ZOOM_FACTOR,"2",error,sizeof error));
+ snap.connected=false;bridge_poll(b,0,&live);
+ assert(!live.pending && live.edit_error[0] && !live.cinematic_zoom_available && !live.zoom_factor);
+ assert(bridge_edit(b,APP_EDIT_ZOOM_FACTOR,"2",error,sizeof error)<0);
  bridge_close(b);bridge_poll(NULL,0,&live);assert(live.enabled && !live.connected && !live.has_frame);
 }

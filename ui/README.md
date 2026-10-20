@@ -131,6 +131,21 @@ lists remain explicit, with Retry on discovery failure. Linux V4L2 paths and mac
 camera identifiers are parsed separately. Remaining configuration forms and output
 actions are still unavailable.
 
+The Look section edits the actual screen backdrop: Blur, Gradient or Solid.
+Solid fill and gradient stop colours accept `#RRGGBB` on Enter; the swatch shows
+acknowledged colour. Existing gradients retain their optional middle stop and
+angle, rather than silently replacing the configured gradient. Changes apply to
+the running session; saving presets and persistent settings remain later work.
+Backgrounds appear in the space around the captured screen, according to the
+current composition geometry.
+
+Basic zoom is free. The Director controls and stage Zoom popup use acknowledged
+zoom factors and the daemon's minimum/maximum bounds. Pointer following is enabled
+only when the capture backend supplies cursor metadata. Cinematic zoom status
+comes from the actual edition capability and active motion state; installing a
+Pro build alone does not imply entitlement. Cinematic motion configuration and
+screen-only mode controls remain unfinished.
+
 Linux/macOS capture and Community/Pro capabilities remain unchanged. Recording,
 single-destination streaming and existing zoom remain free; cinematic zoom,
 teleprompter and subtitles remain Pro. Embedded mode bundles the same Inter and IBM Plex Mono fonts
@@ -141,7 +156,7 @@ menus support local panel visibility and layout choices, Settings navigation and
 workspace Quit. Capture/output commands and other unavailable actions remain
 disabled. macOS retains these in-window menus until a native global-menu adapter
 exists. Detached Settings, OS title-bar integration and acknowledged backend
-editing/output commands remain later milestones. The pinned SDL adapter excludes
+settings editing and output commands remain later milestones. The pinned SDL adapter excludes
 native move/system-menu dispatch; its renderer also has no backdrop-blur command.
 See [the fidelity audit](../docs/ui-fidelity.md) for the API evidence and remaining
 differences from the browser reference.
@@ -163,7 +178,14 @@ heights. `check-native` needs Python3, Xvfb and xauth on Linux; it always uses a
 private Xvfb and SDL software renderer. Ten native cases cover all workspaces in
 both themes and narrow/settings layouts, using real bundled fonts. Temporary
 captures are deleted automatically after validation. macOS runtime and hardware
-GPU validation remain outstanding.
+GPU validation remain outstanding for these new controls.
+
+On Linux, after building `CUI=1`, `python3 ui/test_look.py ./cast` drives Background
+and Zoom through real native clicks on a private Xvfb. It checks daemon
+acknowledgment, reopening/external synchronization, idle output state while editing,
+and a short isolated recording whose decoded backdrop matches the selected fill.
+It needs xdotool and ffmpeg in addition to the native smoke dependencies. Temporary
+captures and recordings are removed after the run.
 
 `make -C ui clean` removes the preview build and any retained review image.
 

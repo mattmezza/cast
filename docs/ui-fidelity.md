@@ -79,3 +79,23 @@ picker composes these parts from CUI overlay, list, text-ellipsis and icon APIs;
 it does not substitute a platform dropdown. Real device data replaces the browser
 demo names. Linux/macOS parsing and reconnect/failure handling are bridge concerns.
 Native macOS runtime verification remains outstanding.
+
+## Preview contention and Look controls
+
+Preview pixels use a read-only shared-memory mapping, with socket messages for
+attachment and control. A failed metadata `trylock` previously made the workspace
+clear its frame, producing intermittent flashes. Snapshot reads now briefly
+serialize with worker metadata updates; network connection and command waits run
+outside that mutex. Frame-copy contention still skips an update. Disconnect,
+generation and privacy invalidation continue to clear pixels. A concurrent-reader
+regression test exercises 40,000 snapshot reads alongside the connection worker.
+
+Menu custom bodies explicitly compose label and shortcut in a horizontal row;
+regression checks compare their painted positions and vertical centres.
+
+Look and basic Zoom controls use the existing compositor and acknowledged command
+queue, including colour validation, gradient stop state and zoom capability bounds.
+The reference's two-stop gradient must not erase an existing third stop; an extra
+middle-stop control preserves that backend feature. Basic zoom remains free while
+cinematic status follows the daemon's actual capability. These are application
+integrations using pinned CUI APIs, without a toolkit patch.

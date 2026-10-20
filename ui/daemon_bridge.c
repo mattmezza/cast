@@ -68,12 +68,34 @@ static bool listed(const char *value, const char *const *allowed, size_t count)
     return false;
 }
 
+/* Decimal input only: reject signs, whitespace, exponents and partial parses. */
+static bool decimal_range(const char *value, double low, double high)
+{
+    bool digit = false, dot = false;
+    for (const char *p = value; *p; ++p) {
+        if (*p >= '0' && *p <= '9') digit = true;
+        else if (*p == '.' && !dot) dot = true;
+        else return false;
+    }
+    double number = strtod(value, NULL);
+    return digit && isfinite(number) && number >= low && number <= high;
+}
+
+static bool color_value(const char *value)
+{
+    if (strlen(value) != 7 || value[0] != '#') return false;
+    for (unsigned i = 1; i < 7; ++i)
+        if (!isxdigit((unsigned char)value[i])) return false;
+    return true;
+}
+
 int bridge_edit(DaemonBridge *bridge, AppEdit edit, const char *value, char *error, size_t size)
 {
     static const char *const layouts[] = {"overlay", "split", "screen", "camera", "stage"};
     static const char *const fits[] = {"contain", "cover"};
     static const char *const anchors[] = {"top-left", "top", "top-right", "left", "right",
                                          "bottom-left", "bottom", "bottom-right"};
+    static const char *const backgrounds[] = {"blurred", "gradient", "solid"};
     const char *key = NULL;
     bool valid = false;
     if (!bridge || !value || strlen(value) > 31)
@@ -93,19 +115,27 @@ int bridge_edit(DaemonBridge *bridge, AppEdit edit, const char *value, char *err
         key = "camera.anchor";
         valid = listed(value, anchors, sizeof anchors / sizeof *anchors);
         break;
-    case APP_EDIT_SIZE: {
-        key = "camera.width_percent";
-        bool digit = false, dot = false;
-        valid = true;
-        for (const char *p = value; *p; ++p) {
-            if (*p >= '0' && *p <= '9') digit = true;
-            else if (*p == '.' && !dot) dot = true;
-            else valid = false;
-        }
-        double number = strtod(value, NULL);
-        valid = valid && digit && isfinite(number) && number >= 1 && number <= 100;
-        break;
-    }
+    case APP_EDIT_SIZE: key = "camera.width_percent"; valid = decimal_range(value, 1, 100); break;
+    case APP_EDIT_BACKGROUND_SOURCE:
+        key = "background.source"; valid = !strcmp(value, "screen") || !strcmp(value, "camera"); break;
+    case APP_EDIT_SCREEN_BACKGROUND:
+    case APP_EDIT_CAMERA_BACKGROUND:
+        key = edit == APP_EDIT_SCREEN_BACKGROUND ? "screen.background" : "camera.background";
+        valid = listed(value, backgrounds, sizeof backgrounds / sizeof *backgrounds); break;
+    case APP_EDIT_SCREEN_BACKGROUND_COLOR: key = "screen.background_color"; valid = color_value(value); break;
+    case APP_EDIT_CAMERA_BACKGROUND_COLOR: key = "camera.background_color"; valid = color_value(value); break;
+    case APP_EDIT_GRADIENT_FROM: key = "background.gradient_from"; valid = color_value(value); break;
+    case APP_EDIT_GRADIENT_VIA: key = "background.gradient_via"; valid = color_value(value); break;
+    case APP_EDIT_GRADIENT_TO: key = "background.gradient_to"; valid = color_value(value); break;
+    case APP_EDIT_GRADIENT_VIA_ENABLED:
+        key = "background.gradient_via_enabled"; valid = !strcmp(value, "true") || !strcmp(value, "false"); break;
+    case APP_EDIT_GRADIENT_ANGLE: key = "background.gradient_angle"; valid = decimal_range(value, 0, 360); break;
+    case APP_EDIT_GRADIENT_WAYPOINT: key = "background.gradient_waypoint"; valid = decimal_range(value, 1, 99); break;
+    case APP_EDIT_ZOOM_FACTOR: key = "zoom.factor"; valid = decimal_range(value, 1, 20); break;
+    case APP_EDIT_ZOOM_MIN: key = "zoom.min"; valid = decimal_range(value, 1, 20); break;
+    case APP_EDIT_ZOOM_MAX: key = "zoom.max"; valid = decimal_range(value, 1, 20); break;
+    case APP_EDIT_ZOOM_FOLLOW:
+        key = "zoom.follow"; valid = !strcmp(value, "true") || !strcmp(value, "false"); break;
     default: break;
     }
     if (!valid) return refuse_edit(bridge, error, size, "Unsupported composition value");
@@ -116,8 +146,22 @@ int bridge_edit(DaemonBridge *bridge, AppEdit edit, const char *value, char *err
         return refuse_edit(bridge, error, size, "Daemon disconnected; edit was not queued");
     if (snapshot.command_queued != snapshot.command_completed || snapshot.command_queued == UINT64_MAX)
         return refuse_edit(bridge, error, size, "Daemon command queue is busy");
+    double number = strtod(value, NULL);
+    const Config *config = &snapshot.config;
+    if ((edit == APP_EDIT_ZOOM_FACTOR && (number < config->zoom_min || number > config->zoom_max)) ||
+        (edit == APP_EDIT_ZOOM_MIN && (number > config->zoom_max || number > config->zoom_factor)) ||
+        (edit == APP_EDIT_ZOOM_MAX && (number < config->zoom_min || number < config->zoom_factor)))
+        return refuse_edit(bridge, error, size, "Zoom factor must remain between minimum and maximum");
+    if (edit == APP_EDIT_ZOOM_FOLLOW && !strcmp(value, "true") && !snapshot.capabilities.cursor_metadata)
+        return refuse_edit(bridge, error, size, "Cursor follow requires cursor metadata from the capture backend");
     char transport_error[CAST_ERR];
-    if (panel_client_setting(bridge->client, key, value, transport_error, sizeof transport_error))
+    int result;
+    if (edit == APP_EDIT_ZOOM_FOLLOW || edit == APP_EDIT_ZOOM_FACTOR) {
+        const char *args[] = {"zoom", edit == APP_EDIT_ZOOM_FACTOR ? "set" : "follow",
+            edit == APP_EDIT_ZOOM_FACTOR ? value : !strcmp(value, "true") ? "on" : "off"};
+        result = panel_client_command(bridge->client, 3, args, transport_error, sizeof transport_error);
+    } else result = panel_client_setting(bridge->client, key, value, transport_error, sizeof transport_error);
+    if (result)
         return refuse_edit(bridge, error, size, "Composition edit could not be queued");
     bridge->edit_generation = snapshot.daemon_generation;
     bridge->edit_ack = snapshot.command_queued + 1;
@@ -340,6 +384,26 @@ static void copy_config(AppLive *out, const PanelSnapshot *snapshot, const Daemo
 {
     const Config *config = &snapshot->config;
     const State *state = &snapshot->state;
+    snprintf(out->background_source, sizeof out->background_source, "%.*s", 15, config->background_source);
+    snprintf(out->screen_background, sizeof out->screen_background, "%.*s", 15, config->screen_background);
+    snprintf(out->camera_background, sizeof out->camera_background, "%.*s", 15, config->camera_background);
+    out->screen_background_color = config->screen_background_color;
+    out->camera_background_color = config->camera_background_color;
+    out->gradient_from = config->gradient_from;
+    out->gradient_via = config->gradient_via;
+    out->gradient_to = config->gradient_to;
+    out->gradient_via_enabled = config->gradient_via_enabled;
+    out->gradient_angle = (float)config->gradient_angle;
+    out->gradient_waypoint = (float)config->gradient_waypoint;
+    out->zoom_factor = (float)config->zoom_factor;
+    out->zoom_min = (float)config->zoom_min;
+    out->zoom_max = (float)config->zoom_max;
+    out->zoom_follow = config->zoom_follow;
+    out->can_zoom_follow = snapshot->capabilities.cursor_metadata;
+    out->cinematic_zoom_active = snapshot->cinematic_active;
+    for (unsigned i = 0; i < CAST_FEATURE_COUNT; ++i)
+        if (!strncmp(snapshot->edition.features[i].id, "cinematic_zoom", sizeof snapshot->edition.features[i].id))
+            out->cinematic_zoom_available = snapshot->edition.features[i].active;
     out->can_select_monitor = monitor_backend(config);
     out->can_reselect_portal = !strcmp(config->backend, "wayland");
     out->can_select_camera = true;

@@ -4,7 +4,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
-#include <string.h>
+#include <stdlib.h>
 
 typedef struct {
     cui_context *ui;
@@ -700,7 +700,65 @@ static void source_pickers(void) {
     assert(!p.app.panel_sheet.overlay.open);
     cui_destroy(p.ui);
 }
-int main(void) {
+static void look_edits(void) {
+    Preview p=create(1360,820);
+    p.app.live.enabled=p.app.live.connected=true;
+    p.app.live.zoom_min=1;p.app.live.zoom_max=2;p.app.live.zoom_factor=1;
+    assert(!app_request_edit(&p.app,APP_EDIT_GRADIENT_FROM,"#nothex"));
+    assert(!app_request_edit(&p.app,APP_EDIT_ZOOM_FACTOR,"3"));
+    assert(app_request_edit(&p.app,APP_EDIT_SCREEN_BACKGROUND,"gradient"));
+    assert(!strcmp(p.app.live.screen_background,"blurred"));
+    assert(p.app.edit_requested && p.app.edit==APP_EDIT_SCREEN_BACKGROUND);
+    assert(!app_request_edit(&p.app,APP_EDIT_ZOOM_FACTOR,"1.5"));
+    p.app.edit_requested=false;p.app.live.pending=true;
+    assert(!app_request_edit(&p.app,APP_EDIT_ZOOM_FACTOR,"1.5"));
+    p.app.live.pending=false;p.app.live.connected=false;
+    assert(!app_request_edit(&p.app,APP_EDIT_ZOOM_FACTOR,"1.5"));
+    p.app.live.connected=true;
+    p.app.source_sections[0]=p.app.source_sections[1]=false;p.app.source_sections[2]=true;
+    snprintf(p.app.live.screen_background,16,"gradient");settle(&p);
+    click(&p,"background-from");
+    key(&p,CUI_KEY_A,CUI_MOD_CTRL);
+    event(&p,(cui_event){.type=CUI_EVENT_TEXT,.text="#"});
+    const cui_key digits[]={CUI_KEY_1,CUI_KEY_2,CUI_KEY_3};
+    for(unsigned i=0;i<3;++i) {
+        key(&p,digits[i],0);
+        cui_event typed={.type=CUI_EVENT_TEXT};typed.text[0]=(char)('1'+i);
+        event(&p,typed);
+        assert(p.app.workspace==APP_CAMERA);
+    }
+    bool sources=p.app.show_sources,inspector=p.app.show_inspector;
+    key(&p,CUI_KEY_LEFT_BRACKET,0);key(&p,CUI_KEY_RIGHT_BRACKET,0);
+    assert(p.app.show_sources==sources&&p.app.show_inspector==inspector);
+    event(&p,(cui_event){.type=CUI_EVENT_TEXT,.text="456"});
+    key(&p,CUI_KEY_ENTER,0);
+    assert(p.app.edit_requested&&p.app.edit==APP_EDIT_GRADIENT_FROM&&!strcmp(p.app.edit_value,"#123456"));
+    p.app.edit_requested=false;settle(&p);
+    click(&p,"stage-zoom");
+    assert(p.app.zoom_popup.open);
+    key(&p,CUI_KEY_ESCAPE,0);
+    assert(!p.app.zoom_popup.open);
+    cui_destroy(p.ui);
+}
+int main(int argc,char **argv) {
+    if(argc==3&&!strcmp(argv[1],"--look-layout")) {
+        assert(!strcmp(argv[2],"blurred")||!strcmp(argv[2],"gradient")||!strcmp(argv[2],"solid")||!strcmp(argv[2],"default")||!strcmp(argv[2],"camera")||!strcmp(argv[2],"zoom"));
+        Preview p=create(1360,820);
+        p.app.live.enabled=p.app.live.connected=true;
+        p.app.live.generation=1;
+        bool original=!strcmp(argv[2],"default"),camera=!strcmp(argv[2],"camera"),zoom=!strcmp(argv[2],"zoom");
+        if(!original&&!camera&&!zoom)snprintf(p.app.live.screen_background,sizeof p.app.live.screen_background,"%s",argv[2]);
+        if(!original)p.app.source_sections[0]=false;
+        if(!original&&!camera)p.app.source_sections[1]=false;
+        p.app.source_sections[2]=!original&&!camera;
+        if(zoom) {settle(&p);click(&p,"stage-zoom");}
+        cui_set_layout_debug(p.ui,true);settle(&p);
+        size_t required=0;cui_debug_layout_export(p.ui,CUI_DEBUG_LAYOUT_JSON,NULL,0,&required);
+        char *dump=malloc(required);assert(dump);
+        assert(cui_debug_layout_export(p.ui,CUI_DEBUG_LAYOUT_JSON,dump,required,&required));
+        puts(dump);free(dump);cui_destroy(p.ui);return 0;
+    }
+    look_edits();
     workspaces();
     compositions();
     panels();

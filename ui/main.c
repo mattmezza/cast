@@ -524,6 +524,19 @@ cleanup:
                app.fit_cover ? "true" : "false", app.camera_anchor, app.camera_size);
         printf("\"preview_frames_seen\":%llu,\"preview_non_uniform_seen\":%s,",
                preview_frames_seen, preview_non_uniform_seen ? "true" : "false");
+        printf("\"screen_background\":"); debug_json_string(app.live.screen_background);
+        printf(",\"screen_background_color\":\"#%06x\","
+               "\"gradient_from\":\"#%06x\",\"gradient_via\":\"#%06x\",\"gradient_to\":\"#%06x\","
+               "\"gradient_via_enabled\":%s,\"gradient_angle\":%.2f,"
+               "\"zoom_factor\":%.3f,\"zoom_follow\":%s,\"can_zoom_follow\":%s,\"pending\":%s,\"edit_error\":",
+               (unsigned)(app.live.screen_background_color & 0xffffff),
+               (unsigned)(app.live.gradient_from & 0xffffff),
+               (unsigned)(app.live.gradient_via & 0xffffff), (unsigned)(app.live.gradient_to & 0xffffff),
+               app.live.gradient_via_enabled ? "true" : "false", app.live.gradient_angle,
+               app.live.zoom_factor, app.live.zoom_follow ? "true" : "false",
+               app.live.can_zoom_follow ? "true" : "false", app.live.pending ? "true" : "false");
+        debug_json_string(app.live.edit_error);
+        printf(",");
         printf("\"screen_id\":"); debug_json_string(app.live.screen_id);
         printf(",\"camera_id\":"); debug_json_string(app.live.camera_id);
         printf(",\"camera_enabled\":%s,\"devices_kind\":%u,\"devices_count\":%u,"

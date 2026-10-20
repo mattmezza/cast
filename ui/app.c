@@ -2,6 +2,8 @@
 #include "app.h"
 #include "cast_theme.h"
 #include "brand.h"
+#include "cui/cui_styled_slider_events.h"
+#include <ctype.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -73,12 +75,55 @@ bool app_request_edit(AppState *s, AppEdit edit, const char *value) {
         char *end = NULL;
         size = strtof(value, &end);
         if (!end || *end || !isfinite(size) || size < 1 || size > 100) return false;
+    } else if (edit == APP_EDIT_BACKGROUND_SOURCE) {
+        if (strcmp(value,"screen") && strcmp(value,"camera")) return false;
+    } else if (edit == APP_EDIT_SCREEN_BACKGROUND || edit == APP_EDIT_CAMERA_BACKGROUND) {
+        if (strcmp(value,"blurred") && strcmp(value,"gradient") && strcmp(value,"solid")) return false;
+    } else if (edit >= APP_EDIT_SCREEN_BACKGROUND_COLOR && edit <= APP_EDIT_GRADIENT_TO) {
+        if (strlen(value)!=7 || value[0]!='#') return false;
+        for (unsigned i=1;i<7;++i) if (!isxdigit((unsigned char)value[i])) return false;
+    } else if (edit == APP_EDIT_GRADIENT_VIA_ENABLED || edit == APP_EDIT_ZOOM_FOLLOW) {
+        if (strcmp(value,"true") && strcmp(value,"false")) return false;
+        if (edit==APP_EDIT_ZOOM_FOLLOW && s->live.enabled && !s->live.can_zoom_follow) return false;
+    } else if (edit == APP_EDIT_GRADIENT_ANGLE || edit == APP_EDIT_GRADIENT_WAYPOINT ||
+               edit == APP_EDIT_ZOOM_FACTOR || edit == APP_EDIT_ZOOM_MIN || edit == APP_EDIT_ZOOM_MAX) {
+        bool decimal=false;
+        for(const char *p=value;*p;++p) {
+            if(*p=='.'&&!decimal)decimal=true;
+            else if(*p<'0'||*p>'9')return false;
+        }
+        char *end=NULL; size=strtof(value,&end);
+        if (!end || *end || !isfinite(size)) return false;
+        if (edit==APP_EDIT_GRADIENT_ANGLE) { if(size<0||size>360)return false; }
+        else if(edit==APP_EDIT_GRADIENT_WAYPOINT) { if(size<1||size>99)return false; }
+        else if(size<1||size>20)return false;
+        if(s->live.enabled && edit==APP_EDIT_ZOOM_FACTOR && (size<s->live.zoom_min||size>s->live.zoom_max))return false;
+        if(s->live.enabled && edit==APP_EDIT_ZOOM_MIN && (size>s->live.zoom_factor||size>s->live.zoom_max))return false;
+        if(s->live.enabled && edit==APP_EDIT_ZOOM_MAX && (size<s->live.zoom_factor||size<s->live.zoom_min))return false;
     } else return false;
     if (!s->live.enabled) {
         if (edit == APP_EDIT_LAYOUT) s->layout = (AppLayout)index;
         else if (edit == APP_EDIT_FIT) s->fit_cover = !strcmp(value, "cover");
         else if (edit == APP_EDIT_ANCHOR) s->camera_anchor = (unsigned)index;
-        else s->camera_size = size;
+        else if (edit==APP_EDIT_SIZE) s->camera_size = size;
+        else if (edit==APP_EDIT_SCREEN_BACKGROUND) snprintf(s->live.screen_background,16,"%.15s",value);
+        else if (edit==APP_EDIT_ZOOM_FACTOR) s->live.zoom_factor=size;
+        else if(edit==APP_EDIT_BACKGROUND_SOURCE) snprintf(s->live.background_source,16,"%.15s",value);
+        else if(edit==APP_EDIT_CAMERA_BACKGROUND) snprintf(s->live.camera_background,16,"%.15s",value);
+        else if(edit>=APP_EDIT_SCREEN_BACKGROUND_COLOR && edit<=APP_EDIT_GRADIENT_TO) {
+            uint32_t color=(uint32_t)strtoul(value+1,NULL,16);
+            if(edit==APP_EDIT_SCREEN_BACKGROUND_COLOR)s->live.screen_background_color=color;
+            else if(edit==APP_EDIT_CAMERA_BACKGROUND_COLOR)s->live.camera_background_color=color;
+            else if(edit==APP_EDIT_GRADIENT_FROM)s->live.gradient_from=color;
+            else if(edit==APP_EDIT_GRADIENT_VIA)s->live.gradient_via=color;
+            else s->live.gradient_to=color;
+        } else if(edit==APP_EDIT_GRADIENT_VIA_ENABLED)s->live.gradient_via_enabled=!strcmp(value,"true");
+        else if(edit==APP_EDIT_GRADIENT_ANGLE)s->live.gradient_angle=size;
+        else if(edit==APP_EDIT_GRADIENT_WAYPOINT)s->live.gradient_waypoint=size;
+        else if(edit==APP_EDIT_ZOOM_MIN)s->live.zoom_min=size;
+        else if(edit==APP_EDIT_ZOOM_MAX)s->live.zoom_max=size;
+        else if(edit==APP_EDIT_ZOOM_FOLLOW)s->live.zoom_follow=!strcmp(value,"true");
+        else return false;
         return true;
     }
     s->edit = edit;
@@ -98,6 +143,10 @@ void app_init(AppState *s) {
     s->source_sections[0] = s->source_sections[1] = true;
     s->camera_anchor = 8;
     s->camera_size = 26;
+    snprintf(s->live.screen_background,16,"blurred");
+    s->live.zoom_factor=s->live.zoom_min=1; s->live.zoom_max=2;
+    s->live.gradient_from=0xf16c33;s->live.gradient_to=0x25262a;
+    s->live.gradient_angle=135;
 }
 bool app_is_dark(const AppState *s) {
     return s->appearance == APP_DARK || (s->appearance == APP_SYSTEM && s->system_dark);
@@ -149,17 +198,27 @@ static void rule(cui_context *ui, const cui_theme *t) {
     cui_begin_box(ui, 0, (cui_box){.width = -1, .height = 1, .background = t->border});
     cui_end_box(ui);
 }
+typedef struct {const cui_theme *theme; const char *label; bool selected;} CompactLabel;
+static void compact_label(cui_context *ui,void *user) {
+    CompactLabel *label=user;
+    cui_text_ex(ui,cui_string(label->label),10.5f,label->selected?label->theme->text:cast_design_tokens(label->theme->dark).secondary,0,
+        (cui_text_style){.family=1,.monospace=true});
+}
 static bool button(cui_context *ui, const cui_theme *t, const char *id, const char *label,
                    const char *icon, float width, float height, bool selected, bool disabled) {
     cui_theme_button_colors colors = t->buttons[CUI_THEME_BUTTON_SECONDARY];
-    colors.normal = !strncmp(id,"fit-",4) || !strncmp(id,"camera-size-",12) ? t->background : t->secondary;
+    bool preset=!strncmp(id,"zoom-preset-",12)||!strncmp(id,"zoom-pop-preset-",16);
+    bool background=!strncmp(id,"background-",11);
+    colors.normal = preset || background || !strncmp(id,"fit-",4) || !strncmp(id,"camera-size-",12) ? t->background : t->secondary;
     colors.hover = cast_design_tokens(t->dark).hover;
     colors.active = selected ? t->selection : t->secondary_hover;
     if (selected) colors.border = cast_design_tokens(t->dark).selected_line;
+    CompactLabel label_content={t,label,selected};
     ButtonIcon artwork = {cui_id_from(ui, id) ^ UINT64_C(0x7185e28e9fb974db), t, icon, 14};
     return cui_button_ex(ui, cui_id_from(ui, id), t, cui_string(label),
         (cui_button_options){.variant = CUI_BUTTON_SECONDARY,
-            .width = width, .height = height, .font_size = 12, .icon_size = 14,
+            .width = width, .height = height, .font_size = background?11.5f:12, .icon_size = 14,
+            .compact=preset, .icon_only=preset, .content=preset?compact_label:NULL,.content_user=&label_content,
             .leading_content = icon ? button_icon : NULL, .leading_user = &artwork,
             .custom_colors = true, .colors = colors,
             .selected = selected, .disabled = disabled,
@@ -199,6 +258,11 @@ static void toggle_panel(cui_context *ui, AppState *s, unsigned kind, float widt
     cui_invalidate(ui);
 }
 static void shortcuts(cui_context *ui, AppState *s, float width) {
+    /* Bare character shortcuts must yield to the focused text editor. Semantics
+     * are rebuilt later in this frame, so use these stable editor identities. */
+    const char *editors[]={"background-from","background-via","background-to","background-fill"};
+    for(unsigned i=0;i<sizeof editors/sizeof editors[0];++i)
+        if(cui_focused(ui)==cui_id_from(ui,editors[i]))return;
     size_t count = 0;
     const cui_event *events = cui_frame_events(ui, &count);
     for (size_t i = 0; i < count; ++i) {
@@ -383,6 +447,125 @@ static void anchor_dot(cui_context *ui, void *user) {
         .background = dot->selected ? dot->theme->primary : dot->theme->muted});
     cui_end_box(ui);
 }
+typedef struct { cui_edit *edit; cui_input_state state; char buffer[16]; uint32_t acknowledged; bool initialized, connected, was_focused; uint64_t generation; } LookColor;
+static void look_color_destroy(void *p) { cui_edit_destroy(((LookColor *)p)->edit); }
+static void look_color(cui_context *ui, AppState *s, const cui_theme *t, const char *id,
+                       const char *label, uint32_t value, AppEdit intent) {
+    text(ui,t,label);
+    cui_id key=cui_id_from(ui,id);
+    LookColor *field=cui_resource_get(ui,key,UINT64_C(0x6c6f6f6b636f6c72),sizeof *field,NULL,look_color_destroy);
+    if(!field)return;
+    if(!field->initialized) {
+        snprintf(field->buffer,sizeof field->buffer,"#%06X",value&0xffffff);
+        field->edit=cui_edit_create((cui_edit_config){.buffer=field->buffer,.capacity=sizeof field->buffer});
+        field->initialized=true; field->acknowledged=value;
+    }
+    if(!field->edit)return;
+    bool focused=cui_focused(ui)==key;
+    bool reset=field->acknowledged!=value || field->generation!=s->live.generation ||
+        field->connected!=s->live.connected || (field->was_focused&&!focused);
+    size_t event_count=0;const cui_event *events=cui_frame_events(ui,&event_count);
+    for(size_t i=0;i<event_count;++i)if(focused&&!cui_event_consumed(ui,i)&&events[i].type==CUI_EVENT_KEY_DOWN&&events[i].key==CUI_KEY_ESCAPE) {
+        reset=true;cui_consume_event(ui,i);
+    }
+    field->generation=s->live.generation;field->connected=s->live.connected;field->was_focused=focused;
+    if(reset) {
+        char hex[16];snprintf(hex,sizeof hex,"#%06X",value&0xffffff);
+        cui_edit_set_content(field->edit,(cui_edit_content){.text=cui_string(hex)});
+        field->acknowledged=value;
+    }
+    cui_begin_box(ui,0,(cui_box){.width=-1,.row=true,.gap=8,.align_y=CUI_ALIGN_CENTER});
+    cui_begin_box(ui,0,(cui_box){.width=22,.height=22,.fixed_width=true,.background={(value>>16)&255,(value>>8)&255,value&255,255},.border=t->border,.border_width=1});cui_end_box(ui);
+    cui_input_result result=cui_input_ex(ui,key,t,cui_string(label),field->edit,&field->state,
+        (cui_input_options){.width=-1,.height=36,.disabled=composition_disabled(s),.invalid=strlen(field->buffer)!=7});
+    if(result.submitted) {
+        (void)app_request_edit(s,intent,field->buffer);
+        char hex[16];snprintf(hex,sizeof hex,"#%06X",value&0xffffff);
+        cui_edit_set_content(field->edit,(cui_edit_content){.text=cui_string(hex)});
+        cui_invalidate(ui);
+    }
+    cui_end_box(ui);
+}
+typedef struct { AppState *state; } ZoomRequest;
+static void zoom_request(void *user,const cui_component_slider_request *request) {
+    if(request->phase!=CUI_SLIDER_COMMIT)return;
+    char value[24];snprintf(value,sizeof value,"%.2f",request->requested);
+    app_request_edit(((ZoomRequest *)user)->state,APP_EDIT_ZOOM_FACTOR,value);
+}
+static void zoom_control(cui_context *ui,AppState *s,const cui_theme *t,const char *name,float width) {
+    cui_id id=cui_id_from(ui,name);
+    cui_slider_state *state=cui_resource_get(ui,id,UINT64_C(0x7a6f6f6d736c6964),sizeof *state,NULL,NULL);
+    double value=s->live.zoom_factor>0?s->live.zoom_factor:1;
+    double min=s->live.zoom_min>=1?s->live.zoom_min:1,max=s->live.zoom_max>=min?s->live.zoom_max:2;
+    ZoomRequest request={s};
+    if(state)cui_slider_events(ui,id,t,cui_string("Zoom level"),value,state,
+        (cui_slider_options){.minimum=min,.maximum=max,.step=.05,.disabled=composition_disabled(s)},
+        (cui_slider_style_options){.width=width,.track_height=4,.hit_height=24,.hide_label=true},
+        (cui_component_slider_handler){zoom_request,&request});
+}
+static void zoom_popup(cui_context *ui,AppState *s,const cui_theme *t,float width,float height) {
+    if(!s->zoom_popup_initialized)return;
+    if(!cui_overlay_begin(ui,&s->zoom_popup))return;
+    cui_rect anchor=cui_bounds(ui,cui_id_from(ui,"stage-zoom"));
+    float popup_width=fminf(238,fmaxf(0,width-16));
+    cui_rect panel=cui_popup_place(anchor,(cui_size){popup_width,244},
+        (cui_rect){8,8,fmaxf(0,width-16),fmaxf(0,height-16)},CUI_POPUP_ABOVE,6).bounds;
+    cui_overlay_set_bounds(&s->zoom_popup,panel);
+    cui_begin_portal(ui,s->zoom_popup.id,(cui_box){.padding=10,.gap=10,.background=t->surface,.border=t->border,.border_width=1},panel,230);
+    cui_box_shadow shadow={.layer={.offset_y=18,.sigma=22,.color={16,17,19,t->dark?184:51}}};
+    cui_set_box_shadows(ui,&shadow,1,(cui_corner_radii){0});
+    cui_begin_box(ui,0,(cui_box){.width=-1,.row=true,.gap=6,.align_y=CUI_ALIGN_CENTER});
+    app_icon(ui,cui_id_from(ui,"zoom-pop-icon"),t,cui_string("zoom"),(cui_icon_options){.size=CUI_ICON_CUSTOM,.custom_size=14});
+    title(ui,t,"ZOOM",10);cui_end_box(ui);
+    text(ui,t,"Basic zoom · free");
+    cui_begin_box(ui,0,(cui_box){.width=-1,.row=true,.gap=3});
+    const float levels[]={1,1.15f,1.3f,1.5f,1.8f};
+    for(unsigned i=0;i<5;++i) {
+        char id[40],label[24],value[24];snprintf(id,sizeof id,"zoom-pop-preset-%u",i);
+        snprintf(label,sizeof label,i?"%.2f×":"Off",levels[i]);snprintf(value,sizeof value,"%.2f",levels[i]);
+        if(button(ui,t,id,label,NULL,-1,30,fabsf(s->live.zoom_factor-levels[i])<.001f,
+            composition_disabled(s)||(s->live.enabled&&(levels[i]<s->live.zoom_min||levels[i]>s->live.zoom_max)))) {
+            app_request_edit(s,APP_EDIT_ZOOM_FACTOR,value);cui_invalidate(ui);
+        }
+    }
+    cui_end_box(ui);
+    char level[40];snprintf(level,sizeof level,"Level %.2f×",s->live.zoom_factor>0?s->live.zoom_factor:1);text(ui,t,level);
+    zoom_control(ui,s,t,"zoom-pop-level",popup_width-20);
+    bool follow=s->live.zoom_follow;
+    if(cui_switch_ex(ui,cui_id_from(ui,"zoom-follow"),t,cui_string("Follow pointer"),&follow,NULL,
+        (cui_switch_options){.disabled=composition_disabled(s)||!s->live.can_zoom_follow,
+            .accessibility_label=cui_string("Follow pointer")})) {
+        app_request_edit(s,APP_EDIT_ZOOM_FOLLOW,follow?"true":"false");cui_invalidate(ui);
+    }
+    text(ui,t,s->live.cinematic_zoom_active?"Cinematic zoom · active":s->live.cinematic_zoom_available?"Cinematic zoom · available":"Cinematic zoom · Pro");
+    cui_end_box(ui);cui_overlay_end(ui);
+}
+static void look_controls(cui_context *ui,AppState *s,const cui_theme *t) {
+    text(ui,t,"Background behind the screen");
+    cui_begin_box(ui,0,(cui_box){.width=-1,.row=true,.gap=0});
+    const char *labels[]={"Blur","Gradient","Solid"},*values[]={"blurred","gradient","solid"};
+    for(unsigned i=0;i<3;++i) {
+        char id[40];snprintf(id,sizeof id,"background-%s",values[i]);
+        if(button(ui,t,id,labels[i],NULL,-1,30,!strcmp(s->live.screen_background,values[i]),composition_disabled(s))) {
+            app_request_edit(s,APP_EDIT_SCREEN_BACKGROUND,values[i]);cui_invalidate(ui);
+        }
+    }
+    cui_end_box(ui);
+    if(!strcmp(s->live.screen_background,"gradient")) {
+        look_color(ui,s,t,"background-from","From",s->live.gradient_from,APP_EDIT_GRADIENT_FROM);
+        bool via=s->live.gradient_via_enabled;
+        if(cui_switch_ex(ui,cui_id_from(ui,"background-middle-enabled"),t,cui_string("Middle stop"),&via,NULL,
+            (cui_switch_options){.disabled=composition_disabled(s),.accessibility_label=cui_string("Middle gradient stop")})) {
+            app_request_edit(s,APP_EDIT_GRADIENT_VIA_ENABLED,via?"true":"false");cui_invalidate(ui);
+        }
+        if(s->live.gradient_via_enabled)look_color(ui,s,t,"background-via","Middle",s->live.gradient_via,APP_EDIT_GRADIENT_VIA);
+        look_color(ui,s,t,"background-to","To",s->live.gradient_to,APP_EDIT_GRADIENT_TO);
+        char note[64];snprintf(note,sizeof note,"%s stops, %.0f°",s->live.gradient_via_enabled?"Three":"Two",s->live.gradient_angle);
+        text(ui,t,note);
+    } else if(!strcmp(s->live.screen_background,"solid"))
+        look_color(ui,s,t,"background-fill","Fill",s->live.screen_background_color,APP_EDIT_SCREEN_BACKGROUND_COLOR);
+    text(ui,t,"Enter a hex colour and press Enter.");
+}
 static void source_content(cui_context *ui, AppState *s, const cui_theme *t) {
     cui_begin_box(ui, cui_id_from(ui, "source-content"),
         (cui_box){.width = -1, .padding = 10, .gap = 10});
@@ -463,7 +646,7 @@ static void source_content(cui_context *ui, AppState *s, const cui_theme *t) {
     }
     rule(ui, t);
     if (section(ui, s, t, 2, "Look"))
-        text(ui, t, "Background, logo and text controls will use the connected composition settings.");
+        look_controls(ui,s,t);
     rule(ui, t);
     if (section(ui, s, t, 3, "Presets"))
         text(ui, t, "Saved presets will appear here after daemon integration.");
@@ -512,17 +695,20 @@ static void director_card(cui_context *ui, AppState *s, const cui_theme *t) {
         }
     }
     cui_end_box(ui);
-    cui_begin_box(ui, 0, (cui_box){.width = -1, .row = true});
-    cui_text(ui, cui_string("Cinematic zoom"), 11.5f, cast_design_tokens(t->dark).secondary);
-    fill(ui); cui_text(ui, cui_string("unavailable"), 10.5f, t->muted);
+    cui_begin_box(ui,0,(cui_box){.width=-1,.row=true});
+    text(ui,t,"Zoom");fill(ui);
+    char level[24];snprintf(level,sizeof level,"%.2f×",s->live.zoom_factor>0?s->live.zoom_factor:1);text(ui,t,level);cui_end_box(ui);
+    zoom_control(ui,s,t,"director-zoom",fmaxf(1,cui_bounds(ui,cui_id_from(ui,"director-card")).w-22));
+    cui_begin_box(ui,0,(cui_box){.width=-1,.row=true,.gap=3});
+    const float levels[]={1,1.15f,1.3f,1.5f,1.8f};
+    for(unsigned i=0;i<5;++i) {
+        char id[32],label[24],value[24];snprintf(id,sizeof id,"zoom-preset-%u",i);
+        snprintf(label,sizeof label,i?"%.2f×":"Off",levels[i]);snprintf(value,sizeof value,"%.2f",levels[i]);
+        bool disabled=composition_disabled(s)||(s->live.enabled&&(levels[i]<s->live.zoom_min||levels[i]>s->live.zoom_max));
+        if(button(ui,t,id,label,NULL,-1,30,fabsf(s->live.zoom_factor-levels[i])<.001f,disabled)) {app_request_edit(s,APP_EDIT_ZOOM_FACTOR,value);cui_invalidate(ui);}
+    }
     cui_end_box(ui);
-    /* The bridge has no zoom fields. This disabled track is deliberately
-     * described as unavailable rather than claiming a daemon zoom value. */
-    cui_id zoom_id = cui_id_from(ui,"director-zoom");
-    cui_interact(ui,zoom_id,CUI_ROLE_SLIDER,cui_string("Cinematic zoom unavailable"),true,false,0);
-    cui_begin_box(ui,zoom_id,(cui_box){.width=-1,.height=20,.align_y=CUI_ALIGN_CENTER});
-    cui_begin_box(ui,0,(cui_box){.width=-1,.height=2,.background=t->border});cui_end_box(ui);
-    cui_end_box(ui);
+    text(ui,t,s->live.cinematic_zoom_active?"Cinematic zoom · active":s->live.cinematic_zoom_available?"Cinematic zoom · available":"Cinematic zoom · Pro");
     cui_begin_box(ui, 0, (cui_box){.width = -1, .row = true, .align_y = CUI_ALIGN_CENTER});
     cui_begin_box(ui, 0, (cui_box){.width = -1, .gap = 2});
     cui_text(ui, cui_string("Move the screen only"), 12, t->text);
@@ -772,6 +958,12 @@ static void center(cui_context *ui, AppState *s, const cui_theme *t,
         layout_picker_ex(ui, s, t, true);
         cui_end_box(ui);
     } else cui_text(ui, cui_string(s->live.connected ? "Read only" : "Not connected"), 10.5f, t->muted);
+    if(button(ui,t,"stage-zoom","Zoom","zoom",76,30,s->zoom_popup.open,composition_disabled(s))) {
+        if(!s->zoom_popup_initialized) {cui_overlay_init(&s->zoom_popup,cui_id_from(ui,"zoom-pop"),false);s->zoom_popup_initialized=true;}
+        if(s->zoom_popup.open)cui_overlay_close(ui,&s->zoom_popup);
+        else cui_overlay_open(ui,&s->zoom_popup,cui_id_from(ui,"stage-zoom"));
+        cui_invalidate(ui);
+    }
     cui_end_box(ui);
     if (window_width >= 1000 && !sources_mounted) reopen_rail(ui, s, t, true, width, height);
     if (window_width >= 800 && !inspector_mounted) reopen_rail(ui, s, t, false, width, height);
@@ -871,6 +1063,10 @@ static void drawer(cui_context *ui, AppState *s, const cui_theme *t, float width
     }
 }
 void app_frame(cui_context *ui, AppState *s, float width, float height) {
+    if(s->zoom_popup_initialized) {
+        if(s->settings.overlay.open || (s->live.enabled&&!s->live.connected))cui_overlay_close(ui,&s->zoom_popup);
+        else cui_overlay_update(ui,&s->zoom_popup);
+    }
     s->source_picker.viewport = (cui_rect){0, 0, width, height};
     if (s->source_picker.popup.overlay.open && (!s->live.connected ||
         s->source_picker.generation != s->live.generation || s->settings.overlay.open))
@@ -901,5 +1097,6 @@ void app_frame(cui_context *ui, AppState *s, float width, float height) {
     drawer(ui, s, &t, width, height);
     if (!left && !(s->panel_sheet.overlay.open && s->drawer_kind == 1))
         app_source_picker_close(ui, s);
+    zoom_popup(ui,s,&t,width,height);
     app_settings_frame(ui, s, &t, width, height);
 }
