@@ -54,6 +54,49 @@ Do not use the Arch installer or Linux `make install` instructions on macOS.
 check: daemon/client IPC, pause/resume, MKV capture, MP4 finalization and shutdown.
 It does not request capture permissions or test Apple hardware APIs.
 
+## Try the redesign prototype
+
+The unfinished CUI workspace is opt-in and attaches to a running daemon. Build
+both processes with the same options; the prototype and legacy panel bundle
+incompatible Clay versions and cannot be enabled together:
+
+```sh
+make -j4 CUI=1 PANEL=0
+./cast --headless
+# In a second terminal, from this checkout:
+./cast workspace
+```
+
+The workspace shows live composition and supports acknowledged layout, fit,
+camera placement/size, display and camera selection. Output actions and most
+Settings forms are still unavailable. Closing the workspace leaves capture
+running; stop the foreground daemon with Ctrl+C. Both commands use your default
+configuration; supply the same `--config` and `--socket` when overriding them.
+Hardware capture still needs the permissions described below.
+
+For a disconnected visual fixture that needs no capture permissions:
+
+```sh
+make -C ui -j4
+./ui/build/cast-ui-preview
+make -C ui check check-native
+```
+
+On macOS, `check-native` briefly opens ten bounded Cocoa windows on the logged-in
+desktop and validates captured drawable pixels, including Retina scaling.
+The fixture does not connect to a daemon. See [workspace documentation](../ui/README.md)
+for the isolated synthetic daemon example and current prototype limits.
+
+`make macos-app` continues to package the legacy panel (`CUI=0 PANEL=1`);
+launch the prototype with `workspace` from Terminal during development.
+
+Validation on 2026-10-20: the default build and development app bundle, the
+`CUI=1 PANEL=0` build with `make check-macos`, workspace unit/bridge checks,
+and all ten native rendering cases pass on this Apple Silicon Mac. Each of the
+three connected workspace tabs displayed nonuniform synthetic composition frames
+while recording and streaming stayed idle. This checkpoint does not repeat
+permission-granted hardware capture acceptance for the redesign.
+
 ## Initial behavior and permissions
 
 The macOS defaults use `backend=macos`, disable virtual output and camera, and

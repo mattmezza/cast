@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the native workspace on a private Xvfb, never on the desktop."""
+"""Render the native workspace on Linux Xvfb or the macOS desktop."""
 import json
 import math
 import os
@@ -41,7 +41,13 @@ def run_inside(captures):
         data = capture.read_bytes()
         assert data[:2] == b"BM", name
         width, height = struct.unpack_from("<ii", data, 18)
-        assert (width, abs(height)) == tuple(map(int, size.split("x"))), (name, width, height)
+        logical_width, logical_height = map(int, size.split("x"))
+        if sys.platform == "darwin":
+            # SDL captures drawable pixels, which are scaled on Retina displays.
+            scale = width / logical_width
+            assert scale >= 1 and abs(abs(height) - logical_height * scale) <= 1, (name, width, height)
+        else:
+            assert (width, abs(height)) == (logical_width, logical_height), (name, width, height)
 
     # CLI validation must reject bad input before starting a native host.
     for args in (["--size", "479x360"], ["--size", "480x359"],
@@ -60,8 +66,15 @@ def main():
         return 0
     if sys.argv[1:]:
         raise SystemExit("No arguments expected")
+    if sys.platform == "darwin":
+        # Cocoa requires the logged-in desktop; each window closes after five frames.
+        os.environ["SDL_RENDER_DRIVER"] = "software"
+        os.environ["SDL_VIDEODRIVER"] = "cocoa"
+        with tempfile.TemporaryDirectory(prefix="cast-ui-native-") as directory:
+            run_inside(Path(directory))
+        return 0
     if sys.platform != "linux":
-        raise SystemExit("Native smoke uses Linux Xvfb; run the workspace manually on macOS")
+        raise SystemExit("Native smoke supports Linux and macOS")
     for dependency in ("xvfb-run", "xauth"):
         if not shutil.which(dependency):
             raise SystemExit(f"Native smoke requires {dependency}")

@@ -103,6 +103,9 @@ CUI_SOURCES =
 CUI_LIBRARIES =
 CUI_FONT_OBJECT =
 CUI_HASH_INPUTS =
+ifeq ($(CUI):$(PANEL),1:1)
+$(error CUI=1 requires PANEL=0; the prototype and legacy panel use incompatible Clay versions)
+endif
 ifeq ($(CUI),1)
 PACKAGES += sdl3 freetype2 harfbuzz
 CUI_SOURCES = ui/main.c ui/app.c ui/menus.c ui/settings.c ui/cast_theme.c ui/brand.c ui/source_picker.c ui/daemon_bridge.c
