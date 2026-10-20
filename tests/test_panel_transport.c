@@ -458,7 +458,8 @@ int main(int argc, char **argv)
     assert(shared->pixels[0][0] == 0x20 && shared->pixels[0][1] == 0x25);
     /* A private composition must be live without revealing outgoing lanes. */
     uint64_t composition_deadline = cast_now_ns() + UINT64_C(2000000000);
-    while (shared->composition_pixels[0] == 0x20 &&
+    while ((shared->frame[PANEL_PREVIEW_COMPOSITION].width != 800 ||
+            shared->composition_pixels[0] == 0x20) &&
            cast_now_ns() < composition_deadline) delay();
     assert(shared->frame[PANEL_PREVIEW_COMPOSITION].width == 800);
     assert(shared->composition_pixels[0] != 0x20);

@@ -32,7 +32,7 @@ Build the same executable for both processes, from the repository root:
 ```sh
 # Linux: select the capture backends installed on your machine.
 make CUI=1 PANEL=0 X11=1 WAYLAND=0
-# macOS: uses Makefile.macos automatically; Community only, macOS >= 13.
+# macOS: uses Makefile.macos automatically; macOS >= 13.
 # make CUI=1 PANEL=0
 ```
 
@@ -105,6 +105,10 @@ does not block screen composition. It reads acknowledged composition, output/pri
 edition state, and displays the same private composition across all workspace tabs.
 This is a composition preview, rather than a monitor of each outgoing feed's
 pause, freeze, blur or lane-specific annotations.
+The private preview preserves source detail up to 1920×1080; outgoing preview slots
+remain capped at 640×360. Source images smaller than the displayed stage still
+require upscaling. Routine command barriers render the current composition, while
+source/privacy invalidation clears the image until a fresh capture arrives.
 Frames are removed on disconnect, target changes, missed snapshots and generation
 or privacy changes. Connection attempts retry automatically; only one control panel
 can attach to a daemon at a time. Composition controls disable while an edit is

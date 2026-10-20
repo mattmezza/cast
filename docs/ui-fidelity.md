@@ -59,3 +59,13 @@ Settings category navigation and session appearance work. Device selection, othe
 capture configuration, recording/streaming actions, project management and prompter
 operation remain unfinished. Those gaps belong to application/service integration, not to
 the custom-body, modal or menu capabilities demonstrated by the pinned toolkit.
+
+## Settings control corrections
+
+All settings sliders use the configurable `cui_slider_events` API with an explicit
+track width inside the 160px value column. The legacy `cui_slider` wrapper fixes
+its outer width at 260px; using that wrapper in a narrower column caused overflow.
+The close button uses `icon_only` and a dedicated icon callback; the earlier rail
+callback included a growing text slot and displaced the glyph. Both issues were
+application composition mistakes; neither requires a toolkit patch. Regression
+checks cover all seven sliders and close-icon centering at three window widths.
