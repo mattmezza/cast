@@ -42,7 +42,8 @@ typedef struct PanelClient PanelClient;
 /* Connection/reconnection and acknowledged commands run on a bounded worker. */
 PanelClient *panel_client_open(const Config *, uint64_t x11_window, char *, size_t);
 void panel_client_close(PanelClient *);
-/* Polling never waits on the worker. A snapshot may describe a disconnected daemon. */
+/* Snapshot reads briefly lock metadata; they never wait for worker socket I/O.
+ * A snapshot may describe a disconnected daemon. */
 bool panel_client_snapshot(PanelClient *, PanelSnapshot *);
 /* 1 copied a new frame, 0 unchanged/busy, -1 disconnected. Caller owns Frame. */
 int panel_client_frame(PanelClient *, int target, Frame *, char *, size_t);

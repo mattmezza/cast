@@ -4,6 +4,7 @@ int cast_panel_test_cli_entry(int, char **);
 #include "../src/main.c"
 #undef main
 #include <assert.h>
+#include <pthread.h>
 #include <libavutil/log.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
@@ -54,6 +55,20 @@ static void delay(void)
 {
     struct timespec ts = {.tv_nsec = 2000000};
     nanosleep(&ts, NULL);
+}
+typedef struct {
+    PanelClient *client;
+    unsigned missed;
+} SnapshotReader;
+static void *read_snapshots(void *data)
+{
+    SnapshotReader *reader = data;
+    PanelSnapshot snapshot;
+    for (unsigned i = 0; i < 20000; ++i) {
+        if (!panel_client_snapshot(reader->client, &snapshot)) ++reader->missed;
+        if (!(i % 100)) delay();
+    }
+    return NULL;
 }
 static pid_t start_daemon(Config config, Startup startup)
 {
@@ -234,6 +249,16 @@ static void test_application_lifecycle(Config config, const char *directory)
     PanelClient *client = panel_client_open(&config, 0, error, sizeof error);
     assert(client);
     PanelSnapshot snapshot = wait_client(client, true, 0);
+    /* The worker refreshes every 30 ms. A metadata lock collision must not
+     * masquerade as an unavailable snapshot and blank the workspace. */
+    SnapshotReader readers[2] = {{.client = client}, {.client = client}};
+    pthread_t reader;
+    assert(!pthread_create(&reader, NULL, read_snapshots, &readers[0]));
+    read_snapshots(&readers[1]);
+    assert(!pthread_join(reader, NULL));
+    unsigned missed = readers[0].missed + readers[1].missed;
+    fprintf(stderr, "snapshot contention misses: %u / 40000\n", missed);
+    assert(!missed);
     panel_lifecycle_poll(lifecycle, true, &process);
     assert(process.state == PANEL_DAEMON_RUNNING && process.owned);
     assert(snapshot.state.virtual_paused && !snapshot.state.recording &&

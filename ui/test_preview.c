@@ -11,6 +11,7 @@ typedef struct {
     AppState app;
     float width, height;
     unsigned live_bitmap_count;
+    cui_draw_list draw;
 } Preview;
 
 static cui_size measure(void *user, cui_str text, float size) {
@@ -49,6 +50,7 @@ static void frame(Preview *p) {
         }
     }
     cui_draw_list draw = cui_end_frame(p->ui);
+    p->draw = draw;
     assert(draw.count > 0);
     p->live_bitmap_count = 0;
     for (size_t i = 0; i < draw.count; ++i)
@@ -374,6 +376,21 @@ static void menus(void) {
     for (unsigned i = 0; i < 6; ++i) {
         click(&p, triggers[i]);
         assert(p.app.menus[i].overlay.open);
+        if (i == 0) {
+            cui_draw_list draw = p.draw;
+            cui_rect label = {0}, shortcut = {0};
+            for (size_t c = 0; c < draw.count; ++c) {
+                const cui_draw_command *command = &draw.commands[c];
+                if (command->type != CUI_DRAW_TEXT) continue;
+                if (command->text.length == 11 && !memcmp(command->text.data, "New project", 11))
+                    label = command->bounds;
+                if (command->text.length == 6 && !memcmp(command->text.data, "Ctrl+N", 6))
+                    shortcut = command->bounds;
+            }
+            assert(label.w > 0 && shortcut.w > 0);
+            assert(shortcut.x > label.x + label.w);
+            assert(fabsf(label.y + label.h / 2 - shortcut.y - shortcut.h / 2) < 1);
+        }
         for (unsigned j = 0; j < 6; ++j)
             assert(p.app.menus[j].overlay.open == (i == j));
         key(&p, CUI_KEY_ESCAPE, 0);

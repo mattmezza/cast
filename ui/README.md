@@ -109,8 +109,10 @@ The private preview preserves source detail up to 1920×1080; outgoing preview s
 remain capped at 640×360. Source images smaller than the displayed stage still
 require upscaling. Routine command barriers render the current composition, while
 source/privacy invalidation clears the image until a fresh capture arrives.
-Frames are removed on disconnect, target changes, missed snapshots and generation
-or privacy changes. Connection attempts retry automatically; only one control panel
+Frames are removed on disconnect, target changes, failed validation and generation
+or privacy changes. Snapshot reads serialize with short worker metadata updates;
+ordinary lock contention does not clear the preview. Pixels use a read-only shared
+memory mapping; the socket carries attachment and control messages. Connection attempts retry automatically; only one control panel
 can attach to a daemon at a time. Composition controls disable while an edit is
 pending or the daemon is disconnected. Failed edits display a notice; pending edits
 are discarded across connection changes and are never replayed. The center camera

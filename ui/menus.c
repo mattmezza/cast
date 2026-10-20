@@ -50,9 +50,12 @@ static void menu_row(cui_context *ui, void *user) {
     MenuRow *row = user;
     cui_color fg = row->theme->text, muted = row->theme->muted;
     if (row->disabled) { fg.a = 102; muted.a = 102; }
+    cui_begin_box(ui, 0, (cui_box){.width = -1, .row = true,
+        .gap = 12, .align_y = CUI_ALIGN_CENTER});
     cui_text(ui, cui_string(row->def->label), 12, fg);
     cui_begin_box(ui, 0, (cui_box){.width = -1, .height = 1}); cui_end_box(ui);
     cui_text_ex(ui, cui_string(row->def->shortcut), 10, muted, 0, (cui_text_style){.family=1,.monospace=true});
+    cui_end_box(ui);
 }
 static void dispatch(cui_context *ui, AppState *app, const MenuDef *def, cui_id trigger) {
     if (!strcmp(def->action, "left")) app->show_sources = !app->show_sources;

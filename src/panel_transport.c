@@ -850,9 +850,13 @@ void panel_client_close(PanelClient *c)
 }
 bool panel_client_snapshot(PanelClient *c, PanelSnapshot *snapshot)
 {
-    if (!c || pthread_mutex_trylock(&c->mutex)) {
+    if (!c) {
         return false;
     }
+    /* Worker socket I/O runs outside this mutex. Wait for its short metadata
+     * update instead of reporting a missing snapshot: the workspace correctly
+     * clears pixels when it cannot validate their generation/privacy epoch. */
+    pthread_mutex_lock(&c->mutex);
     PanelSnapshot fresh;
     if (c->shared && shared_snapshot(c->shared, &fresh) &&
         fresh.daemon_generation == c->generation) {
