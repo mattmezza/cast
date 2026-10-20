@@ -1,5 +1,6 @@
 #include "daemon_bridge.h"
 #include "../src/panel_transport.h"
+#include <ctype.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,6 +14,11 @@ struct DaemonBridge {
     bool pending;
     uint64_t edit_generation, edit_ack;
     char edit_error[256];
+    AppDeviceKind discovery;
+    AppDevices devices, screens, cameras;
+    uint64_t devices_generation;
+    bool metadata_valid;
+    unsigned char metadata[offsetof(AppLive, devices)];
 };
 
 static void clear_frame(DaemonBridge *bridge)
@@ -121,36 +127,231 @@ int bridge_edit(DaemonBridge *bridge, AppEdit edit, const char *value, char *err
     return 0;
 }
 
+static bool monitor_backend(const Config *config)
+{
+    return !strcmp(config->backend, "xorg") || !strcmp(config->backend, "x11") ||
+           !strcmp(config->backend, "macos");
+}
+
+static int source_snapshot(DaemonBridge *bridge, PanelSnapshot *snapshot, char *error, size_t size)
+{
+    if (!bridge) return refuse_edit(NULL, error, size, "Workspace connection unavailable");
+    if (bridge->pending) return refuse_edit(bridge, error, size, "Wait for the pending request");
+    if (!panel_client_snapshot(bridge->client, snapshot))
+        return refuse_edit(bridge, error, size, "Daemon is busy; try again");
+    if (!snapshot->connected) return refuse_edit(bridge, error, size, "Daemon disconnected; request was not queued");
+    if (snapshot->command_queued != snapshot->command_completed || snapshot->command_queued == UINT64_MAX)
+        return refuse_edit(bridge, error, size, "Daemon command queue is busy");
+    return 0;
+}
+
+static void source_queued(DaemonBridge *bridge, const PanelSnapshot *snapshot)
+{
+    bridge->pending = true;
+    bridge->edit_generation = snapshot->daemon_generation;
+    bridge->edit_ack = snapshot->command_queued + 1;
+    bridge->edit_error[0] = 0;
+}
+
+int bridge_devices(DaemonBridge *bridge, AppDeviceKind kind, char *error, size_t size)
+{
+    if (kind != APP_DEVICE_SCREEN && kind != APP_DEVICE_CAMERA)
+        return refuse_edit(bridge, error, size, "Unsupported device kind");
+    PanelSnapshot snapshot;
+    if (source_snapshot(bridge, &snapshot, error, size)) return -1;
+    if (kind == APP_DEVICE_SCREEN && !monitor_backend(&snapshot.config))
+        return refuse_edit(bridge, error, size, "This capture backend uses desktop consent instead of a display list");
+    const char *args[] = {kind == APP_DEVICE_SCREEN ? "screen" : "camera", "list"};
+    char detail[CAST_ERR];
+    if (panel_client_command(bridge->client, 2, args, detail, sizeof detail))
+        return refuse_edit(bridge, error, size, "Device discovery could not be queued");
+    source_queued(bridge, &snapshot);
+    bridge->discovery = kind;
+    bridge->devices = kind == APP_DEVICE_SCREEN ? bridge->screens : bridge->cameras;
+    bridge->devices.kind = kind;
+    bridge->devices.generation = snapshot.daemon_generation;
+    bridge->devices.loading = true;
+    bridge->devices.error[0] = 0;
+    if (error && size) error[0] = 0;
+    return 0;
+}
+
+int bridge_source(DaemonBridge *bridge, AppDeviceKind kind, const char *id, char *error, size_t size)
+{
+    if (!id || (kind != APP_DEVICE_SCREEN && kind != APP_DEVICE_CAMERA))
+        return refuse_edit(bridge, error, size, "Invalid source selection");
+    PanelSnapshot snapshot;
+    if (source_snapshot(bridge, &snapshot, error, size)) return -1;
+    const AppDevices *cache = kind == APP_DEVICE_SCREEN ? &bridge->screens : &bridge->cameras;
+    bool found = false;
+    for (unsigned i = 0; i < cache->count; ++i)
+        if (!strcmp(id, cache->choices[i].id)) found = true;
+    size_t capacity = kind == APP_DEVICE_SCREEN ? sizeof snapshot.config.monitor : sizeof snapshot.config.camera_device;
+    if (*id && (!found || cache->generation != snapshot.daemon_generation || strlen(id) >= capacity))
+        return refuse_edit(bridge, error, size, "Choose a device from the current discovered list");
+    if (kind == APP_DEVICE_SCREEN && ((*id && !monitor_backend(&snapshot.config)) ||
+        (!*id && strcmp(snapshot.config.backend, "wayland"))))
+        return refuse_edit(bridge, error, size, "This display selection is unavailable for the capture backend");
+    const char *args[] = {kind == APP_DEVICE_SCREEN ? "screen" : "camera", "select", id};
+    int count = 3;
+    if (kind == APP_DEVICE_CAMERA) args[1] = "device";
+    if (kind == APP_DEVICE_SCREEN && !*id) { args[0] = "capture"; args[1] = "monitor"; count = 2; }
+    char detail[CAST_ERR];
+    int result = kind == APP_DEVICE_CAMERA && !*id
+        ? panel_client_setting(bridge->client, "camera.enabled", "false", detail, sizeof detail)
+        : panel_client_command(bridge->client, count, args, detail, sizeof detail);
+    if (result) return refuse_edit(bridge, error, size, "Source selection could not be queued");
+    source_queued(bridge, &snapshot);
+    if (error && size) error[0] = 0;
+    return 0;
+}
+
+static bool parse_devices(AppDevices *devices, const PanelSnapshot *snapshot, AppDeviceKind kind)
+{
+    const char *reply = snapshot->device_reply;
+    const char *end = memchr(reply, 0, sizeof snapshot->device_reply);
+    devices->kind = kind;
+    devices->generation = snapshot->daemon_generation;
+    if (!end || (end != reply && end[-1] != '\n')) return false;
+    if (kind == APP_DEVICE_CAMERA && !strcmp(reply,
+        "No accessible V4L2 capture devices. Check device ACLs with getfacl /dev/videoN.\n")) return true;
+    bool mac = !strcmp(snapshot->config.backend, "macos");
+    for (const char *line = reply; line < end;) {
+        const char *next = memchr(line, '\n', (size_t)(end - line));
+        if (!next) return false;
+        const char *start = line;
+        if (kind == APP_DEVICE_SCREEN && !mac) {
+            if (next - line < 3 || (line[0] != '*' && line[0] != ' ') || line[1] != ' ') return false;
+            start += 2;
+        }
+        const char *split = start;
+        while (split < next && *split != ' ' && !(mac && *split == ':')) ++split;
+        /* Linux camera paths and macOS camera UIDs may contain colons. */
+        if (kind == APP_DEVICE_CAMERA) { split = start; while (split < next && *split != ' ') ++split; }
+        size_t id_size = (size_t)(split - start);
+        size_t capacity = kind == APP_DEVICE_SCREEN ? sizeof snapshot->config.monitor : sizeof snapshot->config.camera_device;
+        if (!id_size || id_size >= capacity || id_size >= APP_DEVICE_ID_MAX || split == next || devices->count == APP_DEVICE_MAX)
+            return false;
+        for (const char *p = start; p < next; ++p)
+            if ((unsigned char)*p < 32 || (unsigned char)*p == 127) return false;
+        if (kind == APP_DEVICE_SCREEN && mac) {
+            for (const char *p = start; p < split; ++p) if (!isdigit((unsigned char)*p)) return false;
+        }
+        if (kind == APP_DEVICE_CAMERA && !mac) {
+            if (id_size < 11 || strncmp(start, "/dev/video", 10)) return false;
+            for (const char *p = start + 10; p < split; ++p) if (!isdigit((unsigned char)*p)) return false;
+        }
+        if (kind == APP_DEVICE_SCREEN) {
+            int width = 0, height = 0, x = 0, y = 0, consumed = 0;
+            char geometry[128];
+            size_t bytes = (size_t)(next - split);
+            if (bytes >= sizeof geometry) return false;
+            memcpy(geometry, split, bytes); geometry[bytes] = 0;
+            if (mac) {
+                const char *dimensions = !strncmp(geometry, " (main): ", 9) ? geometry + 9
+                    : !strncmp(geometry, ": ", 2) ? geometry + 2 : NULL;
+                if (!dimensions || sscanf(dimensions, "%dx%d%n", &width, &height, &consumed) != 2 ||
+                    dimensions[consumed]) return false;
+            } else {
+                if (sscanf(geometry, " %dx%d%d%d%n", &width, &height, &x, &y, &consumed) != 4 ||
+                    (geometry[consumed] && strcmp(geometry + consumed, " primary"))) return false;
+            }
+            if (width < 1 || height < 1) return false;
+        }
+        AppDeviceChoice *choice = &devices->choices[devices->count];
+        memcpy(choice->id, start, id_size);
+        choice->id[id_size] = 0;
+        for (unsigned i = 0; i < devices->count; ++i)
+            if (!strcmp(choice->id, devices->choices[i].id)) return false;
+        const char *label = kind == APP_DEVICE_SCREEN ? start : split + 1;
+        const char *label_end = next;
+        if (kind == APP_DEVICE_CAMERA && !mac) {
+            const char *formats = strstr(label, " formats:");
+            if (!formats || formats > next) return false;
+            label_end = formats;
+        }
+        size_t label_size = (size_t)(label_end - label);
+        if (!label_size || label_size >= sizeof choice->label) return false;
+        memcpy(choice->label, label, label_size);
+        choice->label[label_size] = 0;
+        ++devices->count;
+        line = next + 1;
+    }
+    return true;
+}
+
 static void edit_snapshot(DaemonBridge *bridge, const PanelSnapshot *snapshot, AppLive *out)
 {
+    if (snapshot && (!snapshot->connected ||
+        (bridge->devices_generation && bridge->devices_generation != snapshot->daemon_generation))) {
+        memset(&bridge->devices, 0, sizeof bridge->devices);
+        memset(&bridge->screens, 0, sizeof bridge->screens);
+        memset(&bridge->cameras, 0, sizeof bridge->cameras);
+    }
+    if (snapshot && snapshot->connected) bridge->devices_generation = snapshot->daemon_generation;
     if (snapshot && bridge->pending) {
         if (!snapshot->connected || snapshot->daemon_generation != bridge->edit_generation) {
             bridge->pending = false;
             snprintf(bridge->edit_error, sizeof bridge->edit_error,
-                     "Daemon connection changed; edit canceled. Inspect the current composition.");
+                     "Daemon connection changed; request canceled. Inspect the current settings.");
         } else if (snapshot->command_completed >= bridge->edit_ack) {
             bridge->pending = false;
+            if (bridge->discovery != APP_DEVICE_NONE) {
+                AppDevices *parsed = calloc(1, sizeof *parsed);
+                bool valid = parsed && snapshot->device_reply_id == bridge->edit_ack &&
+                    !snapshot->device_reply_failed && parse_devices(parsed, snapshot, bridge->discovery);
+                if (valid) {
+                    bridge->devices = *parsed;
+                    if (bridge->discovery == APP_DEVICE_SCREEN) bridge->screens = *parsed;
+                    else bridge->cameras = *parsed;
+                } else {
+                    if (bridge->discovery == APP_DEVICE_SCREEN) memset(&bridge->screens, 0, sizeof bridge->screens);
+                    else memset(&bridge->cameras, 0, sizeof bridge->cameras);
+                    bridge->devices.count = 0;
+                    snprintf(bridge->devices.error, sizeof bridge->devices.error, "Device discovery failed or returned an incomplete list. Try again.");
+                }
+                free(parsed);
+            }
             if (snapshot->command_failed)
                 snprintf(bridge->edit_error, sizeof bridge->edit_error,
-                         "Daemon rejected the composition edit. The current composition is unchanged.");
+                         "Daemon rejected the requested change. Current settings remain authoritative.");
             else bridge->edit_error[0] = 0;
         }
     }
+    if (!bridge->pending) {
+        bridge->devices.loading = false;
+        bridge->discovery = APP_DEVICE_NONE;
+    }
+    out->devices = bridge->devices;
     out->pending = bridge->pending;
     snprintf(out->edit_error, sizeof out->edit_error, "%s", bridge->edit_error);
 }
 
-static void copy_config(AppLive *out, const PanelSnapshot *snapshot)
+static void source_label(char *out, size_t size, const char *text)
+{
+    if (!size) return;
+    size_t i = 0;
+    for (; text[i] && i + 1 < size; ++i)
+        out[i] = (unsigned char)text[i] < 32 || (unsigned char)text[i] == 127 ? '?' : text[i];
+    out[i] = 0;
+}
+
+static void copy_config(AppLive *out, const PanelSnapshot *snapshot, const DaemonBridge *bridge)
 {
     const Config *config = &snapshot->config;
     const State *state = &snapshot->state;
+    out->can_select_monitor = monitor_backend(config);
+    out->can_reselect_portal = !strcmp(config->backend, "wayland");
+    out->can_select_camera = true;
+    snprintf(out->screen_id, sizeof out->screen_id, "%.*s", (int)sizeof config->monitor - 1, config->monitor);
+    snprintf(out->camera_id, sizeof out->camera_id, "%.*s", (int)sizeof config->camera_device - 1, config->camera_device);
     out->pro = snapshot->edition.identity.pro;
     out->generation = snapshot->daemon_generation;
     out->privacy_epoch = snapshot->privacy_epoch;
     out->width = config->width;
     out->height = config->height;
     out->fps = config->fps;
-    snprintf(out->backend, sizeof out->backend, "%.*s", (int)sizeof config->backend, config->backend);
+    snprintf(out->backend, sizeof out->backend, "%.*s", (int)sizeof out->backend - 1, config->backend);
     snprintf(out->record_container, sizeof out->record_container, "%.*s", (int)sizeof config->record_container, config->record_container);
     snprintf(out->record_codec, sizeof out->record_codec, "%.*s", (int)sizeof config->video_codec, config->video_codec);
     snprintf(out->stream_service, sizeof out->stream_service, "%.*s", (int)sizeof config->stream.service, config->stream.service);
@@ -176,15 +377,59 @@ static void copy_config(AppLive *out, const PanelSnapshot *snapshot)
     out->camera_enabled = config->camera_enabled;
     out->camera_visible = config->camera_visible;
     out->mirror = config->mirror;
-    /* Generic source labels intentionally avoid exposing paths and user text. */
-    snprintf(out->screen_name, sizeof out->screen_name, "Screen capture");
-    snprintf(out->camera_name, sizeof out->camera_name, "%s", config->camera_enabled ? "Camera" : "Camera disabled");
+    bool default_display = !out->screen_id[0] || !strcmp(out->screen_id, "main");
+    bool default_camera = !out->camera_id[0] || !strcmp(out->camera_id, "default");
+    source_label(out->screen_name, sizeof out->screen_name,
+                 default_display ? "Default display" : out->screen_id);
+    source_label(out->camera_name, sizeof out->camera_name,
+                 !config->camera_enabled ? "No camera" : default_camera ? "Default camera" : out->camera_id);
     snprintf(out->mic_name, sizeof out->mic_name, "%s", config->mic ? "Microphone" : "Microphone off");
     snprintf(out->desktop_name, sizeof out->desktop_name, "%s", config->desktop ? "Desktop audio" : "Desktop audio off");
+    const AppDevices *caches[] = {&bridge->screens, &bridge->cameras};
+    for (unsigned kind = 0; kind < 2; ++kind) {
+        const AppDevices *cache = caches[kind];
+        const char *id = kind ? out->camera_id : out->screen_id;
+        bool default_source = kind ? default_camera : default_display;
+        if (cache->generation != snapshot->daemon_generation || (kind && !config->camera_enabled)) continue;
+        bool found = default_source && cache->count;
+        for (unsigned i = 0; i < cache->count; ++i)
+            if (!strcmp(id, cache->choices[i].id)) {
+                char *label = kind ? out->camera_name : out->screen_name;
+                source_label(label, 128, cache->choices[i].label);
+                found = true;
+                break;
+            }
+        if (!found) {
+            char *label = kind ? out->camera_name : out->screen_name;
+            char selected[128];
+            source_label(selected, sizeof selected, default_source ?
+                (kind ? "Default camera" : "Default display") : id);
+            snprintf(label, 128, "%.113s (unavailable)", selected);
+        }
+    }
     if (snapshot->composition_error[0])
         snprintf(out->error, sizeof out->error, "%s", snapshot->composition_error);
     else if (snapshot->error[0] || snapshot->stream.error[0])
         snprintf(out->error, sizeof out->error, "Daemon reported an error. Inspect cast status for details.");
+}
+
+static void remember_metadata(DaemonBridge *bridge, const AppLive *out)
+{
+    memcpy(bridge->metadata, out, sizeof bridge->metadata);
+    /* No borrowed pixel pointer or drawable state survives in this cache. */
+    memset(bridge->metadata + offsetof(AppLive, frame), 0, sizeof out->frame);
+    memset(bridge->metadata + offsetof(AppLive, has_frame), 0, sizeof out->has_frame);
+    bridge->metadata_valid = true;
+}
+
+static void busy_metadata(DaemonBridge *bridge, int target, AppLive *out)
+{
+    if (bridge->metadata_valid) memcpy(out, bridge->metadata, sizeof bridge->metadata);
+    out->frame = (cui_bitmap){0};
+    out->has_frame = false;
+    out->target = target;
+    out->snapshot_busy = true;
+    edit_snapshot(bridge, NULL, out);
 }
 
 void bridge_poll(DaemonBridge *bridge, int target, AppLive *out)
@@ -211,13 +456,19 @@ void bridge_poll(DaemonBridge *bridge, int target, AppLive *out)
     edit_snapshot(bridge, sampled ? &before : NULL, out);
     if (!sampled || !before.connected) {
         clear_frame(bridge);
+        if (!sampled) {
+            busy_metadata(bridge, target, out);
+            return;
+        }
         bridge->generation = 0;
-        if (sampled && before.error[0]) {
+        bridge->metadata_valid = false;
+        if (before.error[0]) {
             snprintf(out->error, sizeof out->error, "%.*s", (int)sizeof out->error-1, before.error);
             snprintf(out->status, sizeof out->status, "Daemon not connected");
         }
         return;
     }
+    if (before.daemon_generation != bridge->generation) bridge->metadata_valid = false;
     if (target != bridge->target || before.daemon_generation != bridge->generation ||
         before.privacy_epoch != bridge->privacy_epoch) clear_frame(bridge);
     bridge->target = target;
@@ -231,13 +482,25 @@ void bridge_poll(DaemonBridge *bridge, int target, AppLive *out)
         after.daemon_generation != before.daemon_generation ||
         after.privacy_epoch != before.privacy_epoch) {
         clear_frame(bridge);
+        if (observed && (!after.connected || after.daemon_generation != before.daemon_generation))
+            bridge->metadata_valid = false;
+        if (!observed) {
+            busy_metadata(bridge, target, out);
+            return;
+        }
+        if (after.connected && after.daemon_generation == before.daemon_generation) {
+            copy_config(out, &after, bridge);
+            out->connected = true;
+            snprintf(out->status, sizeof out->status, "Connected");
+            remember_metadata(bridge, out);
+        }
         if (copied < 0 && error[0])
             snprintf(out->error, sizeof out->error, "%.*s", (int)sizeof out->error-1, error);
         else if (observed && !after.connected && after.error[0])
             snprintf(out->error, sizeof out->error, "%.*s", (int)sizeof out->error-1, after.error);
         return;
     }
-    copy_config(out, &after);
+    copy_config(out, &after, bridge);
     out->connected = true;
     snprintf(out->status, sizeof out->status, "Connected");
     if (copied > 0) ++bridge->revision;
@@ -246,4 +509,5 @@ void bridge_poll(DaemonBridge *bridge, int target, AppLive *out)
         out->frame = (cui_bitmap){bridge->frame.data, (unsigned)bridge->frame.width,
             (unsigned)bridge->frame.height, (size_t)bridge->frame.stride, bridge->revision};
     }
+    remember_metadata(bridge, out);
 }

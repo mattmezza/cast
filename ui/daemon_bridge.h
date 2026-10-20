@@ -10,5 +10,8 @@ void bridge_poll(DaemonBridge *, int target, AppLive *out);
 /* Queue one allowlisted composition edit. Returns 0 queued, -1 refused.
  * No replay after disconnection or generation changes. */
 int bridge_edit(DaemonBridge *, AppEdit, const char *value, char *error, size_t);
+int bridge_devices(DaemonBridge *, AppDeviceKind, char *error, size_t);
+/* Empty camera ID disables it; empty portal screen ID opens desktop consent. */
+int bridge_source(DaemonBridge *, AppDeviceKind, const char *id, char *error, size_t);
 void bridge_close(DaemonBridge *);
 #endif

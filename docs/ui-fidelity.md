@@ -19,7 +19,7 @@ not every CUI renderer or a newer upstream release.
 | Inter plus IBM Plex Mono, medium/semibold weights and tracked uppercase labels | `cui_text.h` supports named family IDs, weights, style registration and shaping/measurement; `cui.h` also exposes `cui_text_style.letter_spacing`. `main.c` registers actual Inter regular/medium/semibold/bold and IBM Plex Mono regular/medium/semibold (family 1, monospace flag). Reference CSS specifies variable Inter, IBM Plex Mono, tabular numerals and `.085em` tracking for caps. | Font weights and the mono family are available in both standalone and embedded builds; application text styles select them. Font selection alone does not establish exact browser line wrapping or spacing. Different browser and FreeType/HarfBuzz rasterization also precludes assuming identical glyph pixels. |
 | Blurred backdrop behind overlays | `cui.h` lists rectangle, border, text, clip, image, mesh, drop-shadow and inset-shadow draw commands; it exposes shadow blur sigma but no backdrop-filter command. `cui_sdl3.c` prepares shadow masks and composites their textures. | This pinned public draw list/SDL renderer has no backdrop-blur operation. A translucent overlay and blurred shadow do not blur already-rendered content behind a dialog. Matching browser `backdrop-filter` would require a host/renderer extension or an application-managed filtered image. |
 | Composition preview, source cards, inspector and status | CUI boxes, images, custom drawing and independent scroll regions support the overall composition; the app already uses these for its stage/panels. | Remaining card content and visual detail are application scope. Live preview depends on the daemon bridge, not a widget limitation. |
-| Recording/projects, streaming, prompter, presets and other dialogs | The HTML/JS contain more working demonstration controls and dialogs than the native workspace. The attached native mode reads acknowledged state and supports layout, fit, eight camera anchors and camera width edits; device selectors, other configuration and output actions remain disabled. | Functional implementation gaps; do not describe the current workspace as complete feature parity. |
+| Recording/projects, streaming, prompter, presets and other dialogs | The HTML/JS contain more working demonstration controls and dialogs than the native workspace. The attached native mode reads acknowledged state and supports layout, fit, eight camera anchors and camera width edits; monitor/camera selectors discover and select real devices; other configuration and output actions remain disabled. | Functional implementation gaps; do not describe the current workspace as complete feature parity. |
 
 The HTML reference has a desktop minimum width of 1020px and a desktop-window
 wrapper with an outer shadow. The native app additionally supports narrow drawers.
@@ -55,7 +55,7 @@ creating the SDL host.
 The current result is a visual workspace with live composition editing. Layout,
 contain/cover, eight camera anchors and camera width changes use acknowledged
 daemon commands; pending or rejected edits do not change authoritative selections.
-Settings category navigation and session appearance work. Device selection, other
+Settings category navigation and session appearance work. Monitor/camera selection uses the reference combo styling and acknowledged daemon state. Other
 capture configuration, recording/streaming actions, project management and prompter
 operation remain unfinished. Those gaps belong to application/service integration, not to
 the custom-body, modal or menu capabilities demonstrated by the pinned toolkit.
@@ -69,3 +69,13 @@ The close button uses `icon_only` and a dedicated icon callback; the earlier rai
 callback included a growing text slot and displaced the glyph. Both issues were
 application composition mistakes; neither requires a toolkit patch. Regression
 checks cover all seven sliders and close-icon centering at three window widths.
+
+## Source and camera selectors
+
+The local reference `cast-app.css` combo rules (lines 775–809) and `cast-app.js`
+combo behavior (lines 855–893) define the 36px trigger, trailing chevron, 32px
+rows, 4px popup padding/gap, selected check and 264px maximum height. The native
+picker composes these parts from CUI overlay, list, text-ellipsis and icon APIs;
+it does not substitute a platform dropdown. Real device data replaces the browser
+demo names. Linux/macOS parsing and reconnect/failure handling are bridge concerns.
+Native macOS runtime verification remains outstanding.

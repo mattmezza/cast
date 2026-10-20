@@ -3,12 +3,19 @@
 #define CAST_UI_PREVIEW_H
 #include "cui/cui_components.h"
 #include "live.h"
+#include "source_picker.h"
 typedef enum { APP_CAMERA, APP_RECORD, APP_STREAM, APP_WORKSPACE_COUNT } AppWorkspace;
 typedef enum { APP_OVERLAY, APP_SPLIT, APP_SCREEN, APP_WEBCAM, APP_STAGE, APP_LAYOUT_COUNT } AppLayout;
 typedef enum { APP_SYSTEM, APP_LIGHT, APP_DARK } AppAppearance;
 /* Local fixture choices or acknowledged daemon state; edits are single queued intents. */
-typedef struct {
+typedef struct AppState {
     AppLive live;
+    AppSourcePicker source_picker;
+    bool device_request_requested;
+    AppDeviceKind device_request_kind;
+    bool source_choice_requested;
+    AppDeviceKind source_choice_kind;
+    char source_choice_value[APP_DEVICE_ID_MAX];
     bool edit_requested;
     AppEdit edit;
     char edit_value[32];

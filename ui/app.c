@@ -48,7 +48,7 @@ static const char *composition_layouts[] = {"overlay", "split", "screen", "camer
 static const char *composition_anchors[] = {
     "top-left", "top", "top-right", "left", NULL, "right", "bottom-left", "bottom", "bottom-right"};
 static bool composition_disabled(const AppState *s) {
-    return s->edit_requested || s->live.pending || (s->live.enabled && !s->live.connected);
+    return s->edit_requested || s->live.pending || s->live.snapshot_busy || (s->live.enabled && !s->live.connected);
 }
 bool app_request_edit(AppState *s, AppEdit edit, const char *value) {
     if (!s || !value || !value[0] || strlen(value) >= sizeof s->edit_value || composition_disabled(s)) return false;
@@ -205,7 +205,7 @@ static void shortcuts(cui_context *ui, AppState *s, float width) {
         const cui_event *e = &events[i];
         if (cui_event_consumed(ui, i) || e->type != CUI_EVENT_KEY_DOWN || e->repeat ||
             e->ime_composing || e->prefer_character_input) continue;
-        if (s->settings.overlay.open || s->panel_sheet.overlay.open) continue;
+        if (s->settings.overlay.open || s->panel_sheet.overlay.open || s->source_picker.popup.overlay.open) continue;
         bool handled = true;
         if (e->modifiers) continue;
         if (e->key >= CUI_KEY_1 && e->key <= CUI_KEY_3) {
@@ -375,19 +375,6 @@ static bool section(cui_context *ui, AppState *s, const cui_theme *t,
     }
     return s->source_sections[index];
 }
-static void source_select(cui_context *ui, const cui_theme *t, const char *id,
-                          const char *label, const char *icon) {
-    cui_theme_button_colors colors = t->buttons[CUI_THEME_BUTTON_SECONDARY];
-    colors.normal = t->background; colors.border = t->border;
-    colors.hover = cast_design_tokens(t->dark).hover;
-    ButtonIcon leading = {cui_id_from(ui, id) ^ UINT64_C(0x6c656164), t, icon, 14};
-    ButtonIcon trailing = {cui_id_from(ui, id) ^ UINT64_C(0x7461696c), t, "down", 12};
-    cui_button_ex(ui, cui_id_from(ui, id), t, cui_string(label),
-        (cui_button_options){.variant = CUI_BUTTON_SECONDARY, .width = -1, .height = 40,
-            .font_size = 12.5f, .disabled = true, .custom_colors = true, .colors = colors,
-            .leading_content = button_icon, .leading_user = &leading,
-            .trailing_content = button_icon, .trailing_user = &trailing});
-}
 typedef struct { const cui_theme *theme; bool selected; } AnchorDot;
 static void anchor_dot(cui_context *ui, void *user) {
     const AnchorDot *dot = user;
@@ -413,7 +400,8 @@ static void source_content(cui_context *ui, AppState *s, const cui_theme *t) {
     }
     if (section(ui, s, t, 0, "Composition")) {
         text(ui, t, "Capture source");
-        source_select(ui, t, "source-choose", s->live.connected ? s->live.screen_name : "No source connected", "monitor");
+        app_source_picker(ui, s, t, APP_DEVICE_SCREEN, "source-choose",
+            s->live.connected ? s->live.screen_name : "No source connected");
         text(ui, t, "Layout");
         layout_picker(ui, s, t);
         cui_begin_box(ui, 0, (cui_box){.width = -1, .row = true, .gap = 4});
@@ -429,7 +417,8 @@ static void source_content(cui_context *ui, AppState *s, const cui_theme *t) {
     rule(ui, t);
     if (section(ui, s, t, 1, "Camera")) {
         text(ui, t, "Device");
-        source_select(ui, t, "camera-choose", s->live.connected ? s->live.camera_name : "No camera connected", "cam");
+        app_source_picker(ui, s, t, APP_DEVICE_CAMERA, "camera-choose",
+            s->live.connected ? (s->live.camera_enabled ? s->live.camera_name : "No camera") : "No camera connected");
         text(ui, t, "Position");
         cui_begin_box(ui,0,(cui_box){.width=-1,.gap=4});
         for (unsigned row = 0; row < 3; ++row) {
@@ -747,7 +736,8 @@ static void center(cui_context *ui, AppState *s, const cui_theme *t,
             .align_y = CUI_ALIGN_CENTER, .clip = true});
     app_icon(ui, cui_id_from(ui, "offline-icon"), t, cui_string("info"),
         (cui_icon_options){.size = CUI_ICON_CUSTOM, .custom_size = 14});
-    const char *notice = s->edit_requested || s->live.pending ? "Applying composition…" :
+    const char *notice = s->live.devices.loading || s->device_request_requested ? "Finding devices…" :
+        s->edit_requested || s->live.pending || s->source_choice_requested ? "Applying changes…" :
         s->live.edit_error[0] ? s->live.edit_error :
         s->live.enabled ? (s->live.connected ? (s->live.error[0] ? s->live.error :
             "Private composition preview · outputs controlled separately") :
@@ -881,6 +871,10 @@ static void drawer(cui_context *ui, AppState *s, const cui_theme *t, float width
     }
 }
 void app_frame(cui_context *ui, AppState *s, float width, float height) {
+    s->source_picker.viewport = (cui_rect){0, 0, width, height};
+    if (s->source_picker.popup.overlay.open && (!s->live.connected ||
+        s->source_picker.generation != s->live.generation || s->settings.overlay.open))
+        app_source_picker_close(ui, s);
     /* A drawer becomes its persistent panel at the desktop breakpoint. */
     if (s->panel_sheet_initialized && s->panel_sheet.overlay.open &&
         width >= (s->drawer_kind == 1 ? 1000 : 800))
@@ -905,5 +899,7 @@ void app_frame(cui_context *ui, AppState *s, float width, float height) {
     status(ui, s, &t, width);
     cui_end_box(ui);
     drawer(ui, s, &t, width, height);
+    if (!left && !(s->panel_sheet.overlay.open && s->drawer_kind == 1))
+        app_source_picker_close(ui, s);
     app_settings_frame(ui, s, &t, width, height);
 }

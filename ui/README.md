@@ -115,8 +115,13 @@ can attach to a daemon at a time. Composition controls disable while an edit is
 pending or the daemon is disconnected. Failed edits display a notice; pending edits
 are discarded across connection changes and are never replayed. The center camera
 anchor is unavailable because the current daemon supports eight edge positions.
-Device selection and the remaining configuration forms are still unavailable. Output actions
-remain disabled for this milestone.
+Capture source and camera selectors discover real devices asynchronously. Xorg and
+macOS display lists can be selected; Wayland offers the desktop consent picker.
+Synthetic capture has no display selector. Camera choices include No camera.
+Selections change only after daemon acknowledgment; unavailable, failed and empty
+lists remain explicit, with Retry on discovery failure. Linux V4L2 paths and macOS
+camera identifiers are parsed separately. Remaining configuration forms and output
+actions are still unavailable.
 
 Linux/macOS capture and Community/Pro capabilities remain unchanged. Recording,
 single-destination streaming and existing zoom remain free; cinematic zoom,
@@ -171,7 +176,8 @@ exports the first completed frame; capture saves the final rendered frame.
 `menus.c` composes the six application menus, `cast_theme.c` maps the design tokens, and `main.c` handles the native host, fonts,
 OS appearance and Ctrl/Cmd-comma shortcut. `daemon_bridge.c` sanitizes daemon state
 and borrows preview pixels through `live.h`. It queues allowlisted composition
-edits through the existing worker and observes command acknowledgments. No portable
+edits and source discovery/selection through the existing worker and observes command acknowledgments.
+`source_picker.c` renders the reference combo trigger and floating list. No portable
 UI module includes SDL.
 
 ## Pinned dependency
@@ -222,3 +228,14 @@ after building both `make CUI=1` and `make -C ui`. This requires `xdotool` and
 uses a private Xvfb and temporary synthetic daemon. It exercises real clicks,
 menu navigation, camera position/size, acknowledged values after reopening the
 workspace, and external CLI changes while outputs remain idle.
+
+Source selection integration (private Xvfb, no real webcam opened):
+
+```sh
+python3 ui/test_sources.py ./cast
+```
+
+The reference combo is 36px tall with a trailing chevron, a 4px popup inset,
+32px rows and a maximum height of 264px. It supports keyboard selection, Escape
+and outside dismissal, focus restoration, and selected checkmarks. Device commands
+share the bounded pending queue; discovery and choices are discarded on reconnect.

@@ -11,6 +11,8 @@ import sys
 import tempfile
 import time
 
+from test_composition import close_window
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -91,7 +93,7 @@ def assert_workspace_window(process):
                     if data:
                         x11.XFree(data)
                 assert not unexpected, unexpected
-                return
+                return window
             time.sleep(.03)
         raise AssertionError('Workspace WM_CLASS was not CastPanel or CastProPanel')
     finally:
@@ -126,10 +128,22 @@ def inside(binary):
             assert not state['stream']['active'], state
 
         def workspace(lane="camera"):
-            result = subprocess.run([*base, 'workspace', '--workspace', lane, '--frames', '60', '--debug-live'],
-                                    capture_output=True, text=True, timeout=25, env=runtime_environment)
-            assert result.returncode == 0, result.stderr
-            return json.loads(result.stdout.strip().splitlines()[-1])
+            process = subprocess.Popen([*base, 'workspace', '--workspace', lane, '--debug-live'],
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                       text=True, env=runtime_environment)
+            try:
+                window = assert_workspace_window(process)
+                # A render count can complete before the async worker attaches,
+                # especially while compiling. Exercise an actual elapsed session.
+                time.sleep(1.2)
+                close_window(window)
+                output, errors = process.communicate(timeout=25)
+                assert process.returncode == 0, errors
+                return json.loads(output.strip().splitlines()[-1])
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    process.communicate(timeout=5)
         offline = workspace()
         assert not offline['connected'] and not offline['has_frame'], offline
         with (temporary / 'daemon.log').open('w+') as log:
@@ -142,8 +156,8 @@ def inside(binary):
                 assert_outputs_idle(status())
                 for lane in ("camera", "record", "stream"):
                     live = workspace(lane)
-                    assert live['connected'] and live['has_frame'], live
-                    assert live['frame_non_uniform'], ('Composition remained a neutral/privacy frame', live)
+                    assert live['connected'] and live['preview_frames_seen'] > 0, live
+                    assert live['preview_non_uniform_seen'], ('Composition remained a neutral/privacy frame', live)
                     assert_outputs_idle(status())
                     assert daemon.poll() is None, 'Closing workspace stopped the daemon'
                 # A disappearing daemon must invalidate the displayed frame.

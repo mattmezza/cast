@@ -4,6 +4,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <string.h>
 
 typedef struct {
     cui_context *ui;
@@ -563,6 +564,125 @@ static void live_preview_target_and_aspect(void) {
     assert(p.live_bitmap_count == 0);
     cui_destroy(p.ui);
 }
+static void picker_reply(Preview *p, AppDeviceKind kind, unsigned count) {
+    p->app.device_request_requested = false;
+    p->app.live.devices = (AppDevices){.kind = kind, .count = count,
+                                      .generation = p->app.live.generation};
+    for (unsigned i = 0; i < count; ++i) {
+        snprintf(p->app.live.devices.choices[i].id, APP_DEVICE_ID_MAX, "device-%u", i);
+        snprintf(p->app.live.devices.choices[i].label, 256, "Device %u", i);
+    }
+    settle(p);
+}
+static void picker_live(Preview *p) {
+    p->app.live.enabled = p->app.live.connected = true;
+    p->app.live.can_select_monitor = p->app.live.can_select_camera = true;
+    p->app.live.generation = 42;
+    p->app.live.camera_enabled = true;
+    snprintf(p->app.live.screen_id, sizeof p->app.live.screen_id, "device-0");
+    snprintf(p->app.live.camera_id, sizeof p->app.live.camera_id, "device-0");
+    snprintf(p->app.live.screen_name, sizeof p->app.live.screen_name, "Device 0");
+    snprintf(p->app.live.camera_name, sizeof p->app.live.camera_name, "Device 0");
+    settle(p);
+}
+static void source_pickers(void) {
+    Preview p = create(1360, 1000);
+    click(&p, "source-choose");
+    assert(!p.app.source_picker.popup.overlay.open); /* Fixture never invents devices. */
+    picker_live(&p);
+    assert(bounds(&p, "source-choose").h == 36);
+    click(&p, "source-choose");
+    assert(p.app.source_picker.popup.overlay.open && p.app.device_request_requested);
+    assert(p.app.device_request_kind == APP_DEVICE_SCREEN);
+    assert(bounds(&p, "source-picker-status").h == 32);
+    picker_reply(&p, APP_DEVICE_SCREEN, 12);
+    p.app.live.snapshot_busy = true;
+    settle(&p);
+    assert(p.app.source_picker.popup.overlay.open);
+    assert(!app_request_edit(&p.app, APP_EDIT_LAYOUT, "split"));
+    p.app.live.snapshot_busy = false;
+    settle(&p);
+    inside(bounds(&p, "source-picker-popup"), (cui_rect){0, 0, p.width, p.height});
+    assert(bounds(&p, "source-picker-popup").h <= 266);
+    assert(cui_focused(p.ui) == id(&p, "source-picker-screen-item-0"));
+    key(&p, CUI_KEY_UP, 0);
+    assert(cui_focused(p.ui) == id(&p, "source-picker-screen-item-0"));
+    key(&p, CUI_KEY_END, 0);
+    assert(cui_focused(p.ui) == id(&p, "source-picker-screen-item-11"));
+    key(&p, CUI_KEY_DOWN, 0);
+    assert(cui_focused(p.ui) == id(&p, "source-picker-screen-item-11"));
+    assert(bounds(&p, "source-picker-screen-item-11").h == 32);
+    key(&p, CUI_KEY_ENTER, 0);
+    assert(!p.app.source_picker.popup.overlay.open && p.app.source_choice_requested);
+    assert(p.app.source_choice_kind == APP_DEVICE_SCREEN);
+    assert(!strcmp(p.app.source_choice_value, "device-11"));
+    assert(!strcmp(p.app.live.screen_id, "device-0")); /* Selection waits for acknowledgement. */
+    p.app.source_choice_requested = false;
+    settle(&p);
+    click(&p, "source-choose");
+    p.app.device_request_requested = false;
+    settle(&p);
+    key(&p, CUI_KEY_ESCAPE, 0);
+    assert(!p.app.source_picker.popup.overlay.open);
+    assert(cui_focused(p.ui) == id(&p, "source-choose"));
+    key(&p, CUI_KEY_DOWN, 0); /* Arrow opens a closed combo. */
+    assert(p.app.source_picker.popup.overlay.open);
+    p.app.device_request_requested = false;
+    settle(&p);
+    click(&p, "workspace-stream");
+    assert(!p.app.source_picker.popup.overlay.open && p.app.workspace == APP_CAMERA);
+    click(&p, "source-choose");
+    picker_reply(&p, APP_DEVICE_SCREEN, 0);
+    snprintf(p.app.live.devices.error, sizeof p.app.live.devices.error, "Discovery failed");
+    settle(&p);
+    click(&p, "source-picker-retry");
+    assert(p.app.device_request_requested && p.app.source_picker.popup.overlay.open);
+    p.app.live.devices.loading = true;
+    p.app.device_request_requested = false;
+    settle(&p);
+    assert(bounds(&p, "source-picker-status").h == 32);
+    picker_reply(&p, APP_DEVICE_SCREEN, 1);
+    click(&p, "camera-choose"); /* Direct switch between the two reference combos. */
+    assert(p.app.source_picker.popup.overlay.open && p.app.source_picker.kind == APP_DEVICE_CAMERA);
+    assert(p.app.device_request_requested && p.app.device_request_kind == APP_DEVICE_CAMERA);
+    picker_reply(&p, APP_DEVICE_CAMERA, 2);
+    key(&p, CUI_KEY_HOME, 0);
+    assert(cui_focused(p.ui) == id(&p, "source-picker-camera-none"));
+    key(&p, CUI_KEY_ENTER, 0);
+    assert(p.app.source_choice_requested && p.app.source_choice_kind == APP_DEVICE_CAMERA);
+    assert(!p.app.source_choice_value[0] && p.app.live.camera_enabled);
+    p.app.source_choice_requested = false;
+    settle(&p);
+    click(&p, "camera-choose");
+    picker_reply(&p, APP_DEVICE_CAMERA, 0);
+    assert(bounds(&p, "source-picker-camera-none").h == 32);
+    assert(bounds(&p, "source-picker-status").h == 32);
+    p.app.live.generation++;
+    settle(&p);
+    assert(!p.app.source_picker.popup.overlay.open);
+    p.app.live.can_select_monitor = false;
+    click(&p, "source-choose");
+    assert(!p.app.source_picker.popup.overlay.open);
+    p.app.live.can_reselect_portal = true;
+    settle(&p);
+    click(&p, "source-choose");
+    key(&p, CUI_KEY_ENTER, 0);
+    assert(p.app.source_choice_requested && p.app.source_choice_kind == APP_DEVICE_SCREEN);
+    assert(!p.app.source_choice_value[0]);
+    cui_destroy(p.ui);
+
+    p = create(480, 820);
+    picker_live(&p);
+    click(&p, "toggle-sources");
+    click(&p, "source-choose");
+    picker_reply(&p, APP_DEVICE_SCREEN, 2);
+    key(&p, CUI_KEY_ESCAPE, 0);
+    assert(!p.app.source_picker.popup.overlay.open && p.app.panel_sheet.overlay.open);
+    assert(cui_focused(p.ui) == id(&p, "source-choose"));
+    key(&p, CUI_KEY_ESCAPE, 0);
+    assert(!p.app.panel_sheet.overlay.open);
+    cui_destroy(p.ui);
+}
 int main(void) {
     workspaces();
     compositions();
@@ -571,6 +691,7 @@ int main(void) {
     settings_controls_fit();
     menus();
     responsive();
+    source_pickers();
     live_composition_edits();
     live_preview_target_and_aspect();
     puts("Workspace preview: pointer, keyboard, composition, panels, modal settings and responsive bounds passed");

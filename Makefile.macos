@@ -97,7 +97,7 @@ CUI_FONT_OBJECT =
 CUI_HASH_INPUTS =
 ifeq ($(CUI),1)
 PACKAGES += sdl3 freetype2 harfbuzz
-CUI_SOURCES = ui/main.c ui/app.c ui/menus.c ui/settings.c ui/cast_theme.c ui/brand.c ui/daemon_bridge.c
+CUI_SOURCES = ui/main.c ui/app.c ui/menus.c ui/settings.c ui/cast_theme.c ui/brand.c ui/source_picker.c ui/daemon_bridge.c
 CUI_LIBRARIES = ui/build/vendor/libcui_sdl3.a ui/build/vendor/libcui_text.a ui/build/vendor/libcui_bidi.a ui/build/vendor/libcui.a
 CUI_FONT_OBJECT = $(BUILD)/ui/workspace_fonts.o
 CUI_HASH_INPUTS = $(CUI_SOURCES) $(wildcard ui/*.h ui/*.S ui/.cui-lock.json ui/assets/fonts/*.otf ui/assets/fonts/*.ttf) ui/Makefile ui/sources.mk

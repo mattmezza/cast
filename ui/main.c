@@ -23,6 +23,18 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef CAST_CUI_EMBEDDED
+static void debug_json_string(const char *value) {
+    putchar('"');
+    for (const unsigned char *p = (const unsigned char *)value; *p; ++p) {
+        if (*p == '"' || *p == '\\') { putchar('\\'); putchar(*p); }
+        else if (*p < 32) printf("\\u%04x", *p);
+        else putchar(*p);
+    }
+    putchar('"');
+}
+#endif
+
 /* SDL watchers may run off the UI thread. Only communicate a pending request. */
 static bool SDLCALL settings_shortcut(void *user, SDL_Event *event) {
     atomic_bool *pending = user;
@@ -154,6 +166,8 @@ int main(int argc, char **argv) {
     bool open_settings = false;
 #ifdef CAST_CUI_EMBEDDED
     bool debug_live = false;
+    unsigned long long preview_frames_seen = 0;
+    bool preview_non_uniform_seen = false;
 #endif
     AppState app;
     app_init(&app);
@@ -376,6 +390,10 @@ int main(int argc, char **argv) {
         }
         if (now >= next_poll || previous_target != (int)app.workspace) {
             bridge_poll(bridge, (int)app.workspace, &app.live);
+            if (app.live.has_frame) {
+                ++preview_frames_seen;
+                preview_non_uniform_seen |= live_frame_non_uniform(&app.live);
+            }
             app.live.enabled = true;
             if (!bridge && attach_error[0])
                 snprintf(app.live.error, sizeof app.live.error, "%s", attach_error);
@@ -409,6 +427,35 @@ int main(int argc, char **argv) {
         }
         app_frame(ui, &app, width, height);
 #ifdef CAST_CUI_EMBEDDED
+        if (app.device_request_requested) {
+            char device_error[CAST_ERR] = {0};
+            int queued = bridge_devices(bridge, app.device_request_kind,
+                                        device_error, sizeof device_error);
+            if (queued < 0) {
+                app.live.devices.kind = app.device_request_kind;
+                app.live.devices.loading = false;
+                snprintf(app.live.devices.error, sizeof app.live.devices.error, "%.*s",
+                         (int)sizeof app.live.devices.error - 1, device_error);
+            }
+            app.device_request_requested = false;
+            app.device_request_kind = APP_DEVICE_NONE;
+            next_poll = 0;
+            cui_invalidate(ui);
+        }
+        if (app.source_choice_requested) {
+            char source_error[CAST_ERR] = {0};
+            int queued = bridge_source(bridge, app.source_choice_kind,
+                                       app.source_choice_value, source_error, sizeof source_error);
+            app.live.pending = queued == 0;
+            if (queued < 0)
+                snprintf(app.live.edit_error, sizeof app.live.edit_error, "%.*s",
+                         (int)sizeof app.live.edit_error - 1, source_error);
+            app.source_choice_requested = false;
+            app.source_choice_kind = APP_DEVICE_NONE;
+            app.source_choice_value[0] = 0;
+            next_poll = 0;
+            cui_invalidate(ui);
+        }
         if (app.edit_requested) {
             char edit_error[CAST_ERR] = {0};
             int queued = bridge_edit(bridge, app.edit, app.edit_value, edit_error, sizeof edit_error);
@@ -458,13 +505,13 @@ int main(int argc, char **argv) {
     }
 cleanup:
 #ifdef CAST_CUI_EMBEDDED
-    if (debug_live)
+    if (debug_live) {
         printf("{\"connected\":%s,\"has_frame\":%s,\"generation\":%llu,"
                "\"privacy_epoch\":%llu,\"frame_non_uniform\":%s,"
                "\"virtual_paused\":%s,\"recording\":%s,\"stream_active\":%s,"
                "\"layout\":\"%s\",\"fit\":\"%s\",\"anchor\":\"%s\","
                "\"camera_width_percent\":%.2f,\"ui_layout\":\"%s\","
-               "\"ui_fit_cover\":%s,\"ui_camera_anchor\":%u,\"ui_camera_size\":%.2f}\n",
+               "\"ui_fit_cover\":%s,\"ui_camera_anchor\":%u,\"ui_camera_size\":%.2f,",
                app.live.connected ? "true" : "false", app.live.has_frame ? "true" : "false",
                (unsigned long long)app.live.generation,
                (unsigned long long)app.live.privacy_epoch,
@@ -475,6 +522,18 @@ cleanup:
                app.live.layout, app.live.fit, app.live.anchor, app.live.camera_width_percent,
                (const char *const[]){"overlay", "split", "screen", "camera", "stage"}[app.layout],
                app.fit_cover ? "true" : "false", app.camera_anchor, app.camera_size);
+        printf("\"preview_frames_seen\":%llu,\"preview_non_uniform_seen\":%s,",
+               preview_frames_seen, preview_non_uniform_seen ? "true" : "false");
+        printf("\"screen_id\":"); debug_json_string(app.live.screen_id);
+        printf(",\"camera_id\":"); debug_json_string(app.live.camera_id);
+        printf(",\"camera_enabled\":%s,\"devices_kind\":%u,\"devices_count\":%u,"
+               "\"devices_loading\":%s,\"picker_open\":%s,\"picker_kind\":%u,\"devices_error\":",
+               app.live.camera_enabled ? "true" : "false", (unsigned)app.live.devices.kind,
+               app.live.devices.count, app.live.devices.loading ? "true" : "false",
+               app.source_picker.popup.overlay.open ? "true" : "false", (unsigned)app.source_picker.kind);
+        debug_json_string(app.live.devices.error);
+        puts("}");
+    }
 #endif
     if (settings_watch_registered)
         SDL_RemoveEventWatch(settings_shortcut, &settings_pending);
