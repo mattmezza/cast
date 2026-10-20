@@ -36,6 +36,11 @@ make CUI=1 PANEL=0 X11=1 WAYLAND=0
 # make CUI=1 PANEL=0
 ```
 
+`CUI=1` requires `PANEL=0`: the legacy panel and prototype use incompatible
+Clay versions. On macOS, `make -C ui check-native` opens brief Cocoa windows on
+the logged-in desktop and validates rendering at the display's pixel scale.
+See [macOS prototype setup](../docs/macos.md#try-the-redesign-prototype).
+
 In terminal 1, run a foreground daemon using your existing capture configuration:
 
 ```sh
@@ -56,7 +61,8 @@ Stop the foreground daemon with Ctrl+C in terminal 1. Closing the workspace leav
 it running. Keep both processes on the same build; rebuild after stopping them.
 `CUI=1` requires the native preview dependencies below in addition to the recorder's
 platform dependencies. Linux Pro builds retain `EDITION=pro MEDIA_PROFILE=lgpl` and
-the existing private-provider requirements; macOS currently rejects `EDITION=pro`.
+the existing private-provider requirements. macOS Pro builds retain the controlled
+LGPL media and private-provider requirements documented in the sibling repository.
 
 For an isolated preview without a capture/output device, use the synthetic setup
 from `test_live.py`. Create this configuration once:
