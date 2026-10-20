@@ -46,8 +46,9 @@ typedef struct {
     uint32_t sequence, version, snapshot_size;
     uint64_t generation;
     PanelSnapshot snapshot;
-    TestFrameInfo frame[3];
-    uint8_t pixels[3][PREVIEW_BYTES];
+    TestFrameInfo frame[PANEL_PREVIEW_COUNT];
+    uint8_t pixels[PANEL_PREVIEW_COMPOSITION][PREVIEW_BYTES];
+    uint8_t composition_pixels[(size_t)PANEL_COMPOSITION_PREVIEW_WIDTH * PANEL_COMPOSITION_PREVIEW_HEIGHT * 4];
 } TestShared;
 static void delay(void)
 {
@@ -327,12 +328,90 @@ static void test_application_lifecycle(Config config, const char *directory)
     unlink(configuration);
 }
 
+/* Exercise barriers directly, without scheduling a capture tick between them. */
+static void test_private_preview_barriers(void)
+{
+    App *app = calloc(1, sizeof *app);
+    assert(app);
+    config_defaults(&app->config);
+    strcpy(app->config.backend, "synthetic");
+    strcpy(app->config.output_device, "none");
+    strcpy(app->config.layout, "screen");
+    app->config.camera_enabled = false;
+    app->config.mic = app->config.desktop = app->config.virtual_audio = false;
+    app->config.width = 800;
+    app->config.height = 600;
+    char error[CAST_ERR];
+    app->compositor = compositor_create();
+    app->platform = platform_open(&app->config, error, sizeof error);
+    app->media = media_open(&app->config, error, sizeof error);
+    assert(app->compositor && app->platform && app->media);
+    assert(!compositor_prepare(app->compositor, &app->config, error, sizeof error));
+    assert(!compositor_neutral(app->compositor, &app->config, &app->neutral, error, sizeof error));
+    assert(!platform_capture(app->platform, &app->screen, &app->cursor, error, sizeof error));
+    PanelTransport *transport = panel_transport_create();
+    int pair[2];
+    assert(transport && !socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair));
+    TestAttach request = {.magic = "CASTP2", .version = PANEL_PROTOCOL_VERSION,
+                          .snapshot_size = sizeof(PanelSnapshot)};
+    request.identity = *cast_edition_identity();
+    assert(panel_transport_request(transport, app, pair[0], &request, sizeof request, getuid(), getpid()));
+    TestReply reply;
+    struct iovec iov = {&reply, sizeof reply};
+    union { struct cmsghdr align; char bytes[CMSG_SPACE(sizeof(int))]; } control = {0};
+    struct msghdr message = {.msg_iov = &iov, .msg_iovlen = 1,
+                            .msg_control = control.bytes, .msg_controllen = sizeof control.bytes};
+    assert(recvmsg(pair[1], &message, MSG_CMSG_CLOEXEC) == sizeof reply);
+    int descriptor;
+    struct cmsghdr *header = CMSG_FIRSTHDR(&message);
+    assert(header && header->cmsg_type == SCM_RIGHTS);
+    memcpy(&descriptor, CMSG_DATA(header), sizeof descriptor);
+    TestShared *shared = mmap(NULL, reply.bytes, PROT_READ, MAP_SHARED, descriptor, 0);
+    assert(shared != MAP_FAILED && reply.bytes == sizeof *shared);
+    close(descriptor);
+    /* Full-HD private detail is bounded independently of outgoing thumbnails. */
+    assert(!frame_alloc(&app->composition_preview, 2560, 1440));
+    memset(app->composition_preview.data, 0x61, (size_t)app->composition_preview.stride * 1440);
+    panel_transport_publish(transport, app, &app->neutral, &app->neutral);
+    assert(shared->frame[PANEL_PREVIEW_COMPOSITION].width == 1920);
+    assert(shared->frame[PANEL_PREVIEW_COMPOSITION].height == 1080);
+    assert(shared->frame[0].width == 480 && shared->frame[0].height == 360);
+    for (int i = 0; i < 5; ++i) {
+        strcpy(app->config.fit, i % 2 ? "cover" : "contain");
+        panel_transport_barrier(transport, app, false);
+        assert(shared->frame[PANEL_PREVIEW_COMPOSITION].width == 800);
+        assert(shared->frame[PANEL_PREVIEW_COMPOSITION].height == 600);
+        assert(shared->composition_pixels[0] != 0x20);
+        assert(shared->composition_pixels[100 * 4] != shared->composition_pixels[0]);
+    }
+    uint64_t epoch = shared->snapshot.privacy_epoch;
+    panel_transport_barrier(transport, app, true);
+    assert(shared->snapshot.privacy_epoch > epoch);
+    assert(!shared->frame[PANEL_PREVIEW_COMPOSITION].width && !app->composition_preview.data);
+    for (size_t i = 0; i < sizeof shared->composition_pixels; ++i)
+        assert(!shared->composition_pixels[i]);
+    /* A metadata refresh cannot resurrect the retained, now-invalid screen. */
+    panel_transport_barrier(transport, app, false);
+    assert(!shared->frame[PANEL_PREVIEW_COMPOSITION].width);
+    panel_transport_destroy(transport, app);
+    munmap(shared, reply.bytes);
+    close(pair[1]);
+    frame_free(&app->composition_preview);
+    frame_free(&app->screen);
+    frame_free(&app->neutral);
+    media_close(app->media);
+    platform_close(app->platform);
+    compositor_destroy(app->compositor);
+    free(app);
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1) {
         return cast_panel_test_cli_entry(argc, argv);
     }
     av_log_set_level(AV_LOG_ERROR);
+    test_private_preview_barriers();
     char directory[] = "/tmp/cast-panel-test-XXXXXX";
     assert(mkdtemp(directory));
     Config config;
@@ -377,6 +456,16 @@ int main(int argc, char **argv)
     wait_raw(shared, true, false);
     assert(shared->frame[0].width == 480 && shared->frame[0].height == 360);
     assert(shared->pixels[0][0] == 0x20 && shared->pixels[0][1] == 0x25);
+    /* A private composition must be live without revealing outgoing lanes. */
+    uint64_t composition_deadline = cast_now_ns() + UINT64_C(2000000000);
+    while (shared->composition_pixels[0] == 0x20 &&
+           cast_now_ns() < composition_deadline) delay();
+    assert(shared->frame[PANEL_PREVIEW_COMPOSITION].width == 800);
+    assert(shared->composition_pixels[0] != 0x20);
+    assert(shared->snapshot.state.virtual_paused && !shared->snapshot.state.recording &&
+           !shared->snapshot.state.stream_active);
+    assert(shared->pixels[0][0] == 0x20 && shared->pixels[1][0] == 0x20 &&
+           shared->pixels[2][0] == 0x20);
     int duplicate_fd;
     TestReply duplicate;
     assert(attach(&config, &duplicate_fd, &duplicate) < 0);

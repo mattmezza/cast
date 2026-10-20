@@ -1,5 +1,12 @@
 # Native control panel
 
+The CUI redesign has a separate [native workspace preview](../ui/README.md).
+Build it with `make -C ui` and run `./ui/build/cast-ui-preview` to review the
+Virtual camera / Record / Stream workspaces, shared composition stage, responsive
+panels and appearance settings. For live composition editing, build with
+`make CUI=1 PANEL=0` and run `cast workspace` against a daemon from the same build.
+The production panel below continues to use the existing renderer during migration.
+
 Build with `PANEL=1` and launch `cast` (or **SuperScreencast** from the application menu).
 Ordinary startup opens the panel and starts a daemon unless one is already running.
 `cast --headless` runs only the foreground daemon; `cast panel` attaches a panel

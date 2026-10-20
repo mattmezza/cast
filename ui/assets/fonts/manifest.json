@@ -1,0 +1,64 @@
+{
+  "name": "Inter",
+  "version": "4.1",
+  "source": "https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip",
+  "license": "OFL-1.1",
+  "license_file": "third_party/inter/LICENSE.txt",
+  "sha256": {
+    "third_party/inter/Inter-Bold.otf": "9fc6261e817d0b1b2bf1953d8799bb1c837d11aeebbf83ae352e7b4d6de6425d",
+    "third_party/inter/Inter-Regular.otf": "d4f2b9e148059a15f014cb0f0b8fea8cd11bfa447dd483bedf1b0adc0e2ba799",
+    "third_party/inter/LICENSE.txt": "262481e844521b326f5ecd053e59b98c8b2da78c8ee1bdbb6e8174305e54935a"
+  },
+  "archive_sha256": "9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e",
+  "archive_members": {
+    "Inter-Regular.otf": "extras/otf/Inter-Regular.otf",
+    "Inter-Bold.otf": "extras/otf/Inter-Bold.otf",
+    "LICENSE.txt": "LICENSE.txt"
+  },
+  "modifications": "None; files copied byte-for-byte from the official release archive.",
+  "derived_instances": {
+    "source": "OpenDesign project d3599a73-2edd-4d30-b822-4ea306ac120e/assets/fonts/inter-var.woff2",
+    "source_sha256": "3100e775e8616cd2611beecfa23a4263d7037586789b43f035236a2e6fbd4c62",
+    "method": "fontTools.varLib.instancer.instantiateVariableFont, wght=500/600; WOFF2 decompressed to TrueType",
+    "license": "OFL-1.1",
+    "license_file": "LICENSE.txt",
+    "files": {
+      "Inter-Medium.ttf": {
+        "weight": 500,
+        "sha256": "ca8c1517e970d06eeff441e8ac54d0a01a08e1423fccc9d0efb769b5b1d33b7b"
+      },
+      "Inter-SemiBold.ttf": {
+        "weight": 600,
+        "sha256": "a0e5ab079e183b87148091d8f8f7efd6f5e20355f26363d597b8c7c6430f062f"
+      }
+    },
+    "version": "4.001;git-66647c0bb"
+  },
+  "ibm_plex_mono": {
+    "source": "OpenDesign project d3599a73-2edd-4d30-b822-4ea306ac120e/assets/fonts",
+    "modifications": "WOFF2 decompression to TrueType with fontTools.ttLib.TTFont; no glyph or naming changes",
+    "license": "OFL-1.1",
+    "license_file": "IBMPlexMono-OFL.txt",
+    "license_source": "https://raw.githubusercontent.com/IBM/plex/master/LICENSE.txt",
+    "files": {
+      "IBMPlexMono-Regular.ttf": {
+        "weight": 400,
+        "source": "ibm-plex-mono-400.woff2",
+        "source_sha256": "08949f728dc52d528e69b1667d15c89a5686a4ee9a296ff90983985f99c380f7",
+        "sha256": "b8c6c5c0a37d0fe76d413131a84214b090fdcfcbd2e75e055d704693c26f22ca"
+      },
+      "IBMPlexMono-Medium.ttf": {
+        "weight": 500,
+        "source": "ibm-plex-mono-500.woff2",
+        "source_sha256": "01d285447409c8a588692162439a038b8cbd7871309ee20267b0d2d91c6e8e22",
+        "sha256": "e576f5dfd724743897bfaa98f73e1ca73c68c98fdb85a8e53b5e4f37d96d7284"
+      },
+      "IBMPlexMono-SemiBold.ttf": {
+        "weight": 600,
+        "source": "ibm-plex-mono-600.woff2",
+        "source_sha256": "0d1f0b8d0722224e32e9f28261bdc86c79115be73444ae5eceb73976a1bcdf83",
+        "sha256": "4065922f77f279e590a559a492928cb6aff6ee33816ed3da97261f30be3259b1"
+      }
+    }
+  }
+}

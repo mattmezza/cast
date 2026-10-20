@@ -30,7 +30,8 @@ typedef struct App {
     Compositor *compositor;
     Media *media;
     Frame screen, camera, virtual, record, neutral, frozen, record_frozen, virtual_raw, record_raw;
-    Frame stream, stream_raw, stream_frozen;
+    Frame stream, stream_raw, stream_frozen, composition_preview;
+    char composition_error[256];
     Cursor cursor;
     double zoom_last;
     uint64_t source_generation, stream_generation, loop_drops;

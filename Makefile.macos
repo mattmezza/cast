@@ -8,6 +8,7 @@ MACOS_MEDIA_PKGCONFIG =
 MACOS_PKG_CONFIG = env PKG_CONFIG_PATH="$(MACOS_MEDIA_PKGCONFIG)$(MACOS_UPDATE_PKGCONFIG):$(PKG_CONFIG_PATH)" $(PKG_CONFIG)
 EDITION ?= community
 PANEL ?= 1
+CUI ?= 0
 MACOS_MIN ?= 13.0
 CFLAGS ?= -O2 -g
 WARN = -Wall -Wextra -Wformat=2 -Wstrict-prototypes -Wmissing-prototypes
@@ -87,15 +88,30 @@ PACKAGES = libsodium libcurl libarchive fontconfig freetype2 libavcodec libavfor
 ifeq ($(PANEL),1)
 PACKAGES += sdl3 sdl3-ttf
 endif
+ifneq ($(filter-out 0 1,$(CUI)),)
+$(error CUI must be 0 or 1)
+endif
+CUI_SOURCES =
+CUI_LIBRARIES =
+CUI_FONT_OBJECT =
+CUI_HASH_INPUTS =
+ifeq ($(CUI),1)
+PACKAGES += sdl3 freetype2 harfbuzz
+CUI_SOURCES = ui/main.c ui/app.c ui/menus.c ui/settings.c ui/cast_theme.c ui/brand.c ui/daemon_bridge.c
+CUI_LIBRARIES = ui/build/vendor/libcui_sdl3.a ui/build/vendor/libcui_text.a ui/build/vendor/libcui_bidi.a ui/build/vendor/libcui.a
+CUI_FONT_OBJECT = $(BUILD)/ui/workspace_fonts.o
+CUI_HASH_INPUTS = $(CUI_SOURCES) $(wildcard ui/*.h ui/*.S ui/.cui-lock.json ui/assets/fonts/*.otf ui/assets/fonts/*.ttf) ui/Makefile ui/sources.mk
+CPPFLAGS += -DWITH_CUI -DCAST_CUI_EMBEDDED -Iui/vendor/include -Iui/vendor/third_party/clay
+endif
 ifeq ($(filter clean deps-lgpl deps-stt,$(MAKECMDGOALS)),)
 ifeq ($(shell $(MACOS_PKG_CONFIG) --exists $(PACKAGES) 'libavcodec >= 61.19.100' && echo yes),)
-$(error Missing macOS build dependencies or FFmpeg is too old ($(shell $(MACOS_PKG_CONFIG) --print-errors --exists $(PACKAGES) 'libavcodec >= 61.19.100' 2>&1)); run brew install pkgconf ffmpeg fontconfig freetype sdl3 sdl3_ttf libsodium curl libarchive; Pro also needs make deps-lgpl)
+$(error Missing macOS build dependencies or FFmpeg is too old ($(shell $(MACOS_PKG_CONFIG) --print-errors --exists $(PACKAGES) 'libavcodec >= 61.19.100' 2>&1)); run brew install pkgconf ffmpeg fontconfig freetype harfbuzz sdl3 sdl3_ttf libsodium curl libarchive; Pro also needs make deps-lgpl)
 endif
 endif
 PKG_CFLAGS := $(shell $(MACOS_PKG_CONFIG) --cflags $(PACKAGES))
 PKG_LIBS := $(shell $(MACOS_PKG_CONFIG) --libs $(PACKAGES))
 PKG_VERSIONS := $(shell $(MACOS_PKG_CONFIG) --modversion $(PACKAGES))
-INTEGRATION_ID := $(shell { printf '%s' 'darwin:$(EDITION):$(MEDIA_PROFILE):$(PRO_ROOT):$(PRO_TRUST_HEADER):$(STT):$(STT_CFLAGS):$(STT_LIBS):$(STT_CPU_BACKEND):$(STT_HELPER_PATH):$(STT_PROFILE):$(STT_ENGINEERING):$(CPPFLAGS):$(PANEL):$(MACOS_MIN):$(CC):$(CFLAGS):$(LDFLAGS):$(PRIVATE_REVISION):$(RELEASE_TIMESTAMP):$(PKG_CFLAGS):$(PKG_LIBS):$(PKG_VERSIONS)'; cat src/*.[chm] src/*.S Makefile.macos $(PRO_SOURCES) $(if $(filter pro,$(EDITION)),$(wildcard $(PRO_DIR)/src/*.h $(PRO_DIR)/src/*/*.h) $(PRO_TRUST_HEADER)) $(wildcard $(STT_PROFILE)); } | shasum -a 256 | cut -c1-32)
+INTEGRATION_ID := $(shell { printf '%s' 'darwin:$(EDITION):$(MEDIA_PROFILE):$(PRO_ROOT):$(PRO_TRUST_HEADER):$(STT):$(STT_CFLAGS):$(STT_LIBS):$(STT_CPU_BACKEND):$(STT_HELPER_PATH):$(STT_PROFILE):$(STT_ENGINEERING):$(CPPFLAGS):$(PANEL):$(CUI):$(MACOS_MIN):$(CC):$(CFLAGS):$(LDFLAGS):$(PRIVATE_REVISION):$(RELEASE_TIMESTAMP):$(PKG_CFLAGS):$(PKG_LIBS):$(PKG_VERSIONS)'; cat $(CUI_HASH_INPUTS) src/*.[chm] src/*.S Makefile.macos $(PRO_SOURCES) $(if $(filter pro,$(EDITION)),$(wildcard $(PRO_DIR)/src/*.h $(PRO_DIR)/src/*/*.h) $(PRO_TRUST_HEADER)) $(wildcard $(STT_PROFILE)); } | shasum -a 256 | cut -c1-32)
 BUILD = build/macos-$(EDITION)-p$(PANEL)-$(INTEGRATION_ID)
 CPPFLAGS += -Isrc -Ivendor/inih -D_DARWIN_C_SOURCE -DWITH_MACOS \
  -DCAST_APPLICATION_NAME='"$(BINARY)"' -DCAST_PLATFORM='"macos-$(shell uname -m)"' \
@@ -122,7 +138,7 @@ OBJC_SOURCES += src/panel_macos.m
 CPPFLAGS += -DWITH_PANEL -Ivendor/clay
 ASSETS += $(BUILD)/src/panel_font.o
 endif
-OBJECTS = $(SOURCES:%.c=$(BUILD)/%.o) $(OBJC_SOURCES:%.m=$(BUILD)/%.o) $(ASSETS)
+OBJECTS = $(SOURCES:%.c=$(BUILD)/%.o) $(CUI_SOURCES:%.c=$(BUILD)/%.o) $(CUI_FONT_OBJECT) $(OBJC_SOURCES:%.m=$(BUILD)/%.o) $(ASSETS)
 ifeq ($(EDITION):$(STT),pro:1)
 CPPFLAGS += -DCAST_WITH_STT -DCAST_STT_HELPER_PATH='"$(STT_HELPER_PATH)"'
 STT_HELPER = $(BUILD)/cast-pro-stt-helper
@@ -132,8 +148,8 @@ endif
 .PHONY: all FORCE macos-app check check-macos check-unit clean
 all: $(BINARY) $(STT_HELPER)
 FORCE:
-$(BINARY): FORCE $(OBJECTS) $(STT_HELPER)
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) $(PKG_LIBS) $(LDLIBS)
+$(BINARY): FORCE $(OBJECTS) $(CUI_LIBRARIES) $(STT_HELPER)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) $(CUI_LIBRARIES) $(PKG_LIBS) $(LDLIBS)
 ifeq ($(EDITION),pro)
 	@python3 -c 'import json,subprocess; i=json.loads(subprocess.check_output(["./cast-pro","edition","--json"])); assert i["edition"]=="pro" and i["media_profile"]=="lgpl" and i["extension_api"]==2' || { rm -f cast-pro; exit 1; }
 endif
@@ -143,6 +159,16 @@ $(BUILD)/%.o: %.c src/cast.h
 $(BUILD)/%.o: %.m src/cast.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -fobjc-arc -fblocks -MMD -MP -c $< -o $@
+# Refresh pinned CUI archives through their own dependency-aware build.
+.PHONY: cui-libraries
+ifeq ($(CUI),1)
+cui-libraries:
+	$(MAKE) -C ui build/vendor/libcui_sdl3.a build/vendor/libcui_text.a build/vendor/libcui_bidi.a build/vendor/libcui.a
+$(CUI_LIBRARIES): | cui-libraries
+endif
+$(BUILD)/ui/workspace_fonts.o: ui/workspace_fonts.S $(wildcard ui/assets/fonts/*.otf ui/assets/fonts/*.ttf)
+	@mkdir -p $(dir $@)
+	$(CC) -c $< -o $@
 $(BUILD)/src/command_assets.o: src/command_assets.S completions/cast.bash completions/_cast completions/cast.fish packaging/install.sh
 	@mkdir -p $(dir $@)
 	$(CC) -mmacosx-version-min=$(MACOS_MIN) -c $< -o $@

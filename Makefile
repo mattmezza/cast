@@ -9,6 +9,7 @@ DESTDIR =
 X11 = 1
 WAYLAND = 0
 PANEL = 0
+CUI ?= 0
 STT = 0
 CXX = c++
 STT_CFLAGS = $(shell pkg-config --cflags whisper)
@@ -95,6 +96,21 @@ PACKAGES += gio-2.0 gio-unix-2.0
 SOURCES += src/wayland.c
 CPPFLAGS += -DWITH_WAYLAND
 endif
+ifneq ($(filter-out 0 1,$(CUI)),)
+$(error CUI must be 0 or 1)
+endif
+CUI_SOURCES =
+CUI_LIBRARIES =
+CUI_FONT_OBJECT =
+CUI_HASH_INPUTS =
+ifeq ($(CUI),1)
+PACKAGES += sdl3 freetype2 harfbuzz
+CUI_SOURCES = ui/main.c ui/app.c ui/menus.c ui/settings.c ui/cast_theme.c ui/brand.c ui/daemon_bridge.c
+CUI_LIBRARIES = ui/build/vendor/libcui_sdl3.a ui/build/vendor/libcui_text.a ui/build/vendor/libcui_bidi.a ui/build/vendor/libcui.a
+CUI_FONT_OBJECT = $(BUILD)/ui/workspace_fonts.o
+CUI_HASH_INPUTS = $(CUI_SOURCES) $(wildcard ui/*.h ui/*.S ui/.cui-lock.json ui/assets/fonts/*.otf ui/assets/fonts/*.ttf) ui/Makefile ui/sources.mk
+CPPFLAGS += -DWITH_CUI -DCAST_CUI_EMBEDDED -Iui/vendor/include -Iui/vendor/third_party/clay
+endif
 PKG_CFLAGS = $(shell $(PKG_CONFIG) --cflags $(PACKAGES))
 PKG_LIBS = $(shell $(PKG_CONFIG) --libs $(PACKAGES))
 BUILD = build/$(EDITION)-x$(X11)-w$(WAYLAND)-p$(PANEL)-$(MEDIA_PROFILE)-$(INTEGRATION_ID)
@@ -105,10 +121,10 @@ FONT_OBJECT = $(BUILD)/src/panel_font.o
 endif
 # Hash every provider/trust identity as well as backend/media options into object paths.
 STT_IDENTITY = $(if $(filter pro:1,$(EDITION):$(STT)),$(STT_CFLAGS):$(STT_LIBS):$(STT_CPU_BACKEND):$(STT_HELPER_PATH):$(STT_PROFILE):$(STT_ENGINEERING):$(STT_GPU_ENGINEERING):$(shell test ! -f '$(STT_PROFILE)' || sha256sum '$(STT_PROFILE)'),disabled)
-INTEGRATION_ID := $(shell { printf "%s" "$(EDITION):$(X11):$(WAYLAND):$(PANEL):$(STT):$(STT_IDENTITY):$(STT_HELPER_SIBLING):$(PRODUCTION_LICENSE_ACCEPTANCE):$(STATIC_PANEL_X11):$(MEDIA_PROFILE):$(LGPL_ROOT):$(PRO_ROOT):$(CORE_REVISION):$(PRIVATE_REVISION):$(OFFICIAL_RELEASE):$(RELEASE_TIMESTAMP):$(CC):$(CFLAGS):$(LDFLAGS):$(PANEL_CFLAGS):$(PANEL_LIBS)"; cat $(wildcard src/*.c src/*.h src/*.S vendor/inih/*.c vendor/inih/*.h vendor/clay/*.h completions/* assets/fonts/* packaging/install.sh) $(if $(filter pro,$(EDITION)),$(wildcard $(PRO_DIR)/src/*.c $(PRO_DIR)/src/*.h $(PRO_DIR)/src/*/*.c $(PRO_DIR)/src/*/*.h $(PRO_DIR)/src/*/*.cpp $(PRO_TRUST_HEADER))) 2>/dev/null; } | sha256sum | cut -c1-32)
+INTEGRATION_ID := $(shell { printf "%s" "$(EDITION):$(X11):$(WAYLAND):$(PANEL):$(CUI):$(STT):$(STT_IDENTITY):$(STT_HELPER_SIBLING):$(PRODUCTION_LICENSE_ACCEPTANCE):$(STATIC_PANEL_X11):$(MEDIA_PROFILE):$(LGPL_ROOT):$(PRO_ROOT):$(CORE_REVISION):$(PRIVATE_REVISION):$(OFFICIAL_RELEASE):$(RELEASE_TIMESTAMP):$(CC):$(CFLAGS):$(LDFLAGS):$(PANEL_CFLAGS):$(PANEL_LIBS)"; cat $(CUI_HASH_INPUTS) $(wildcard src/*.c src/*.h src/*.S vendor/inih/*.c vendor/inih/*.h vendor/clay/*.h completions/* assets/fonts/* packaging/install.sh) $(if $(filter pro,$(EDITION)),$(wildcard $(PRO_DIR)/src/*.c $(PRO_DIR)/src/*.h $(PRO_DIR)/src/*/*.c $(PRO_DIR)/src/*/*.h $(PRO_DIR)/src/*/*.cpp $(PRO_TRUST_HEADER))) 2>/dev/null; } | sha256sum | cut -c1-32)
 CPPFLAGS += -DCAST_BUILD_ID='"$(INTEGRATION_ID)"'
 SOURCES += $(PRO_SOURCES)
-OBJECTS = $(SOURCES:%.c=$(BUILD)/%.o) $(COMMAND_ASSETS) $(FONT_OBJECT)
+OBJECTS = $(SOURCES:%.c=$(BUILD)/%.o) $(CUI_SOURCES:%.c=$(BUILD)/%.o) $(CUI_FONT_OBJECT) $(COMMAND_ASSETS) $(FONT_OBJECT)
 ifeq ($(PANEL),1)
 # Overridable for a locally built SDK; normal builds use system SDL3/SDL3_ttf.
 ifeq ($(origin PANEL_CFLAGS):$(origin PANEL_LIBS),undefined:undefined)
@@ -136,8 +152,8 @@ endif
 
 all: $(BINARY) $(STT_HELPER)
 FORCE:
-$(BINARY): FORCE $(OBJECTS) $(STT_HELPER)
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) $(PKG_LIBS) $(LDLIBS)
+$(BINARY): FORCE $(OBJECTS) $(CUI_LIBRARIES) $(STT_HELPER)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) $(CUI_LIBRARIES) $(PKG_LIBS) $(LDLIBS)
 ifeq ($(EDITION),pro)
 	@env LD_LIBRARY_PATH='$(LGPL_ROOT)/prefix/lib' python3 -c 'import json,subprocess,sys; i=json.loads(subprocess.check_output(["./cast-pro","edition","--json"])); sys.exit(0 if i.get("edition")=="pro" and i.get("media_profile")=="lgpl" and i.get("extension_api")==2 else 1)' || { echo 'Pro provider/API/edition verification failed after link; no package/install permitted' >&2; rm -f cast-pro; exit 1; }
 endif
@@ -146,6 +162,16 @@ $(BUILD)/%.o: %.c src/cast.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -MMD -MP -c $< -o $@
 $(BUILD)/src/panel_font.o: src/panel_font.S assets/fonts/Inter.ttf
+	@mkdir -p $(dir $@)
+	$(CC) -c $< -o $@
+# Refresh pinned CUI archives through their own dependency-aware build.
+.PHONY: cui-libraries
+ifeq ($(CUI),1)
+cui-libraries:
+	$(MAKE) -C ui build/vendor/libcui_sdl3.a build/vendor/libcui_text.a build/vendor/libcui_bidi.a build/vendor/libcui.a
+$(CUI_LIBRARIES): | cui-libraries
+endif
+$(BUILD)/ui/workspace_fonts.o: ui/workspace_fonts.S $(wildcard ui/assets/fonts/*.otf ui/assets/fonts/*.ttf)
 	@mkdir -p $(dir $@)
 	$(CC) -c $< -o $@
 $(BUILD)/src/command_assets.o: src/command_assets.S completions/cast.bash completions/_cast completions/cast.fish packaging/install.sh
@@ -181,14 +207,14 @@ $(BUILD)/test_wayland: tests/test_wayland.c tests/compositor_runtime_stubs.c src
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_wayland.c tests/compositor_runtime_stubs.c src/compositor.c src/composition_assets.c src/presentation_text.c src/state.c $(PKG_LIBS) $(LDLIBS) $(LDFLAGS)
 $(BUILD)/test_commands: tests/test_commands.c $(SOURCES) src/app_internal.h src/cast.h src/media_internal.h src/platform_backend.h $(COMMAND_ASSETS) $(FONT_OBJECT)
 	@mkdir -p $(BUILD)
-	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_commands.c $(filter-out src/main.c src/panel.c,$(SOURCES)) $(COMMAND_ASSETS) $(FONT_OBJECT) $(PKG_LIBS) $(LDLIBS) $(LDFLAGS)
+	$(CC) $(CPPFLAGS) -UWITH_CUI $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_commands.c $(filter-out src/main.c src/panel.c,$(SOURCES)) $(COMMAND_ASSETS) $(FONT_OBJECT) $(PKG_LIBS) $(LDLIBS) $(LDFLAGS)
 $(BUILD)/test_panel_transport: tests/test_panel_transport.c $(SOURCES) src/app_internal.h src/panel_transport.h $(COMMAND_ASSETS) $(FONT_OBJECT)
 	@mkdir -p $(BUILD)
-	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_panel_transport.c $(filter-out src/main.c src/panel.c,$(SOURCES)) $(COMMAND_ASSETS) $(FONT_OBJECT) $(PKG_LIBS) $(LDLIBS) $(LDFLAGS)
+	$(CC) $(CPPFLAGS) -UWITH_CUI $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_panel_transport.c $(filter-out src/main.c src/panel.c,$(SOURCES)) $(COMMAND_ASSETS) $(FONT_OBJECT) $(PKG_LIBS) $(LDLIBS) $(LDFLAGS)
 ifeq ($(PANEL),1)
 $(BUILD)/test_panel_routes: tests/test_panel_routes.c $(SOURCES) src/panel_transport.h $(BUILD)/src/panel_font.o $(COMMAND_ASSETS)
 	@mkdir -p $(BUILD)
-	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_panel_routes.c $(filter-out src/main.c src/panel.c,$(SOURCES)) $(BUILD)/src/panel_font.o $(COMMAND_ASSETS) $(PKG_LIBS) $(LDLIBS) $(LDFLAGS)
+	$(CC) $(CPPFLAGS) -UWITH_CUI $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_panel_routes.c $(filter-out src/main.c src/panel.c,$(SOURCES)) $(BUILD)/src/panel_font.o $(COMMAND_ASSETS) $(PKG_LIBS) $(LDLIBS) $(LDFLAGS)
 $(BUILD)/test_panel_color_pick: tests/test_panel_color_pick.c src/panel_color_pick.c src/panel_color_pick.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_panel_color_pick.c src/panel_color_pick.c $(PKG_LIBS) $(LDLIBS) $(LDFLAGS)
@@ -391,7 +417,7 @@ check-pro-cli: $(BINARY)
 ifeq ($(EDITION),pro)
 $(BUILD)/test_pro_workflows: $(PRO_DIR)/tests/test_core_workflows.c $(SOURCES) $(COMMAND_ASSETS) $(FONT_OBJECT)
 	@mkdir -p $(BUILD)
-	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -DCAST_CORE_MAIN='"$(CURDIR)/src/main.c"' -o $@ $(PRO_DIR)/tests/test_core_workflows.c $(filter-out src/main.c src/panel.c,$(SOURCES)) $(COMMAND_ASSETS) $(FONT_OBJECT) $(PKG_LIBS) $(LDLIBS) $(LDFLAGS)
+	$(CC) $(CPPFLAGS) -UWITH_CUI $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -DCAST_CORE_MAIN='"$(CURDIR)/src/main.c"' -o $@ $(PRO_DIR)/tests/test_core_workflows.c $(filter-out src/main.c src/panel.c,$(SOURCES)) $(COMMAND_ASSETS) $(FONT_OBJECT) $(PKG_LIBS) $(LDLIBS) $(LDFLAGS)
 $(BUILD)/test_pro_workflows: | edition-preflight
 check-pro-workflows: $(BUILD)/test_pro_workflows
 	@test -n '$(PRO_TEST_LICENSE)' || { echo 'set PRO_TEST_LICENSE to a nonproduction signed fixture' >&2; exit 1; }
@@ -422,7 +448,7 @@ check-workflow-service: build/edition-contract-tests/test_workflow_service
 	build/edition-contract-tests/test_workflow_service
 $(BUILD)/test_workflow_runtime: tests/test_workflow_runtime.c $(SOURCES) src/app_internal.h src/pro_runtime.h src/pro_extension.h $(COMMAND_ASSETS) $(FONT_OBJECT)
 	@mkdir -p $(BUILD)
-	$(CC) $(CPPFLAGS) -DWITH_PRO $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -o $@ tests/test_workflow_runtime.c $(filter-out src/main.c src/panel.c $(PRO_SOURCES),$(SOURCES)) $(COMMAND_ASSETS) $(FONT_OBJECT) $(PKG_LIBS) $(LDLIBS) $(LDFLAGS)
+	$(CC) $(CPPFLAGS) -UWITH_CUI -DWITH_PRO $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -o $@ tests/test_workflow_runtime.c $(filter-out src/main.c src/panel.c $(PRO_SOURCES),$(SOURCES)) $(COMMAND_ASSETS) $(FONT_OBJECT) $(PKG_LIBS) $(LDLIBS) $(LDFLAGS)
 check-workflow-runtime: $(BUILD)/test_workflow_runtime
 	$(BUILD)/test_workflow_runtime
 .PHONY: check-edition-service

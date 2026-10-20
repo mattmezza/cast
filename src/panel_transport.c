@@ -20,6 +20,7 @@
 #include <unistd.h>
 
 #define PANEL_PIXELS ((size_t)PANEL_PREVIEW_WIDTH * PANEL_PREVIEW_HEIGHT * 4)
+#define COMPOSITION_PIXELS ((size_t)PANEL_COMPOSITION_PREVIEW_WIDTH * PANEL_COMPOSITION_PREVIEW_HEIGHT * 4)
 #define PANEL_QUEUE 16
 typedef struct {
     char magic[8];
@@ -41,13 +42,15 @@ typedef struct {
     uint32_t version, snapshot_size;
     uint64_t generation;
     PanelSnapshot snapshot;
-    PreviewInfo frame[3];
-    uint8_t pixels[3][PANEL_PIXELS];
+    PreviewInfo frame[PANEL_PREVIEW_COUNT];
+    uint8_t pixels[PANEL_PREVIEW_COMPOSITION][PANEL_PIXELS];
+    uint8_t composition_pixels[COMPOSITION_PIXELS];
 } SharedPreview;
 struct PanelTransport {
     int peer, writer, reader;
     SharedPreview *shared;
     uint64_t generation, frames, privacy_epoch;
+    bool composition_source_valid;
     pid_t pid;
 };
 typedef struct {
@@ -70,7 +73,7 @@ struct PanelClient {
     PanelSnapshot snapshot;
     QueuedCommand queue[PANEL_QUEUE];
     unsigned head, count;
-    uint64_t queued, completed, generation, last_frame[3];
+    uint64_t queued, completed, generation, last_frame[PANEL_PREVIEW_COUNT];
     uint8_t *staging;
 };
 
@@ -85,6 +88,7 @@ static void transport_detach(PanelTransport *t, App *a)
         /* Revoke the old mapping's content, including padding, before releasing it. */
         atomic_fetch_add_explicit(&t->shared->sequence, 1, memory_order_acq_rel);
         memset(t->shared->pixels, 0, sizeof t->shared->pixels);
+        memset(t->shared->composition_pixels, 0, sizeof t->shared->composition_pixels);
         t->shared->snapshot.connected = false;
         memset(t->shared->frame, 0, sizeof t->shared->frame);
         atomic_fetch_add_explicit(&t->shared->sequence, 1, memory_order_release);
@@ -146,6 +150,7 @@ static void snapshot_fill(PanelSnapshot *s, App *a, PanelTransport *t)
 {
     memset(s, 0, sizeof *s);
     s->config = a->config;
+    snprintf(s->composition_error, sizeof s->composition_error, "%s", a->composition_error);
     s->state = a->state;
     edition_service_snapshot(a->edition, &s->edition);
     const CastRuntimeHooks *hooks = cast_runtime_hooks();
@@ -171,22 +176,37 @@ static void snapshot_fill(PanelSnapshot *s, App *a, PanelTransport *t)
     media_audio_status(a->media, s->audio_status, sizeof s->audio_status);
     platform_panel_status(a->platform, s->exclusion, sizeof s->exclusion);
 }
+static uint8_t *preview_pixels(SharedPreview *shared, int target)
+{
+    return target == PANEL_PREVIEW_COMPOSITION ? shared->composition_pixels : shared->pixels[target];
+}
+static int preview_width(int target)
+{
+    return target == PANEL_PREVIEW_COMPOSITION ? PANEL_COMPOSITION_PREVIEW_WIDTH : PANEL_PREVIEW_WIDTH;
+}
+static int preview_height(int target)
+{
+    return target == PANEL_PREVIEW_COMPOSITION ? PANEL_COMPOSITION_PREVIEW_HEIGHT : PANEL_PREVIEW_HEIGHT;
+}
 static void preview_write(SharedPreview *s, int target, const Frame *f)
 {
     PreviewInfo *info = &s->frame[target];
+    uint8_t *pixels = preview_pixels(s, target);
+    size_t capacity = target == PANEL_PREVIEW_COMPOSITION ? COMPOSITION_PIXELS : PANEL_PIXELS;
+    int max_width = preview_width(target), max_height = preview_height(target);
     if (!f || !f->data || f->width < 1 || f->height < 1 || f->stride < f->width * 4) {
         memset(info, 0, sizeof *info);
-        memset(s->pixels[target], 0, PANEL_PIXELS);
+        memset(pixels, 0, capacity);
         return;
     }
     int w = f->width, h = f->height;
-    if (w > PANEL_PREVIEW_WIDTH) {
-        h = (int)((int64_t)h * PANEL_PREVIEW_WIDTH / w);
-        w = PANEL_PREVIEW_WIDTH;
+    if (w > max_width) {
+        h = (int)((int64_t)h * max_width / w);
+        w = max_width;
     }
-    if (h > PANEL_PREVIEW_HEIGHT) {
-        w = (int)((int64_t)w * PANEL_PREVIEW_HEIGHT / h);
-        h = PANEL_PREVIEW_HEIGHT;
+    if (h > max_height) {
+        w = (int)((int64_t)w * max_height / h);
+        h = max_height;
     }
     if (w < 1) {
         w = 1;
@@ -197,14 +217,18 @@ static void preview_write(SharedPreview *s, int target, const Frame *f)
     *info = (PreviewInfo){w, h, w * 4, f->ts_ns};
     for (int y = 0; y < h; y++) {
         const uint8_t *row = f->data + (size_t)((int64_t)y * f->height / h) * f->stride;
-        uint8_t *dst = s->pixels[target] + (size_t)y * info->stride;
+        uint8_t *dst = pixels + (size_t)y * info->stride;
+        if (w == f->width) {
+            memcpy(dst, row, (size_t)w * 4);
+            continue;
+        }
         for (int x = 0; x < w; x++) {
             memcpy(dst + x * 4, row + ((int64_t)x * f->width / w) * 4, 4);
         }
     }
     /* Old images cannot survive in unused rows after a geometry/privacy change. */
     size_t used = (size_t)info->stride * h;
-    memset(s->pixels[target] + used, 0, PANEL_PIXELS - used);
+    memset(pixels + used, 0, capacity - used);
 }
 void panel_transport_publish(PanelTransport *t, App *a, const Frame *virtual, const Frame *record)
 {
@@ -229,6 +253,9 @@ void panel_transport_publish(PanelTransport *t, App *a, const Frame *virtual, co
                   a->state.stream_active && !a->state.stream_paused && a->stream.data
                       ? &a->stream
                       : &a->neutral);
+    preview_write(t->shared, PANEL_PREVIEW_COMPOSITION,
+                  a->composition_preview.data ? &a->composition_preview : NULL);
+    t->composition_source_valid = a->composition_preview.data != NULL;
     atomic_fetch_add_explicit(&t->shared->sequence, 1, memory_order_release);
 }
 void panel_transport_barrier(PanelTransport *t, App *a, bool invalidate)
@@ -240,6 +267,28 @@ void panel_transport_barrier(PanelTransport *t, App *a, bool invalidate)
     if (!t->shared) {
         return;
     }
+    /* Only current-source pixels may be rendered under an edited composition.
+     * An invalidation retires this permission until a fresh capture is published. */
+    const Config *previous = &t->shared->snapshot.config;
+    bool source_changed = strcmp(previous->backend, a->config.backend) ||
+        strcmp(previous->monitor, a->config.monitor) ||
+        strcmp(previous->capture_kind, a->config.capture_kind) ||
+        strcmp(previous->camera_device, a->config.camera_device) ||
+        previous->camera_enabled != a->config.camera_enabled ||
+        previous->region_x != a->config.region_x || previous->region_y != a->config.region_y ||
+        previous->region_w != a->config.region_w || previous->region_h != a->config.region_h ||
+        previous->capture_mask_color != a->config.capture_mask_color;
+    bool source_available = a->screen.data || (!strcmp(a->config.layout, "camera") &&
+                            a->config.camera_enabled && a->camera.data);
+    if (invalidate || source_changed || !source_available)
+        t->composition_source_valid = false;
+    if (t->composition_source_valid) {
+        char error[CAST_ERR];
+        if (compositor_render(a->compositor, &a->config, &a->screen,
+                              a->config.camera_enabled && a->camera.data ? &a->camera : NULL,
+                              &a->cursor, false, &a->composition_preview, error, sizeof error))
+            frame_free(&a->composition_preview);
+    } else frame_free(&a->composition_preview);
     atomic_fetch_add_explicit(&t->shared->sequence, 1, memory_order_acq_rel);
     t->privacy_epoch++;
     snapshot_fill(&t->shared->snapshot, a, t);
@@ -259,6 +308,10 @@ void panel_transport_barrier(PanelTransport *t, App *a, bool invalidate)
                   !invalidate && a->state.stream_active && !a->state.stream_paused && a->stream.data
                       ? &a->stream
                       : &a->neutral);
+    /* Publish a newly rendered private composition, or no image. Outgoing
+     * privacy placeholders must never appear in the private editing canvas. */
+    preview_write(t->shared, PANEL_PREVIEW_COMPOSITION,
+                  a->composition_preview.data ? &a->composition_preview : NULL);
     atomic_fetch_add_explicit(&t->shared->sequence, 1, memory_order_release);
 }
 static void attach_error(int fd, const char *error)
@@ -333,7 +386,9 @@ bool panel_transport_request(PanelTransport *t, App *a, int fd, const void *pack
     t->shared->version = PANEL_PROTOCOL_VERSION;
     t->shared->snapshot_size = sizeof(PanelSnapshot);
     t->shared->generation = t->generation;
-    /* Registration may invalidate capture; begin neutral until the next capture tick. */
+    /* Registration may invalidate capture. Never reuse its private predecessor. */
+    frame_free(&a->composition_preview);
+    t->composition_source_valid = false;
     panel_transport_publish(t, a, &a->neutral, &a->neutral);
     AttachReply reply = {.magic = "CASTP2",
                          .version = PANEL_PROTOCOL_VERSION,
@@ -441,7 +496,7 @@ static void client_disconnect(PanelClient *c, const char *error)
         c->peer = -1;
     }
     c->snapshot.connected = false;
-    c->last_frame[0] = c->last_frame[1] = 0;
+    memset(c->last_frame, 0, sizeof c->last_frame);
     if (c->count || c->queued > c->completed) {
         c->completed = c->queued;
         c->snapshot.command_failed = true;
@@ -572,7 +627,7 @@ static int client_attach(PanelClient *c, char *error, size_t n)
     c->peer = fd;
     c->shared = shared;
     c->generation = reply.generation;
-    c->last_frame[0] = c->last_frame[1] = 0;
+    memset(c->last_frame, 0, sizeof c->last_frame);
     pthread_mutex_unlock(&c->mutex);
     return 0;
 }
@@ -739,7 +794,7 @@ PanelClient *panel_client_open(const Config *config, uint64_t window, char *erro
     c->window = window;
     c->peer = -1;
     c->wake = cast_wake_open(&c->wake_writer);
-    c->staging = malloc(PANEL_PIXELS);
+    c->staging = malloc(COMPOSITION_PIXELS);
     snprintf(c->snapshot.error, sizeof c->snapshot.error, "connecting to daemon");
     int rc = pthread_mutex_init(&c->mutex, NULL);
     if (rc || !c->staging || c->wake < 0) {
@@ -825,7 +880,7 @@ int panel_client_frame(PanelClient *c, int target, Frame *frame, char *error, si
     if (!c) {
         return app_error(error, n, "panel client unavailable");
     }
-    if (target < 0 || target > 2) {
+    if (target < 0 || target >= PANEL_PREVIEW_COUNT) {
         return app_error(error, n, "invalid preview target");
     }
     if (pthread_mutex_trylock(&c->mutex)) {
@@ -848,14 +903,22 @@ int panel_client_frame(PanelClient *c, int target, Frame *frame, char *error, si
             break;
         }
         PreviewInfo info = s->frame[target];
+        if (s->generation == c->generation && s->snapshot.connected &&
+            !info.width && !info.height && !info.stride) {
+            atomic_thread_fence(memory_order_acquire);
+            if (before != atomic_load_explicit(&s->sequence, memory_order_acquire)) continue;
+            frame_free(frame);
+            c->last_frame[target] = sequence;
+            break;
+        }
         if (s->generation != c->generation || !s->snapshot.connected || info.width < 1 ||
-            info.width > PANEL_PREVIEW_WIDTH || info.height < 1 ||
-            info.height > PANEL_PREVIEW_HEIGHT || info.stride != info.width * 4) {
+            info.width > preview_width(target) || info.height < 1 ||
+            info.height > preview_height(target) || info.stride != info.width * 4) {
             result = app_error(error, n, "invalid/stale panel frame");
             break;
         }
         size_t bytes = (size_t)info.stride * info.height;
-        memcpy(c->staging, s->pixels[target], bytes);
+        memcpy(c->staging, preview_pixels(s, target), bytes);
         atomic_thread_fence(memory_order_acquire);
         if (before != atomic_load_explicit(&s->sequence, memory_order_acquire)) {
             continue;

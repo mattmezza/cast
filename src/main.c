@@ -11,6 +11,9 @@
 #ifdef WITH_PANEL
 #include "panel.h"
 #endif
+#ifdef WITH_CUI
+#include "../ui/workspace.h"
+#endif
 #include "os_compat.h"
 #include <ctype.h>
 #include <errno.h>
@@ -107,6 +110,7 @@ static const char help[] =
     "  notes load FILE; notes mode timed|speech; notes speed LINES_PER_MINUTE\n"
     "  notes goto --line NUMBER; notes status [--json]\n"
     "  panel (optional native control panel)\n"
+    "  workspace [UI options] (optional native workspace)\n"
     "  setup; completions [bash|zsh|fish]; completions --script bash|zsh|fish\n"
     "  update --check|--install (signed desktop update; install and restart when idle)\n"
     "  update [VERSION] [--download-only DIRECTORY] (Arch release package)\n"
@@ -578,16 +582,21 @@ static void tick(App *a)
         snprintf(a->config.preview_target, sizeof a->config.preview_target, "%s",
                  targets[preview_target]);
     }
+    a->composition_error[0] = 0;
     bool capture_ok = platform_capture(a->platform, &a->screen, &a->cursor, e, sizeof e) == 0;
     /* Portal responses can commit a source during capture's event dispatch. */
     app_sync_source(a);
     app_runtime_sync(a);
     if (!capture_ok) {
+        snprintf(a->composition_error, sizeof a->composition_error,
+                 "Screen capture unavailable. Inspect cast status for details.");
         remember_error(a, e);
     }
     bool camera_ok = a->config.camera_enabled;
     if (a->config.camera_enabled && media_camera(a->media, &a->camera, e, sizeof e)) {
         camera_ok = false;
+        snprintf(a->composition_error, sizeof a->composition_error,
+                 "Camera unavailable; waiting for fresh webcam frames.");
         frame_free(&a->camera);
         remember_error(a, e);
     }
@@ -634,6 +643,20 @@ static void tick(App *a)
     } else if (shared_composition && frame_copy(&a->record_raw, &a->virtual_raw)) {
         frame_free(&a->record_raw);
         remember_error(a, "cannot allocate recording composition");
+    }
+    /* The workspace previews composition privately, even when all outgoing lanes
+       are paused. It never changes output state or feeds an encoder/device. */
+    if (panel_transport_attached(a->panel) && composition_ok) {
+        if (compositor_render(a->compositor, &a->config, &a->screen,
+                              camera_ok ? &a->camera : NULL, &a->cursor, false,
+                              &a->composition_preview, e, sizeof e)) {
+            frame_free(&a->composition_preview);
+            snprintf(a->composition_error, sizeof a->composition_error,
+                     "Composition unavailable. Inspect cast status for details.");
+            remember_error(a, e);
+        }
+    } else {
+        frame_free(&a->composition_preview);
     }
     if (app_output_frames(a, e, sizeof e)) {
         remember_error(a, e);
@@ -1105,6 +1128,7 @@ cleanup:
         compositor_destroy(a->compositor);
     }
     app_runtime_close(a);
+    frame_free(&a->composition_preview);
     frame_free(&a->screen);
     frame_free(&a->camera);
     frame_free(&a->virtual);
@@ -1333,7 +1357,7 @@ int main(int argc, char **argv)
         }
     }
     bool remote_command = first < argc && strcmp(argv[first], "doctor") &&
-                          strcmp(argv[first], "panel") && strcmp(argv[first], "edition") &&
+                          strcmp(argv[first], "panel") && strcmp(argv[first], "workspace") && strcmp(argv[first], "edition") &&
                           strcmp(argv[first], "features") && strcmp(argv[first], "license") &&
                           strcmp(argv[first], "update");
     Config config;
@@ -1424,6 +1448,16 @@ int main(int argc, char **argv)
         }
         doctor(&config);
         return 0;
+    }
+    if (first < argc && !strcmp(argv[first], "workspace")) {
+#ifdef WITH_CUI
+        if (app_socket_path(&config, e, sizeof e)) {
+            return fprintf(stderr, "cast: %s\n", e), 1;
+        }
+        return cast_workspace_run(&config, argc - first, argv + first);
+#else
+        return fprintf(stderr, "cast: workspace support is disabled; rebuild with CUI=1\n"), 1;
+#endif
     }
     bool offline_request =
         first < argc && (!strcmp(argv[first], "transcribe") ||

@@ -7,9 +7,15 @@
 #include <sys/types.h>
 
 /* Private protocol: both ends must come from the same build and struct layout. */
-#define PANEL_PROTOCOL_VERSION 4u
+#define PANEL_PROTOCOL_VERSION 6u
+#define PANEL_PREVIEW_COUNT 4
+/* Private composition is independent of the three outgoing privacy-gated lanes. */
+#define PANEL_PREVIEW_COMPOSITION 3
 #define PANEL_PREVIEW_WIDTH 640
 #define PANEL_PREVIEW_HEIGHT 360
+/* Only the private composition lane needs full-HD editing detail. */
+#define PANEL_COMPOSITION_PREVIEW_WIDTH 1920
+#define PANEL_COMPOSITION_PREVIEW_HEIGHT 1080
 typedef struct {
     Config config;
     State state;
@@ -24,6 +30,7 @@ typedef struct {
     uint64_t daemon_generation, frame_sequence, privacy_epoch;
     uint64_t duration_ns, countdown_remaining_ns, command_queued, command_completed;
     char current_preset[64];
+    char composition_error[256];
     char record_encoder[64], record_encoder_detail[256];
     char audio_status[4096], exclusion[256], error[CAST_ERR], last_reply[CAST_ERR];
     /* Discovery replies survive later command acknowledgements until consumed. */
