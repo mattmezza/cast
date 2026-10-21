@@ -2,6 +2,7 @@
 #define CAST_TIMELINE_RENDER_H
 #include "cast.h"
 #include "timeline.h"
+#include "timeline_export_status.h"
 typedef bool (*CastTimelineCancel)(void *);
 typedef struct CastTimelineRenderer CastTimelineRenderer;
 /* Thread confined, CPU-only, local regular inputs. Open validates every referenced
@@ -16,18 +17,6 @@ int timeline_renderer_frame(CastTimelineRenderer *, uint64_t time_ns, Frame *, c
  * The caller owns interleaved stereo output (2*count floats). */
 int timeline_renderer_audio(CastTimelineRenderer *, uint64_t sample_position, unsigned count,
                             float *, char *, size_t);
-typedef enum {
-    CAST_TIMELINE_EXPORT_QUEUED,
-    CAST_TIMELINE_EXPORT_RUNNING,
-    CAST_TIMELINE_EXPORT_COMPLETE,
-    CAST_TIMELINE_EXPORT_CANCELLED,
-    CAST_TIMELINE_EXPORT_FAILED
-} CastTimelineExportState;
-typedef struct {
-    CastTimelineExportState state;
-    uint64_t completed_ns, duration_ns;
-    char path[PATH_MAX], error[CAST_ERR];
-} CastTimelineExportSnapshot;
 typedef struct CastTimelineExport CastTimelineExport;
 /* Start copies the timeline/configuration and queues an owned worker. Inputs and
  * destination are opened there. Final output replaces an owned regular destination
@@ -42,6 +31,9 @@ typedef int (*CastTimelineFrameFilter)(void *user, uint64_t time_ns, Frame *, ch
 CastTimelineExport *timeline_export_start_filtered(const CastTimeline *, const Config *,
                                                    const char *, CastTimelineFrameFilter, void *,
                                                    char *, size_t);
+/* Atomically publishes with link(2); an existing destination is never replaced. */
+CastTimelineExport *timeline_export_start_noreplace(const CastTimeline *, const Config *,
+                                                    const char *, char *, size_t);
 void timeline_export_snapshot(CastTimelineExport *, CastTimelineExportSnapshot *);
 void timeline_export_cancel(CastTimelineExport *);
 /* Cancels if still running, joins, and frees. Call after snapshot COMPLETE to keep

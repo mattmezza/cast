@@ -112,6 +112,37 @@ int main(void)
     CastProjectSnapshot s = snapshot(a);
     assert(s.clip_count == 1 && s.media_count == 1 && !*s.error);
     assert(s.clips[0].track == 1 && s.clips[0].duration_ns == UINT64_C(1000000000));
+    a->config.width = 64;
+    a->config.height = 64;
+    a->config.fps = 10;
+    snprintf(a->config.video_codec, sizeof a->config.video_codec, "ffv1");
+    snprintf(a->config.audio_codec, sizeof a->config.audio_codec, "flac");
+    snprintf(a->config.record_container, sizeof a->config.record_container, "matroska");
+    char movie[PATH_MAX];
+    snprintf(movie, sizeof movie, "%s/export.mkv", folder);
+    const char *export_command[] = {"timeline", "export", movie};
+    const char *export_status[] = {"timeline", "export", "status"};
+    assert(!command(a, 3, export_command));
+    assert(!command(a, 3, export_status));
+    for (unsigned i = 0; i < 5000 && snapshot(a).exporting; ++i) {
+        usleep(1000);
+    }
+    assert(snapshot(a).export.state == CAST_TIMELINE_EXPORT_COMPLETE);
+    assert(!access(movie, R_OK));
+    assert(!command(a, 3, export_command));
+    for (unsigned i = 0; i < 5000 && snapshot(a).exporting; ++i) {
+        usleep(1000);
+    }
+    assert(snapshot(a).export.state == CAST_TIMELINE_EXPORT_FAILED);
+    assert(!unlink(movie));
+    assert(!command(a, 3, export_command));
+    const char *cancel_export[] = {"timeline", "export", "cancel"};
+    assert(!command(a, 3, cancel_export));
+    for (unsigned i = 0; i < 5000 && snapshot(a).exporting; ++i) {
+        usleep(1000);
+    }
+    assert(snapshot(a).export.state == CAST_TIMELINE_EXPORT_CANCELLED);
+    assert(access(movie, F_OK));
     char clip[32];
     snprintf(clip, sizeof clip, "%llu", (unsigned long long)s.clips[0].id);
     const char *gain[] = {"timeline", "gain", clip, "0.5,1"};
@@ -155,6 +186,7 @@ int main(void)
     project_session_tick(a);
     s = snapshot(a);
     assert(s.recording && s.clip_count == 2 && s.clips[1].capture_locked);
+    assert(command(a, 3, export_command));
     char captured_id[32];
     snprintf(captured_id, sizeof captured_id, "%llu", (unsigned long long)s.clips[1].id);
     const char *remove[] = {"timeline", "remove", captured_id};

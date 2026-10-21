@@ -121,3 +121,17 @@ playback/export controls require their own integration.
 `tests/test_timeline_render.c` generates stereo WAV data, exports colored FFV1
 frames and FLAC audio, reopens that movie, and checks trim/split position, gain,
 forward/reverse seeking, frame color, cancellation preservation and missing input.
+
+The project controller exposes `timeline export PATH`, `timeline export status`
+and `timeline export cancel`. It copies configuration and timeline state into an
+independent worker; later document edits do not change that export. Captured clips
+still being recorded/finalized and known missing references are rejected. Input
+opening/probing and all output writes run on the export worker. Progress is
+available as `CastProjectSnapshot.export` with an `exporting` flag. Session close
+cancels and joins the export. This path never replaces an existing output: final
+publication uses an atomic hard link, so even a destination created during export
+causes publication to fail without changing that destination.
+
+Permanent isolated targets on Linux and macOS are `check-timeline`,
+`check-project`, `check-project-session`, and `check-timeline-render`. They exercise
+public document and renderer code independently of edition feature providers.

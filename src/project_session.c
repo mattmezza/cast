@@ -1,6 +1,7 @@
 #include "project_session.h"
 #include "app_internal.h"
 #include "project.h"
+#include "timeline_render.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -36,6 +37,8 @@ typedef struct {
     int result;
 } ProjectJob;
 struct CastProjectSession {
+    CastTimelineExport *export;
+    CastTimelineExportSnapshot export_snapshot;
     pthread_t worker;
     pthread_mutex_t mutex;
     pthread_cond_t wake;
@@ -306,6 +309,7 @@ void project_session_close(CastProjectSession *s)
     if (!s) {
         return;
     }
+    timeline_export_close(s->export);
     pthread_mutex_lock(&s->mutex);
     s->stop = true;
     pthread_cond_signal(&s->wake);
@@ -576,6 +580,11 @@ void project_session_snapshot(CastProjectSession *s, CastProjectSnapshot *out)
     if (!s) {
         return;
     }
+    if (s->export) {
+        timeline_export_snapshot(s->export, &s->export_snapshot);
+    }
+    out->export = s->export_snapshot;
+    out->exporting = s->export && s->export_snapshot.state < CAST_TIMELINE_EXPORT_COMPLETE;
     out->open = s->open;
     out->busy = s->busy;
     out->dirty = s->dirty;
@@ -667,6 +676,58 @@ int project_session_command(App *a, int argc, char **argv, char *out, size_t siz
     }
     if (strcmp(argv[0], "timeline")) {
         return fail(out, size, "unknown project command");
+    }
+    if (!strcmp(argv[1], "export")) {
+        if (s->export) {
+            timeline_export_snapshot(s->export, &s->export_snapshot);
+        }
+        bool running = s->export && s->export_snapshot.state < CAST_TIMELINE_EXPORT_COMPLETE;
+        if (argc == 3 && !strcmp(argv[2], "status")) {
+            snprintf(out, size,
+                     "OK export state=%d completed_ns=%" PRIu64 " duration_ns=%" PRIu64 " error=%s",
+                     s->export_snapshot.state, s->export_snapshot.completed_ns,
+                     s->export_snapshot.duration_ns, s->export_snapshot.error);
+            return 0;
+        }
+        if (argc == 3 && !strcmp(argv[2], "cancel")) {
+            if (!running) {
+                return fail(out, size, "no active timeline export");
+            }
+            timeline_export_cancel(s->export);
+            snprintf(out, size, "OK export cancellation requested");
+            return 0;
+        }
+        if (argc != 3) {
+            return fail(out, size, "timeline export PATH|status|cancel");
+        }
+        if (running || s->busy) {
+            return fail(out, size, "wait for current export/project worker");
+        }
+        for (unsigned i = 0; i < s->timeline.clip_count; ++i) {
+            const CastTimelineClip *clip = &s->timeline.clips[i];
+            const CastTimelineMedia *media = timeline_media(&s->timeline, clip->media_id);
+            if (clip->capture_locked || !media || media->missing) {
+                return fail(out, size, "clip %" PRIu64 " has locked or missing media", clip->id);
+            }
+        }
+        if (!s->timeline.clip_count) {
+            return fail(out, size, "timeline is empty");
+        }
+        char path[PATH_MAX];
+        int length = snprintf(path, sizeof path, "%s%s%s", argv[2][0] == '/' ? "" : s->cwd,
+                              argv[2][0] == '/' ? "" : "/", argv[2]);
+        if (!*argv[2] || length < 0 || (size_t)length >= sizeof path) {
+            return fail(out, size, "invalid export path");
+        }
+        timeline_export_close(s->export);
+        s->export = NULL;
+        s->export = timeline_export_start_noreplace(&s->timeline, &a->config, path, out, size);
+        if (!s->export) {
+            return -1;
+        }
+        timeline_export_snapshot(s->export, &s->export_snapshot);
+        snprintf(out, size, "OK timeline export queued");
+        return 0;
     }
     if (s->busy && s->job.kind != JOB_SAVE && s->job.kind != JOB_AUTOSAVE) {
         return fail(out, size, "timeline changes wait for project open/import completion");

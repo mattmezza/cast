@@ -134,7 +134,7 @@ LDFLAGS += -Wl,-headerpad_max_install_names
 LDLIBS = -lm -lpthread -framework Foundation -framework AVFoundation \
  -framework ScreenCaptureKit -framework CoreMedia -framework CoreVideo \
  -framework CoreGraphics -framework AudioToolbox -framework CoreAudio -framework AppKit
-SOURCES = src/timeline.c src/project.c src/project_session.c src/main.c src/commands.c src/config.c src/config_migrate.c src/state.c \
+SOURCES = src/timeline.c src/project.c src/project_session.c src/timeline_render.c src/main.c src/commands.c src/config.c src/config_migrate.c src/state.c \
  src/compositor.c src/composition_assets.c src/presentation_text.c src/platform.c \
  src/media.c src/record.c src/stream.c src/panel_transport.c src/panel_lifecycle.c \
  src/help_commands.c src/update.c src/desktop_update.c src/desktop_update_ui.c src/edition.c src/license_store.c src/edition_extensions.c \
@@ -300,3 +300,29 @@ check-desktop-update: $(BUILD)/test_desktop_update $(BUILD)/test_desktop_update_
 .PHONY: check-desktop-update-guard
 check-desktop-update-guard: $(BUILD)/test_commands
 	CAST_TEST_DESKTOP_UPDATE_GUARD_ONLY=1 $(BUILD)/test_commands
+
+# Isolated document/renderer tests never open capture or audio devices.
+PROJECT_TEST_SOURCES = src/project.c src/timeline.c src/config.c src/edition_extensions.c src/workflow_schema.c src/edition.c src/license_store.c src/presentation_text.c src/os_compat.c vendor/inih/ini.c
+PROJECT_RENDER_TEST_SOURCES = src/timeline_render.c src/media_codec.c src/compositor.c src/state.c
+PROJECT_TEST_FLAGS = -D_GNU_SOURCE -DCAST_TEST -Isrc -Ivendor/inih -DINI_HANDLER_LINENO=1 -DINI_CALL_HANDLER_ON_NEW_SECTION=1 -DINI_ALLOW_MULTILINE=0 -DINI_ALLOW_INLINE_COMMENTS=0 -DINI_STOP_ON_FIRST_ERROR=1 -DINI_MAX_LINE=8192
+$(BUILD)/test_timeline: tests/test_timeline.c src/timeline.c src/timeline.h
+	@mkdir -p $(BUILD)
+	$(CC) $(PROJECT_TEST_FLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -o $@ tests/test_timeline.c src/timeline.c -lm
+$(BUILD)/test_project: tests/test_project.c $(PROJECT_TEST_SOURCES)
+	@mkdir -p $(BUILD)
+	$(CC) $(PROJECT_TEST_FLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -ffunction-sections -fdata-sections -o $@ $^ -Wl,-dead_strip $(PKG_LIBS) -lpthread -lm
+$(BUILD)/test_project_session: tests/test_project_session.c src/project_session.c $(PROJECT_TEST_SOURCES) $(PROJECT_RENDER_TEST_SOURCES)
+	@mkdir -p $(BUILD)
+	$(CC) $(PROJECT_TEST_FLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -ffunction-sections -fdata-sections -o $@ $^ -Wl,-dead_strip $(PKG_LIBS) -lpthread -lm
+$(BUILD)/test_timeline_render: tests/test_timeline_render.c $(PROJECT_TEST_SOURCES) $(PROJECT_RENDER_TEST_SOURCES)
+	@mkdir -p $(BUILD)
+	$(CC) $(PROJECT_TEST_FLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -ffunction-sections -fdata-sections -o $@ $^ -Wl,-dead_strip $(PKG_LIBS) -lpthread -lm
+.PHONY: check-timeline check-project check-project-session check-timeline-render
+check-timeline: $(BUILD)/test_timeline
+	$(BUILD)/test_timeline
+check-project: $(BUILD)/test_project
+	$(BUILD)/test_project
+check-project-session: $(BUILD)/test_project_session
+	$(BUILD)/test_project_session
+check-timeline-render: $(BUILD)/test_timeline_render
+	$(BUILD)/test_timeline_render

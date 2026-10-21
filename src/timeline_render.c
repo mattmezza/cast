@@ -712,6 +712,7 @@ struct CastTimelineExport {
     CastTimeline timeline;
     Config config;
     CastTimelineExportSnapshot snapshot;
+    bool no_replace;
     CastTimelineFrameFilter filter;
     void *filter_user;
 };
@@ -811,6 +812,10 @@ static void *export_worker(void *opaque)
     }
     struct stat existing;
     if (lstat(job->snapshot.path, &existing) == 0) {
+        if (job->no_replace) {
+            fail(error, sizeof error, "export destination already exists");
+            goto done;
+        }
         if (!S_ISREG(existing.st_mode) || existing.st_uid != geteuid() || existing.st_nlink != 1) {
             fail(error, sizeof error, "export destination must be an owned regular file");
             goto done;
@@ -1036,9 +1041,13 @@ static void *export_worker(void *opaque)
         fail(error, sizeof error, "export destination changed to unsafe file");
         goto done;
     }
-    if (rename(temporary, job->snapshot.path)) {
+    if (job->no_replace ? link(temporary, job->snapshot.path)
+                        : rename(temporary, job->snapshot.path)) {
         fail(error, sizeof error, "export publish failed: %s", strerror(errno));
         goto done;
+    }
+    if (job->no_replace) {
+        unlink(temporary);
     }
     published = true;
     char parent[PATH_MAX];
@@ -1094,10 +1103,9 @@ done:
     pthread_mutex_unlock(&job->mutex);
     return NULL;
 }
-CastTimelineExport *timeline_export_start_filtered(const CastTimeline *timeline,
-                                                   const Config *config, const char *path,
-                                                   CastTimelineFrameFilter filter, void *user,
-                                                   char *error, size_t size)
+static CastTimelineExport *export_start(const CastTimeline *timeline, const Config *config,
+                                        const char *path, CastTimelineFrameFilter filter,
+                                        void *user, bool no_replace, char *error, size_t size)
 {
     if (!timeline || !config || !path || !*path || strlen(path) >= PATH_MAX) {
         fail(error, size, "invalid timeline export request");
@@ -1115,6 +1123,7 @@ CastTimelineExport *timeline_export_start_filtered(const CastTimeline *timeline,
     }
     job->timeline = copy;
     job->config = cfg;
+    job->no_replace = no_replace;
     job->filter = filter;
     job->filter_user = user;
     job->snapshot.duration_ns = timeline_duration(&copy);
@@ -1132,7 +1141,7 @@ CastTimelineExport *timeline_export_start_filtered(const CastTimeline *timeline,
 CastTimelineExport *timeline_export_start(const CastTimeline *t, const Config *c, const char *p,
                                           char *e, size_t n)
 {
-    return timeline_export_start_filtered(t, c, p, NULL, NULL, e, n);
+    return export_start(t, c, p, NULL, NULL, false, e, n);
 }
 void timeline_export_snapshot(CastTimelineExport *job, CastTimelineExportSnapshot *out)
 {
@@ -1156,4 +1165,16 @@ void timeline_export_close(CastTimelineExport *job)
         pthread_mutex_destroy(&job->mutex);
         free(job);
     }
+}
+
+CastTimelineExport *timeline_export_start_filtered(const CastTimeline *t, const Config *c,
+                                                   const char *p, CastTimelineFrameFilter f,
+                                                   void *u, char *e, size_t n)
+{
+    return export_start(t, c, p, f, u, false, e, n);
+}
+CastTimelineExport *timeline_export_start_noreplace(const CastTimeline *t, const Config *c,
+                                                    const char *p, char *e, size_t n)
+{
+    return export_start(t, c, p, NULL, NULL, true, e, n);
 }
