@@ -143,11 +143,10 @@ static bool record_settings_disabled(const AppState *a) {
     return !a->live.connected||!a->live.enabled||a->edit_requested||a->live.pending||a->live.snapshot_busy||
         a->live.recording||a->live.record_countdown_active||a->live.record_finalizing;
 }
-static void record_select(cui_context *ui,AppState *a,const cui_theme *t,const char *idname,const char *label,
+static void settings_select(cui_context *ui,AppState *a,const cui_theme *t,const char *idname,const char *label,
                           const char *note,const char *current,const char *const *labels,const char *const *values,
-                          unsigned count,AppEdit edit,bool narrow) {
+                          unsigned count,AppEdit edit,const char *key,unsigned index,bool disabled,bool narrow) {
     cui_id id=cui_id_from(ui,idname);
-    unsigned index=edit==APP_EDIT_RECORD_CONTAINER?0:edit==APP_EDIT_RECORD_VIDEO_CODEC?1:2;
     cui_choice_popup *popup=&a->recording_selects[index];
     if(!a->recording_select_initialized[index]) {
         cui_choice_popup_init(popup,id^UINT64_C(0x706f707570));a->recording_select_initialized[index]=true;
@@ -162,7 +161,7 @@ static void record_select(cui_context *ui,AppState *a,const cui_theme *t,const c
     /* Root ID is outside this row's identity scope. The settings overlay bounds
      * supplies the same host viewport when nested IDs cannot resolve it. */
     if(viewport.w<=0)viewport=a->settings.overlay.bounds;
-    bool disabled=record_settings_disabled(a),was_open=popup->overlay.open;
+    bool was_open=popup->overlay.open;
     cui_base_choice_popup_trigger(ui,id,cui_string(label),disabled,items,count,selected,popup);
     bool open=popup->overlay.open;
     CastDesignTokens tokens=cast_design_tokens(t->dark);
@@ -191,12 +190,54 @@ static void record_select(cui_context *ui,AppState *a,const cui_theme *t,const c
         cui_id chosen=selected;
         if(cui_list(ui,id^UINT64_C(0x6c697374),&theme,items,count,&chosen,&popup->list,
             (cui_list_options){.height=32,.dt=.016f,.scroll_scope=popup->overlay.id})) {
-            for(unsigned i=0;i<count;++i)if(chosen==items[i].id)app_request_edit(a,edit,values[i]);
+            for(unsigned i=0;i<count;++i)if(chosen==items[i].id) {if(key)app_request_setting(a,key,values[i]);else app_request_edit(a,edit,values[i]);}
             cui_overlay_close(ui,&popup->overlay);cui_focus(ui,id);cui_invalidate(ui);
         }
         cui_end_box(ui);cui_overlay_end(ui);
     }
     row_end(ui);
+}
+static bool composition_settings_disabled(const AppState *a) {return !a->live.connected || a->live.pending || a->live.snapshot_busy || a->edit_requested || a->extension_requested;}
+static void record_select(cui_context *ui,AppState *a,const cui_theme *t,const char *idname,const char *label,
+    const char *note,const char *current,const char *const *labels,const char *const *values,unsigned count,AppEdit edit,bool narrow) {
+    settings_select(ui,a,t,idname,label,note,current,labels,values,count,edit,NULL,
+        edit==APP_EDIT_RECORD_CONTAINER?0:edit==APP_EDIT_RECORD_VIDEO_CODEC?1:2,record_settings_disabled(a),narrow);
+}
+static void composition_toggle(cui_context *ui,AppState *a,const cui_theme *t,const char *label,const char *key,bool current,bool narrow) {
+    row_begin(ui,t,label,NULL,narrow);bool value=current;
+    if(cui_switch_ex(ui,cui_id_from(ui,"value"),t,cui_string(""),&value,NULL,
+        (cui_switch_options){.accessibility_label=cui_string(label),.disabled=composition_settings_disabled(a),.size=CUI_CONTROL_SMALL,.width=28}))
+        app_request_setting(a,key,value?"true":"false");
+    row_end(ui);
+}
+static void composition_segments(cui_context *ui,AppState *a,const cui_theme *t,const char *label,const char *key,
+    const char *current,const char *const *labels,const char *const *values,unsigned count,bool narrow) {
+    row_begin(ui,t,label,NULL,narrow);
+    cui_begin_box(ui,0,(cui_box){.width=160,.row=true,.gap=0});
+    for(unsigned i=0;i<count;++i) {
+        cui_theme colors=*t;bool chosen=!strcmp(current,values[i]);
+        if(chosen) {colors.secondary=cast_design_tokens(t->dark).selected;colors.border=cast_design_tokens(t->dark).selected_line;}
+        if(cui_button_ex(ui,cui_id_from(ui,values[i]),&colors,cui_string(labels[i]),
+            (cui_button_options){.width=160.f/count,.height=30,.font_size=11,.variant=CUI_BUTTON_OUTLINE,
+                .disabled=composition_settings_disabled(a),.toggle_semantics=true,.toggled=chosen}))app_request_setting(a,key,values[i]);
+    }
+    cui_end_box(ui);row_end(ui);
+}
+typedef struct {AppState *a;const char *key;} CompositionNumber;
+static void composition_number_request(void *user,const cui_component_slider_request *event) {
+    if(event->phase!=CUI_SLIDER_COMMIT)return;
+    CompositionNumber *request=user;char value[24];snprintf(value,sizeof value,"%.0f",event->requested);app_request_setting(request->a,request->key,value);
+}
+static void composition_number(cui_context *ui,AppState *a,const cui_theme *t,const char *label,const char *key,int current,int maximum,bool narrow) {
+    row_begin(ui,t,label,NULL,narrow);cui_id id=cui_id_from(ui,"value");
+    cui_slider_state *state=cui_resource_get(ui,id,UINT64_C(0x636f6d706e756d),sizeof *state,NULL,NULL);
+    CompositionNumber request={a,key};
+    cui_begin_box(ui,0,(cui_box){.width=160,.row=true,.gap=8,.align_y=CUI_ALIGN_CENTER});
+    if(state)cui_slider_events(ui,id,t,cui_string(label),current,state,
+        (cui_slider_options){.minimum=0,.maximum=maximum,.step=1,.disabled=composition_settings_disabled(a)},
+        (cui_slider_style_options){.width=120,.track_height=4,.hit_height=24,.hide_label=true},
+        (cui_component_slider_handler){composition_number_request,&request});
+    char text[24];snprintf(text,sizeof text,"%d px",current);txt(ui,text,11,t->muted);cui_end_box(ui);row_end(ui);
 }
 typedef struct {AppState *app;AppEdit edit;} RecordingNumber;
 static void record_number_request(void *user,const cui_component_slider_request *event) {
@@ -253,11 +294,11 @@ static void content(cui_context *ui,AppState *a,const cui_theme *t,bool narrow) 
     unsigned c=a->settings_category;
     const bool connected = a->live.connected;
     char fps[32]; snprintf(fps, sizeof fps, "%d fps", a->live.fps);
-    const char *titles[]={"Appearance","Composition defaults","Recording","Streaming",
+    const char *titles[]={"Appearance","Composition","Recording","Streaming",
         "Teleprompter & subtitles","Presets","Licence","Agent access","Advanced","About"};
     const char *subs[]={
         "The interface stays quiet; the orange is reserved for what matters. These are preferences, not per-take settings.",
-        "What a new session starts with. Per-take changes stay in the left panel.",
+        "Current session composition. Save a project to retain these settings.",
         "Durable defaults for takes and projects. The take itself stays in the Record workspace.",
         "One destination. The key is read from a file at start and never displayed.",
         "The prompter is drawn on top of the stage, never inside the outgoing frame.",
@@ -269,7 +310,7 @@ static void content(cui_context *ui,AppState *a,const cui_theme *t,bool narrow) 
     cui_text_ex(ui,cui_string(titles[c]),17,t->text,0,(cui_text_style){.weight=CUI_TEXT_WEIGHT_SEMIBOLD});
     cui_begin_box(ui,0,(cui_box){.width=-1,.max_width=480});
     txt(ui,subs[c],12,t->muted);cui_end_box(ui);
-    if(c!=0 && c!=2 && c!=3 && c!=4 && c!=6 && c!=9) txt(ui,connected ? "Read only · changes are not available in this workspace" : "Connect the daemon to inspect current settings",11,t->muted);
+    if(c!=0 && c!=1 && c!=2 && c!=3 && c!=4 && c!=6 && c!=9) txt(ui,connected ? "Read only · changes are not available in this workspace" : "Connect the daemon to inspect current settings",11,t->muted);
     const char *theme[]={"dark","light","system"};
     const char *density[]={"comfortable","compact"};
     const char *fit[]={"contain","cover"},*shape[]={"rect","rounded","circle"};
@@ -289,13 +330,29 @@ static void content(cui_context *ui,AppState *a,const cui_theme *t,bool narrow) 
         FIELD("Reduce motion","Stops panel slides and meter animation.","",'s');
         FIELD("Panel transition",NULL,"Not implemented",'t'); group_end(ui);
         txt(ui,"Only colour scheme is available in this preview. Other preferences are not yet implemented.",11,t->muted);break;
-    case 1:
-        group(ui,t,"FRAME"); FIELD("Default layout",NULL,connected?a->live.layout:"Unavailable",'c');
-        SEG("Screen fit",NULL,fit,-1); SEG("Camera shape",NULL,shape,-1);
-        FIELD("Mirror camera",NULL,"",'s'); group_end(ui);
-        group(ui,t,"CAPTURE"); FIELD("Screen border","A hairline around the captured screen.","",'s');
-        FIELD("Corner radius","0 for a hard native rectangle.","— px",'r'); group_end(ui);
-        group(ui,t,"ANNOTATIONS"); FIELD("Cursor, clicks and keys","Per-output visibility lives in the panel matrix.","",'s');group_end(ui);break;
+    case 1: {
+        const char *layouts[]={"Overlay","Split","Screen","Camera","Stage"},*layout_values[]={"overlay","split","screen","camera","stage"};
+        const char *shape_values[]={"rectangle","rounded","circle"};
+        group(ui,t,"FRAME");
+        settings_select(ui,a,t,"composition-layout","Layout",NULL,a->live.layout,layouts,layout_values,5,APP_EDIT_NONE,"composition.layout",3,composition_settings_disabled(a),narrow);
+        composition_segments(ui,a,t,"Screen fit","capture.fit",a->live.fit,fit,fit,2,narrow);
+        composition_segments(ui,a,t,"Camera shape","camera.shape",a->live.camera_shape,shape,shape_values,3,narrow);
+        composition_toggle(ui,a,t,"Mirror camera","camera.mirror",a->live.mirror,narrow);group_end(ui);
+        group(ui,t,"CAPTURE");
+        row_begin(ui,t,"Screen border","A hairline around the captured screen.",narrow);
+        bool border=a->live.screen_border_width>0;
+        if(cui_switch_ex(ui,cui_id_from(ui,"value"),t,cui_string(""),&border,NULL,
+            (cui_switch_options){.accessibility_label=cui_string("Screen border"),.disabled=composition_settings_disabled(a),.size=CUI_CONTROL_SMALL,.width=28}))
+            app_request_setting(a,"screen.border_width",border?"1":"0");
+        row_end(ui);
+        composition_number(ui,a,t,"Corner radius","screen.radius",a->live.screen_radius,128,narrow);group_end(ui);
+        group(ui,t,"ANNOTATIONS");
+        composition_toggle(ui,a,t,"Cursor","cursor.enabled",a->live.cursor,narrow);
+        composition_toggle(ui,a,t,"Clicks","clicks.enabled",a->live.clicks,narrow);
+        composition_toggle(ui,a,t,"Keys","keys.enabled",a->live.keys,narrow);group_end(ui);
+        if(a->live.edit_error[0])txt(ui,a->live.edit_error,11,t->danger);
+        break;
+    }
     case 2: {
         const char *containers[]={"MP4","MKV","MOV","WebM"},*container_values[]={"mp4","matroska","mov","webm"};
         const char *encoders[]={"Automatic","H.264 · software","HEVC · software","VP9 · software","AV1 · software"},*encoder_values[]={"auto","libx264","libx265","libvpx-vp9","libaom-av1"};
@@ -383,6 +440,8 @@ void app_settings_frame(cui_context *ui,AppState *a,const cui_theme *t,float wid
 #endif
     if(!a->settings.overlay.open||!a->live.connected||a->recording_select_generation!=a->live.generation||a->settings_category!=2)
         for(unsigned i=0;i<3;++i)if(a->recording_select_initialized[i])cui_overlay_close(ui,&a->recording_selects[i].overlay);
+    if(!a->settings.overlay.open || !a->live.connected || a->recording_select_generation!=a->live.generation || a->settings_category!=1)
+        if(a->recording_select_initialized[3])cui_overlay_close(ui,&a->recording_selects[3].overlay);
     a->recording_select_generation=a->live.generation;
     if(a->settings_category>=10)a->settings_category=0;
     float w=fminf(1020,fmaxf(0,width-40)),h=fminf(720,fmaxf(0,height-40));

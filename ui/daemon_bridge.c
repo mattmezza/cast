@@ -613,6 +613,9 @@ static void copy_config(AppLive *out, const PanelSnapshot *snapshot, const Daemo
     out->camera_enabled = config->camera_enabled;
     out->camera_visible = config->camera_visible;
     out->mirror = config->mirror;
+    snprintf(out->camera_shape,sizeof out->camera_shape,"%s",config->shape);
+    out->screen_radius=config->screen_radius;out->screen_border_width=config->screen_border_width;
+    out->cursor=config->cursor;out->clicks=config->clicks;out->keys=config->keys;
     bool default_display = !out->screen_id[0] || !strcmp(out->screen_id, "main");
     bool default_camera = !out->camera_id[0] || !strcmp(out->camera_id, "default");
     source_label(out->screen_name, sizeof out->screen_name,

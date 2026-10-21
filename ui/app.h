@@ -42,8 +42,8 @@ typedef struct AppState {
     unsigned discard_argc;
     char discard_args[3][4096];
     uint64_t discard_generation;
-    cui_choice_popup recording_selects[3];
-    bool recording_select_initialized[3];
+    cui_choice_popup recording_selects[4];
+    bool recording_select_initialized[4];
     uint64_t recording_select_generation;
     cui_overlay zoom_popup;
     bool zoom_popup_initialized;

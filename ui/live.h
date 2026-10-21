@@ -56,7 +56,9 @@ typedef struct {
     bool can_select_monitor, can_reselect_portal, can_select_camera;
     char screen_id[128], camera_id[APP_DEVICE_ID_MAX];
     float camera_width_percent;
-    char layout[16], fit[16], anchor[24];
+    char layout[16], fit[16], anchor[24], camera_shape[16];
+    int screen_radius, screen_border_width;
+    bool cursor, clicks, keys;
     char background_source[16], screen_background[16], camera_background[16];
     uint32_t screen_background_color, camera_background_color;
     uint32_t gradient_from, gradient_via, gradient_to;

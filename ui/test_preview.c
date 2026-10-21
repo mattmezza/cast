@@ -883,6 +883,27 @@ static void recording_edits(void) {
     p.app.edit_requested=false;p.app.live.recording=true;settle(&p);click(&p,"record-container");
     assert(!p.app.edit_requested&&!p.app.recording_selects[0].overlay.open);cui_destroy(p.ui);
 }
+static const cui_semantic *semantic_named(Preview *p,cui_role role,const char *name) {
+    size_t count=0;const cui_semantic *items=cui_semantics(p->ui,&count);
+    for(size_t i=0;i<count;++i)if(items[i].role==role && items[i].name.length==strlen(name) && !memcmp(items[i].name.data,name,strlen(name)))return &items[i];
+    return NULL;
+}
+static void composition_settings(void) {
+    Preview p=create(1360,1000);p.app.live.enabled=true;p.app.live.connected=true;p.app.live.generation=5;
+    strcpy(p.app.live.layout,"overlay");strcpy(p.app.live.fit,"contain");strcpy(p.app.live.camera_shape,"rectangle");p.app.live.screen_radius=17;
+    settle(&p);click(&p,"settings-open");click(&p,"settings-category-1");
+    const cui_semantic *mirror=semantic_named(&p,CUI_ROLE_SWITCH,"Mirror camera");assert(mirror && !mirror->disabled);
+    cui_rect r=mirror->bounds;event(&p,(cui_event){.type=CUI_EVENT_POINTER_DOWN,.x=r.x+r.w/2,.y=r.y+r.h/2});
+    event(&p,(cui_event){.type=CUI_EVENT_POINTER_UP,.x=r.x+r.w/2,.y=r.y+r.h/2});settle(&p);
+    assert(p.app.extension_requested && !strcmp(p.app.extension_args[0],"camera.mirror") && !strcmp(p.app.extension_args[1],"true") && !p.app.live.mirror);
+    p.app.extension_requested=false;settle(&p);
+    const cui_semantic *radius=semantic_named(&p,CUI_ROLE_SLIDER,"Corner radius");assert(radius && !radius->disabled);cui_focus(p.ui,radius->id);
+    key(&p,CUI_KEY_RIGHT,0);
+    assert(p.app.extension_requested && !strcmp(p.app.extension_args[0],"screen.radius") && !strcmp(p.app.extension_args[1],"18") && p.app.live.screen_radius==17);
+    p.app.extension_requested=false;settle(&p);click(&p,"composition-layout");key(&p,CUI_KEY_DOWN,0);key(&p,CUI_KEY_ENTER,0);
+    assert(p.app.extension_requested && !strcmp(p.app.extension_args[0],"composition.layout") && !strcmp(p.app.extension_args[1],"split") && !strcmp(p.app.live.layout,"overlay"));
+    cui_destroy(p.ui);
+}
 static void virtual_edits(void) {
     Preview p=create(1360,1000);p.app.live.enabled=true;p.app.live.connected=true;p.app.live.generation=3;
     settle(&p);click(&p,"output-start");
@@ -948,6 +969,7 @@ int main(int argc,char **argv) {
         assert(cui_debug_layout_export(p.ui,CUI_DEBUG_LAYOUT_JSON,dump,required,&required));
         puts(dump);free(dump);cui_destroy(p.ui);return 0;
     }
+    composition_settings();
     virtual_edits();
     project_discard();
     prompter_entitlement();
