@@ -7,6 +7,7 @@ typedef bool (*AppTimelineSubmit)(void *, unsigned, const char *const *);
 typedef struct {
     bool connected, blocked, recording, cut, countdown, finalizing;
     float width, height;
+    uint64_t generation;
 } AppTimelineOptions;
 void app_timeline_dock(cui_context *, const cui_theme *, const CastProjectSnapshot *,
                        AppTimelineOptions, AppTimelineSubmit, void *);

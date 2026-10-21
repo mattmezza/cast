@@ -358,13 +358,13 @@ static void content(cui_context *ui,AppState *a,const cui_theme *t,bool narrow) 
     }
     case 2: {
         const char *containers[]={"MP4","MKV","MOV","WebM"},*container_values[]={"mp4","matroska","mov","webm"};
-        const char *encoders[]={"Automatic","H.264 · OpenH264","H.264 · x264","HEVC · x265","VP9 · software","AV1 · software"},*encoder_values[]={"auto","libopenh264","libx264","libx265","libvpx-vp9","libaom-av1"};
+        const char *encoders[]={"Automatic","H.264 · OpenH264","H.264 · x264","HEVC · x265","VP9 · software","AV1 · software","H.264 · Apple hardware"},*encoder_values[]={"auto","libopenh264","libx264","libx265","libvpx-vp9","libaom-av1","h264_videotoolbox"};
         const char *audio[]={"AAC","Opus","PCM 16-bit","FLAC"},*audio_values[]={"aac","libopus","pcm_s16le","flac"};
         txt(ui,record_settings_disabled(a)?"Recording settings are locked while a take is active or the daemon is unavailable.":"Changes apply to the next take in this daemon session.",11,t->muted);
         if(a->live.edit_error[0])txt(ui,a->live.edit_error,11,t->danger);
         group(ui,t,"OUTPUT");
         record_select(ui,a,t,"record-container","Container",NULL,a->live.record_container,containers,container_values,4,APP_EDIT_RECORD_CONTAINER,narrow);
-        record_select(ui,a,t,"record-video-codec","Encoder","Unavailable or profile-prohibited encoders are disabled.",a->live.record_codec,encoders,encoder_values,6,APP_EDIT_RECORD_VIDEO_CODEC,narrow);
+        record_select(ui,a,t,"record-video-codec","Encoder","Unavailable or profile-prohibited encoders are disabled.",a->live.record_codec,encoders,encoder_values,7,APP_EDIT_RECORD_VIDEO_CODEC,narrow);
         record_select(ui,a,t,"record-audio-codec","Audio codec",NULL,a->live.record_audio_codec,audio,audio_values,4,APP_EDIT_RECORD_AUDIO_CODEC,narrow);
         record_number(ui,a,t,"record-crf","Quality (CRF)","Lower values improve quality and increase file size.",a->live.record_crf,51,APP_EDIT_RECORD_CRF,narrow);
         FIELD("Frame rate","Requires restarting the capture daemon.",connected?fps:"— fps",'t');group_end(ui);

@@ -210,3 +210,10 @@ including gain, source seek, rapid play/pause/seek, immediate epoch silence, pau
 during slow startup, failure/no-retry and asynchronous cancellation. It opens no
 real output device. Linux and macOS native playback, route changes, audible A/V
 sync and device permissions still require hardware acceptance.
+
+`timeline trim-left ID NEW_START_NS` moves a clip's left edge to an absolute
+document position, adjusting its source offset and duration together while keeping
+the right edge fixed. Extending requires available source material; zero-length
+clips, track collisions and capture-locked clips are rejected without changes.
+The complete trim is one undoable edit. `timeline trim` continues to set the
+source offset and duration directly.

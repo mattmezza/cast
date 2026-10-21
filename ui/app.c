@@ -117,7 +117,7 @@ bool app_request_edit(AppState *s, AppEdit edit, const char *value) {
     } else if(edit==APP_EDIT_RECORD_CONTAINER) {
         if(strcmp(value,"matroska")&&strcmp(value,"mp4")&&strcmp(value,"mov")&&strcmp(value,"webm"))return false;
     } else if(edit==APP_EDIT_RECORD_VIDEO_CODEC) {
-        if(strcmp(value,"auto")&&strcmp(value,"libopenh264")&&strcmp(value,"libx264")&&strcmp(value,"libx265")&&strcmp(value,"libvpx-vp9")&&strcmp(value,"libaom-av1"))return false;
+        if(strcmp(value,"auto")&&strcmp(value,"libopenh264")&&strcmp(value,"libx264")&&strcmp(value,"libx265")&&strcmp(value,"libvpx-vp9")&&strcmp(value,"libaom-av1")&&strcmp(value,"h264_videotoolbox"))return false;
     } else if(edit==APP_EDIT_RECORD_AUDIO_CODEC) {
         if(strcmp(value,"aac")&&strcmp(value,"libopus")&&strcmp(value,"pcm_s16le")&&strcmp(value,"flac"))return false;
     } else if(edit==APP_EDIT_RECORD_CRF||edit==APP_EDIT_RECORD_COUNTDOWN||edit==APP_EDIT_AUDIO_MIC_GAIN||edit==APP_EDIT_AUDIO_DESKTOP_GAIN) {
@@ -1198,8 +1198,10 @@ static void center(cui_context *ui, AppState *s, const cui_theme *t,
     }
     cui_end_box(ui);
     if (dock_height > 0)
-        app_timeline_dock(ui,t,&s->live.project,(AppTimelineOptions){.connected=s->live.connected,
-            .blocked=composition_disabled(s)||s->extension_requested,.recording=s->live.recording,
+        app_timeline_dock(ui,t,&s->live.project,(AppTimelineOptions){.connected=s->live.connected,.generation=s->live.generation,
+            .blocked=composition_disabled(s)||s->extension_requested||s->settings.overlay.open||
+                s->panel_sheet.overlay.open||s->source_picker.popup.overlay.open||s->zoom_popup.open||
+                s->discard_requested||s->discard_dialog.overlay.open,.recording=s->live.recording,
             .cut=s->live.record_cut,.countdown=s->live.record_countdown_active,
             .finalizing=s->live.record_finalizing,.width=width,.height=dock_height},app_timeline_submit,s);
     if (window_width >= 1000 && !sources_mounted) reopen_rail(ui, s, t, true, width, height);

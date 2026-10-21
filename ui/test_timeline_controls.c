@@ -6,7 +6,7 @@
 #include <string.h>
 typedef struct {
     cui_context *ui;cui_theme theme;CastProjectSnapshot project;
-    unsigned page,calls;float width;bool blocked;char verb[32],action[32],value[4096];
+    unsigned page,calls;float width;bool blocked;char verb[32],action[32],value[4096],parameter[128];
 } Fixture;
 static cui_size measure(void *user,cui_str text,float size)
 {(void)user;return (cui_size){text.length*size*.6f,size*1.2f};}
@@ -15,7 +15,8 @@ static bool submit(void *user,unsigned argc,const char *const *argv)
     Fixture *f=user;assert(!f->blocked && argc>=2 && argc<=4);++f->calls;
     snprintf(f->verb,sizeof f->verb,"%s",argv[0]);
     snprintf(f->action,sizeof f->action,"%s",argv[1]);
-    snprintf(f->value,sizeof f->value,"%s",argc>2?argv[2]:"");return true;
+    snprintf(f->value,sizeof f->value,"%s",argc>2?argv[2]:"");
+    snprintf(f->parameter,sizeof f->parameter,"%s",argc>3?argv[3]:"");return true;
 }
 static void frame(Fixture *f)
 {
@@ -65,5 +66,50 @@ int main(void)
     f.project.busy=true;settle(&f);click(&f,"project-open");assert(f.calls==4);
     f.project.busy=false;
     for(unsigned width=260;width<=1040;width*=2){f.width=(float)width;for(f.page=0;f.page<2;++f.page)settle(&f);}
+    f.page=0;f.width=800;settle(&f);
+    unsigned seek_before=f.calls;click(&f,"timeline-tick-1");
+    assert(f.calls==seek_before+1&&!strcmp(f.action,"seek")&&f.project.playhead_ns==UINT64_C(5000000000));
+    unsigned before=f.calls;
+    float original_width=cui_bounds(f.ui,cui_id_from(f.ui,"timeline-clip-2")).w;
+    click(&f,"timeline-zoom-in");assert(cui_bounds(f.ui,cui_id_from(f.ui,"timeline-clip-2")).w>original_width);
+    float unpanned=cui_bounds(f.ui,cui_id_from(f.ui,"timeline-clip-2")).x;
+    cui_focus(f.ui,cui_scrollbar_id(cui_id_from(f.ui,"timeline-pan"),false));key(&f,CUI_KEY_END,0);
+    assert(cui_bounds(f.ui,cui_id_from(f.ui,"timeline-clip-2")).x<unpanned);
+    click(&f,"timeline-zoom-out");click(&f,"timeline-zoom-fit");
+    assert(f.calls==before);
+    click(&f,"timeline-clip-2");
+    if(!cui_bounds(f.ui,cui_id_from(f.ui,"timeline-trim-end-2")).w)click(&f,"timeline-clip-2");
+    cui_rect clip_bounds=cui_bounds(f.ui,cui_id_from(f.ui,"timeline-clip-2"));
+    float x=clip_bounds.x+30,y=clip_bounds.y+15;
+    event(&f,(cui_event){.type=CUI_EVENT_POINTER_DOWN,.x=x,.y=y});
+    event(&f,(cui_event){.type=CUI_EVENT_POINTER_MOVE,.x=x+40,.y=y});
+    assert(f.calls==before);
+    event(&f,(cui_event){.type=CUI_EVENT_POINTER_UP,.x=x+40,.y=y});settle(&f);
+    assert(f.calls==before+1&&!strcmp(f.action,"move")&&!strcmp(f.value,"2"));
+    assert(f.project.clips[0].start_ns==0);
+    cui_rect handle=cui_bounds(f.ui,cui_id_from(f.ui,"timeline-trim-end-2"));assert(handle.w>0);
+    x=handle.x+handle.w/2;y=handle.y+handle.h/2;
+    event(&f,(cui_event){.type=CUI_EVENT_POINTER_DOWN,.x=x,.y=y});
+    event(&f,(cui_event){.type=CUI_EVENT_POINTER_MOVE,.x=x-40,.y=y});assert(f.calls==before+1);
+    event(&f,(cui_event){.type=CUI_EVENT_POINTER_UP,.x=x-40,.y=y});settle(&f);
+    assert(f.calls==before+2&&!strcmp(f.action,"trim")&&!strcmp(f.value,"2"));
+    assert(f.project.clips[0].duration_ns==UINT64_C(10000000000));
+    cui_rect left=cui_bounds(f.ui,cui_id_from(f.ui,"timeline-trim-start-2"));assert(left.w>0);
+    x=left.x+left.w/2;y=left.y+left.h/2;
+    event(&f,(cui_event){.type=CUI_EVENT_POINTER_DOWN,.x=x,.y=y});
+    event(&f,(cui_event){.type=CUI_EVENT_POINTER_MOVE,.x=x+40,.y=y});assert(f.calls==before+2);
+    event(&f,(cui_event){.type=CUI_EVENT_POINTER_UP,.x=x+40,.y=y});settle(&f);
+    assert(f.calls==before+3&&!strcmp(f.action,"trim-left")&&!strcmp(f.value,"2"));
+    assert(f.project.clips[0].start_ns==0&&f.project.clips[0].source_in_ns==0);
+    clip_bounds=cui_bounds(f.ui,cui_id_from(f.ui,"timeline-clip-2"));x=clip_bounds.x+30;y=clip_bounds.y+15;
+    event(&f,(cui_event){.type=CUI_EVENT_POINTER_DOWN,.x=x,.y=y});
+    event(&f,(cui_event){.type=CUI_EVENT_POINTER_MOVE,.x=x+60,.y=y});
+    f.blocked=true;settle(&f);
+    event(&f,(cui_event){.type=CUI_EVENT_POINTER_UP,.x=x+60,.y=y});assert(f.calls==before+3);
+    f.blocked=false;settle(&f);
+    event(&f,(cui_event){.type=CUI_EVENT_POINTER_DOWN,.x=x,.y=y});
+    event(&f,(cui_event){.type=CUI_EVENT_POINTER_MOVE,.x=x+60,.y=y});
+    ++f.project.revision;settle(&f);
+    event(&f,(cui_event){.type=CUI_EVENT_POINTER_UP,.x=x+60,.y=y});assert(f.calls==before+3);
     cui_destroy(f.ui);puts("Timeline UI: clip selection, split, import, acknowledgement, capture locks and project controls passed");
 }

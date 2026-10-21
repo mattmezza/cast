@@ -154,6 +154,28 @@ int timeline_trim(CastTimeline *t, uint64_t id, uint64_t source, uint64_t durati
     ++t->revision;
     return 0;
 }
+int timeline_trim_left(CastTimeline *t, uint64_t id, uint64_t start, char *e, size_t n)
+{
+    CastTimelineClip *c;
+    if (editable(t, id, &c, e, n)) return -1;
+    uint64_t right = c->start_ns + c->duration_ns;
+    if (start >= right) return fail(e, n, "left edge must precede clip right edge");
+    CastTimelineClip candidate = *c;
+    if (start >= c->start_ns) {
+        candidate.source_in_ns += start - c->start_ns;
+    } else {
+        uint64_t extension = c->start_ns - start;
+        if (extension > c->source_in_ns)
+            return fail(e, n, "left edge extends before source start");
+        candidate.source_in_ns -= extension;
+    }
+    candidate.start_ns = start;
+    candidate.duration_ns = right - start;
+    if (valid_clip(t, &candidate, id, e, n)) return -1;
+    *c = candidate;
+    ++t->revision;
+    return 0;
+}
 int timeline_move(CastTimeline *t, uint64_t id, unsigned track, uint64_t start,
                   char *e, size_t n)
 {

@@ -129,7 +129,7 @@ complete -c cast -n '__cast_at record start' -F
 complete -c cast -n '__cast_at monitor' -a 'on off status'
 complete -c cast -n '__cast_at project' -a 'new open save recover status'
 complete -c cast -n '__cast_at project open; or __cast_at project save; or __cast_at project recover' -F
-complete -c cast -n '__cast_at timeline' -a 'import move trim split remove gain undo redo seek play pause live relink export'
+complete -c cast -n '__cast_at timeline' -a 'import move trim trim-left split remove gain undo redo seek play pause live relink export'
 complete -c cast -n '__cast_at timeline import; or __cast_at timeline export' -F
 complete -c cast -n '__cast_at audio' -a 'list mic desktop virtual'
 complete -c cast -n '__cast_at audio mic; or __cast_at audio desktop' -a 'on off toggle source gain'
@@ -240,7 +240,7 @@ complete -c cast-pro -n '__cast_at record start' -F
 complete -c cast-pro -n '__cast_at monitor' -a 'on off status'
 complete -c cast-pro -n '__cast_at project' -a 'new open save recover status'
 complete -c cast-pro -n '__cast_at project open; or __cast_at project save; or __cast_at project recover' -F
-complete -c cast-pro -n '__cast_at timeline' -a 'import move trim split remove gain undo redo seek play pause live relink export'
+complete -c cast-pro -n '__cast_at timeline' -a 'import move trim trim-left split remove gain undo redo seek play pause live relink export'
 complete -c cast-pro -n '__cast_at timeline import; or __cast_at timeline export' -F
 complete -c cast-pro -n '__cast_at audio' -a 'list mic desktop virtual'
 complete -c cast-pro -n '__cast_at audio mic; or __cast_at audio desktop' -a 'on off toggle source gain'

@@ -36,6 +36,27 @@ int main(void)
     assert(timeline_clip(t, clip)->duration_ns == 8 * SECOND);
     assert(!timeline_move(t, right, 0, 12 * SECOND, error, sizeof error));
     assert(!timeline_trim(t, right, 12 * SECOND, 8 * SECOND, error, sizeof error));
+    /* Left trims preserve both right edges and commit exactly one revision. */
+    uint64_t trim_revision = t->revision;
+    assert(!timeline_trim_left(t, right, 14 * SECOND, error, sizeof error));
+    assert(t->revision == trim_revision + 1);
+    assert(timeline_clip(t, right)->start_ns == 14 * SECOND);
+    assert(timeline_clip(t, right)->source_in_ns == 14 * SECOND);
+    assert(timeline_clip(t, right)->duration_ns == 6 * SECOND);
+    assert(!timeline_trim_left(t, right, 8 * SECOND, error, sizeof error));
+    assert(timeline_clip(t, right)->source_in_ns == 8 * SECOND);
+    assert(timeline_clip(t, right)->duration_ns == 12 * SECOND);
+    *before = *t;
+    assert(timeline_trim_left(t, right, 7 * SECOND, error, sizeof error)); /* collision */
+    assert(timeline_trim_left(t, right, 20 * SECOND, error, sizeof error));
+    assert(timeline_trim_left(t, right, UINT64_MAX, error, sizeof error));
+    assert(!memcmp(before, t, sizeof *t));
+    assert(!timeline_move(t, right, 2, 12 * SECOND, error, sizeof error));
+    *before = *t;
+    assert(timeline_trim_left(t, right, 3 * SECOND, error, sizeof error)); /* source underflow */
+    assert(!memcmp(before, t, sizeof *t));
+    assert(!timeline_trim_left(t, right, 4 * SECOND, error, sizeof error));
+    assert(timeline_clip(t, right)->source_in_ns == 0);
     assert(!timeline_gain(t, sound, .25f, true, error, sizeof error));
     assert(timeline_clip(t, sound)->muted && timeline_clip(t, sound)->gain == .25f);
     assert(!timeline_validate(t, error, sizeof error));
@@ -64,6 +85,7 @@ int main(void)
     *before = *t;
     assert(timeline_split(t, clip, SECOND, NULL, error, sizeof error));
     assert(timeline_move(t, clip, 1, SECOND, error, sizeof error));
+    assert(timeline_trim_left(t, clip, SECOND, error, sizeof error));
     assert(timeline_gain(t, clip, 0, true, error, sizeof error));
     assert(timeline_remove(t, clip, error, sizeof error));
     assert(!memcmp(before, t, sizeof *t));

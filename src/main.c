@@ -93,7 +93,7 @@ static const char help[] =
     "  project new|open PATH|save [PATH]|recover PATH|status\n"
     "  timeline import PATH [TRACK]; timeline seek NS; timeline play|pause|live\n"
     "  timeline move ID TRACK,START_NS; timeline trim ID IN_NS,DURATION_NS\n"
-    "  timeline split ID POSITION_NS; timeline remove ID; timeline gain ID GAIN,MUTED\n"
+    "  timeline trim-left ID NEW_START_NS; timeline split ID POSITION_NS; timeline remove ID; timeline gain ID GAIN,MUTED\n"
     "  timeline undo|redo; timeline relink MEDIA_ID PATH\n"
     "  timeline export PATH|status|cancel (new destination; never overwrites)\n"
     "  audio list; audio mic|desktop|virtual on|off|toggle\n"

@@ -1069,7 +1069,7 @@ int project_session_command(App *a, int argc, char **argv, char *out, size_t siz
         return result;
     }
     if (argc < 3) {
-        return fail(out, size, "timeline import|move|trim|split|remove|gain|undo|redo|seek");
+        return fail(out, size, "timeline import|move|trim|trim-left|split|remove|gain|undo|redo|seek");
     }
     uint64_t id, first = 0, second = 0, new_id = 0;
     if (unsigned_number(argv[2], &id)) {
@@ -1087,6 +1087,8 @@ int project_session_command(App *a, int argc, char **argv, char *out, size_t siz
         result = timeline_split(candidate, id, first, &new_id, out, size);
     } else if (!strcmp(argv[1], "trim") && argc == 4 && !pair(argv[3], &first, &second)) {
         result = timeline_trim(candidate, id, first, second, out, size);
+    } else if (!strcmp(argv[1], "trim-left") && argc == 4 && !unsigned_number(argv[3], &first)) {
+        result = timeline_trim_left(candidate, id, first, out, size);
     } else if (!strcmp(argv[1], "move") && argc == 4 && !pair(argv[3], &first, &second) &&
                first < CAST_TIMELINE_TRACK_MAX) {
         result = timeline_move(candidate, id, (unsigned)first, second, out, size);

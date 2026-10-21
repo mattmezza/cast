@@ -47,6 +47,8 @@ int timeline_add_clip(CastTimeline *, uint64_t media_id, unsigned track,
                       uint64_t *, char *, size_t);
 int timeline_trim(CastTimeline *, uint64_t, uint64_t source_in_ns, uint64_t duration_ns,
                   char *, size_t);
+/* Move the left edge, preserving both document and source right edges. */
+int timeline_trim_left(CastTimeline *, uint64_t, uint64_t new_start_ns, char *, size_t);
 int timeline_move(CastTimeline *, uint64_t, unsigned track, uint64_t start_ns, char *, size_t);
 int timeline_split(CastTimeline *, uint64_t, uint64_t position_ns, uint64_t *, char *, size_t);
 int timeline_remove(CastTimeline *, uint64_t, char *, size_t);
