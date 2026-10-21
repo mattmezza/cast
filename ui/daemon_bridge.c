@@ -140,7 +140,7 @@ int bridge_edit(DaemonBridge *bridge, AppEdit edit, const char *value, char *err
     case APP_EDIT_RECORD_ACTION:
         key = "record"; valid = !strcmp(value,"start") || !strcmp(value,"stop") || !strcmp(value,"pause") || !strcmp(value,"resume") || !strcmp(value,"cut") || !strcmp(value,"cancel"); break;
     case APP_EDIT_RECORD_CONTAINER: key="record.container"; valid=!strcmp(value,"matroska") || !strcmp(value,"mp4") || !strcmp(value,"mov") || !strcmp(value,"webm"); break;
-    case APP_EDIT_RECORD_VIDEO_CODEC: key="record.video_codec"; valid=!strcmp(value,"auto") || !strcmp(value,"libx264") || !strcmp(value,"libx265") || !strcmp(value,"libvpx-vp9") || !strcmp(value,"libaom-av1"); break;
+    case APP_EDIT_RECORD_VIDEO_CODEC: key="record.video_codec"; valid=!strcmp(value,"auto") || !strcmp(value,"libopenh264") || !strcmp(value,"libx264") || !strcmp(value,"libx265") || !strcmp(value,"libvpx-vp9") || !strcmp(value,"libaom-av1"); break;
     case APP_EDIT_RECORD_AUDIO_CODEC: key="record.audio_codec"; valid=!strcmp(value,"aac") || !strcmp(value,"libopus") || !strcmp(value,"pcm_s16le") || !strcmp(value,"flac"); break;
     case APP_EDIT_RECORD_CRF: key="record.crf"; valid=decimal_range(value,0,51) && !strchr(value,'.'); break;
     case APP_EDIT_RECORD_DIRECTORY:
@@ -543,6 +543,8 @@ static void copy_config(AppLive *out, const PanelSnapshot *snapshot, const Daemo
     snprintf(out->stream.encoder_preset, sizeof out->stream.encoder_preset, "%s", config->stream.encoder_preset);
     if (snapshot->stream.error[0])
         snprintf(out->stream.error, sizeof out->stream.error, "Stream failed. Check the destination, key file and connection, then retry.");
+    out->encoders = snapshot->encoders;
+    out->monitor = snapshot->monitor;
     out->audio_levels_supported = snapshot->audio_levels.supported;
     out->mic_level = (AppAudioLevel){.peak = snapshot->audio_levels.mic.peak,
         .rms = snapshot->audio_levels.mic.rms, .fresh = snapshot->audio_levels.mic.fresh,
@@ -612,6 +614,10 @@ static void copy_config(AppLive *out, const PanelSnapshot *snapshot, const Daemo
     out->desktop = config->desktop;
     out->camera_enabled = config->camera_enabled;
     out->camera_visible = config->camera_visible;
+    out->preset_count=config->preset_count>0?(unsigned)config->preset_count:0;
+    if(out->preset_count>24)out->preset_count=24;
+    for(unsigned i=0;i<out->preset_count;++i)snprintf(out->preset_names[i],sizeof out->preset_names[i],"%s",config->presets[i].name);
+    snprintf(out->current_preset,sizeof out->current_preset,"%s",snapshot->current_preset);
     out->mirror = config->mirror;
     snprintf(out->camera_shape,sizeof out->camera_shape,"%s",config->shape);
     out->screen_radius=config->screen_radius;out->screen_border_width=config->screen_border_width;

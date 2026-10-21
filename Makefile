@@ -535,19 +535,19 @@ check-desktop-update-guard: $(BUILD)/test_commands
 # Isolated document/renderer tests never open capture or audio devices.
 PROJECT_TEST_SOURCES = src/project.c src/timeline.c src/config.c src/edition_extensions.c src/workflow_schema.c src/edition.c src/license_store.c src/presentation_text.c src/os_compat.c vendor/inih/ini.c
 PROJECT_RENDER_TEST_SOURCES = src/timeline_preview.c src/timeline_render.c src/media_codec.c src/compositor.c src/state.c
-PROJECT_TEST_FLAGS = -D_GNU_SOURCE -DCAST_TEST -Isrc -Ivendor/inih -DINI_HANDLER_LINENO=1 -DINI_CALL_HANDLER_ON_NEW_SECTION=1 -DINI_ALLOW_MULTILINE=0 -DINI_ALLOW_INLINE_COMMENTS=0 -DINI_STOP_ON_FIRST_ERROR=1 -DINI_MAX_LINE=8192
+PROJECT_TEST_FLAGS = $(filter -DCAST_MEDIA_PROFILE_LGPL=%,$(CPPFLAGS)) -D_GNU_SOURCE -DCAST_TEST -Isrc -Ivendor/inih -DINI_HANDLER_LINENO=1 -DINI_CALL_HANDLER_ON_NEW_SECTION=1 -DINI_ALLOW_MULTILINE=0 -DINI_ALLOW_INLINE_COMMENTS=0 -DINI_STOP_ON_FIRST_ERROR=1 -DINI_MAX_LINE=8192
 $(BUILD)/test_timeline: tests/test_timeline.c src/timeline.c src/timeline.h
 	@mkdir -p $(BUILD)
 	$(CC) $(PROJECT_TEST_FLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -o $@ tests/test_timeline.c src/timeline.c -lm
 $(BUILD)/test_project: tests/test_project.c $(PROJECT_TEST_SOURCES)
 	@mkdir -p $(BUILD)
-	$(CC) $(PROJECT_TEST_FLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -ffunction-sections -fdata-sections -o $@ $^ -Wl,--gc-sections $(PKG_LIBS) -lpthread -lm
+	$(CC) $(PROJECT_TEST_FLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -ffunction-sections -fdata-sections -o $@ $^ $(LDFLAGS) -Wl,--gc-sections $(PKG_LIBS) -lpthread -lm
 $(BUILD)/test_project_session: tests/test_project_session.c src/project_session.c $(PROJECT_TEST_SOURCES) $(PROJECT_RENDER_TEST_SOURCES)
 	@mkdir -p $(BUILD)
-	$(CC) $(PROJECT_TEST_FLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -ffunction-sections -fdata-sections -o $@ $^ -Wl,--gc-sections $(PKG_LIBS) -lpthread -lm
+	$(CC) $(PROJECT_TEST_FLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -ffunction-sections -fdata-sections -o $@ $^ $(LDFLAGS) -Wl,--gc-sections $(PKG_LIBS) -lpthread -lm
 $(BUILD)/test_timeline_render: tests/test_timeline_render.c $(PROJECT_TEST_SOURCES) $(PROJECT_RENDER_TEST_SOURCES)
 	@mkdir -p $(BUILD)
-	$(CC) $(PROJECT_TEST_FLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -ffunction-sections -fdata-sections -o $@ $^ -Wl,--gc-sections $(PKG_LIBS) -lpthread -lm
+	$(CC) $(PROJECT_TEST_FLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -ffunction-sections -fdata-sections -o $@ $^ $(LDFLAGS) -Wl,--gc-sections $(PKG_LIBS) -lpthread -lm
 .PHONY: check-timeline check-project check-project-session check-timeline-render
 check-timeline: $(BUILD)/test_timeline
 	$(BUILD)/test_timeline
@@ -575,7 +575,7 @@ check-unit: check-audio-levels check-encoder-policy
 
 $(BUILD)/test_timeline_preview: tests/test_timeline_preview.c $(PROJECT_TEST_SOURCES) $(PROJECT_RENDER_TEST_SOURCES)
 	@mkdir -p $(BUILD)
-	$(CC) $(PROJECT_TEST_FLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -ffunction-sections -fdata-sections -o $@ $^ -Wl,--gc-sections $(PKG_LIBS) -lpthread -lm
+	$(CC) $(PROJECT_TEST_FLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -ffunction-sections -fdata-sections -o $@ $^ $(LDFLAGS) -Wl,--gc-sections $(PKG_LIBS) -lpthread -lm
 .PHONY: check-timeline-preview
 check-timeline-preview: $(BUILD)/test_timeline_preview
 	$(BUILD)/test_timeline_preview
@@ -586,3 +586,24 @@ check-workspace-projects: $(BINARY)
 	CAST_TEST_BINARY='$(abspath $(BINARY))' python3 tests/test_workspace_projects.py
 
 endif # Darwin uses Makefile.macos
+
+# Fake capture/output only: these targets never open a native audio device.
+MONITOR_TEST_FLAGS = -Isrc -D_POSIX_C_SOURCE=200809L
+$(BUILD)/test_audio_monitor: tests/test_audio_monitor.c src/audio_monitor.c src/audio_monitor.h
+	@mkdir -p $(BUILD)
+	$(CC) $(MONITOR_TEST_FLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -o $@ tests/test_audio_monitor.c -lpthread -lm
+$(BUILD)/test_audio_monitor_session: tests/test_audio_monitor_session.c src/audio_monitor.c src/audio_monitor_session.c src/audio_monitor_session_media.c src/audio_monitor.h src/audio_monitor_session.h src/cast.h
+	@mkdir -p $(BUILD)
+	$(CC) $(MONITOR_TEST_FLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -o $@ $(filter %.c,$^) -lpthread -lm
+$(BUILD)/test_audio_monitor_controller: tests/test_audio_monitor_controller.c src/audio_monitor.c src/audio_monitor_session.c src/audio_monitor_controller.c src/audio_monitor.h src/audio_monitor_session.h src/audio_monitor_controller.h
+	@mkdir -p $(BUILD)
+	$(CC) $(MONITOR_TEST_FLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -o $@ $(filter %.c,$^) -lpthread -lm
+.PHONY: check-audio-monitor check-audio-monitor-session check-audio-monitor-controller check-audio-monitoring
+check-audio-monitor: $(BUILD)/test_audio_monitor
+	$(BUILD)/test_audio_monitor
+check-audio-monitor-session: $(BUILD)/test_audio_monitor_session
+	$(BUILD)/test_audio_monitor_session
+check-audio-monitor-controller: $(BUILD)/test_audio_monitor_controller
+	$(BUILD)/test_audio_monitor_controller
+check-audio-monitoring: check-audio-monitor check-audio-monitor-session check-audio-monitor-controller
+check-unit: check-audio-monitoring

@@ -117,7 +117,7 @@ bool app_request_edit(AppState *s, AppEdit edit, const char *value) {
     } else if(edit==APP_EDIT_RECORD_CONTAINER) {
         if(strcmp(value,"matroska")&&strcmp(value,"mp4")&&strcmp(value,"mov")&&strcmp(value,"webm"))return false;
     } else if(edit==APP_EDIT_RECORD_VIDEO_CODEC) {
-        if(strcmp(value,"auto")&&strcmp(value,"libx264")&&strcmp(value,"libx265")&&strcmp(value,"libvpx-vp9")&&strcmp(value,"libaom-av1"))return false;
+        if(strcmp(value,"auto")&&strcmp(value,"libopenh264")&&strcmp(value,"libx264")&&strcmp(value,"libx265")&&strcmp(value,"libvpx-vp9")&&strcmp(value,"libaom-av1"))return false;
     } else if(edit==APP_EDIT_RECORD_AUDIO_CODEC) {
         if(strcmp(value,"aac")&&strcmp(value,"libopus")&&strcmp(value,"pcm_s16le")&&strcmp(value,"flac"))return false;
     } else if(edit==APP_EDIT_RECORD_CRF||edit==APP_EDIT_RECORD_COUNTDOWN||edit==APP_EDIT_AUDIO_MIC_GAIN||edit==APP_EDIT_AUDIO_DESKTOP_GAIN) {
@@ -712,9 +712,21 @@ static void source_content(cui_context *ui, AppState *s, const cui_theme *t) {
     if (section(ui, s, t, 2, "Look"))
         look_controls(ui,s,t);
     rule(ui, t);
-    if (section(ui, s, t, 3, "Presets"))
-        text(ui, t, "Saved presets will appear here after daemon integration.");
+    if (section(ui, s, t, 3, "Presets"))app_presets_controls(ui,s,t);
     cui_end_box(ui);
+}
+void app_presets_controls(cui_context *ui,AppState *a,const cui_theme *t) {
+    bool blocked=!a->live.connected || composition_disabled(a) || a->extension_requested;
+    if(!a->live.connected) {text(ui,t,"Connect the daemon to load presets.");return;}
+    if(!a->live.preset_count)text(ui,t,"No framing presets configured.");
+    for(unsigned i=0;i<a->live.preset_count && i<24;++i) {
+        char id[48];snprintf(id,sizeof id,"framing-preset-%u",i);
+        if(button(ui,t,id,a->live.preset_names[i],"star",-1,30,
+            !strcmp(a->live.current_preset,a->live.preset_names[i]),blocked)) {
+            const char *args[]={"preset",a->live.preset_names[i]};app_request_command(a,2,args);
+        }
+    }
+    text(ui,t,"Framing presets keep layout and camera geometry. Save a project to retain the full composition.");
 }
 static void card_begin(cui_context *ui, const cui_theme *t, const char *id, const char *heading) {
     cui_begin_box(ui, cui_id_from(ui, id), (cui_box){.width = -1, .padding = 10, .gap = 9,
@@ -889,7 +901,30 @@ static void audio_card(cui_context *ui,AppState *s,const cui_theme *t) {
     }
     text(ui,t,s->workspace==APP_CAMERA?"Expose the same mix to calls through the virtual microphone.":"The mix is shared by recording and streaming. Muting a channel mutes it everywhere.");
     if(s->live.virtual_audio&&s->live.virtual_silent)text(ui,t,"Virtual microphone is silent while the virtual camera is private.");
-    text(ui,t,"Live level meters are unavailable.");
+    if(!s->live.audio_levels_supported)text(ui,t,"Live level meters are unavailable.");
+    bool monitor_on=s->live.monitor.state==CAST_MONITOR_STARTING||s->live.monitor.state==CAST_MONITOR_RUNNING;
+    bool monitor_busy=s->live.monitor.state==CAST_MONITOR_STARTING||s->live.monitor.state==CAST_MONITOR_STOPPING;
+    bool monitor_disabled=!s->live.connected||!s->live.enabled||s->live.pending||s->live.snapshot_busy||
+        s->edit_requested||s->extension_requested||monitor_busy||
+        (!monitor_on&&(!s->live.mic||!s->live.mic_ready||s->live.group_paused));
+    cui_begin_box(ui,0,(cui_box){.row=true,.width=-1,.align_y=CUI_ALIGN_CENTER,.gap=8});
+    text(ui,t,"Monitor microphone");
+    bool monitoring=monitor_on;
+    if(cui_switch_ex(ui,cui_id_from(ui,"audio-mic-monitor"),t,cui_string(""),&monitoring,NULL,
+        (cui_switch_options){.accessibility_label=cui_string("Monitor microphone on default audio output"),
+            .disabled=monitor_disabled,.size=CUI_CONTROL_SMALL,.width=28})) {
+        const char *args[]={"monitor",monitoring?"on":"off"};app_request_command(s,2,args);
+    }
+    cui_end_box(ui);
+    const char *monitor_status=!s->live.connected?"Monitoring unavailable · disconnected":
+        s->live.monitor.state==CAST_MONITOR_STARTING?"Starting microphone monitor…":
+        s->live.monitor.state==CAST_MONITOR_STOPPING?"Stopping microphone monitor…":
+        s->live.monitor.state==CAST_MONITOR_FAILED?"Microphone monitoring failed":
+        s->live.monitor.state==CAST_MONITOR_RUNNING?(s->live.group_paused?"Monitoring muted by global privacy":
+            s->live.monitor.session.capture_ready?"Monitoring microphone · default audio output":"Monitoring waiting for microphone"):
+        "Monitoring off · default audio output";
+    cui_text(ui,cui_string(monitor_status),11,t->muted);
+    if(s->live.monitor.error[0])cui_text(ui,cui_string(s->live.monitor.error),11,t->danger);
     if(s->live.connected)text(ui,t,!s->live.audio_available?"Audio backend unavailable":
         s->live.mic_ready&&s->live.desktop_ready?"Microphone and desktop audio ready":
         s->live.mic_ready?"Microphone ready · desktop audio unavailable":
@@ -1393,6 +1428,8 @@ bool app_timeline_submit(void *user,unsigned argc,const char *const *argv) {
     }
     if(argc==2 && !strcmp(argv[0],"file")) {
         FileDialogRequest r={.argc=3,.path_index=2,.filter_count=1};
+        const char *export_extension=!strcmp(a->live.record_container,"mp4")?"mp4":!strcmp(a->live.record_container,"mov")?"mov":!strcmp(a->live.record_container,"webm")?"webm":"mkv";
+        char export_name[64];snprintf(export_name,sizeof export_name,"Montage.%s",export_extension);
         bool media=!strcmp(argv[1],"import");
         bool exporting=!strcmp(argv[1],"export");
         bool save=exporting || !strcmp(argv[1],"save");
@@ -1401,9 +1438,9 @@ bool app_timeline_submit(void *user,unsigned argc,const char *const *argv) {
         snprintf(r.args[1],sizeof r.args[1],"%s",media?"import":exporting?"export":save?"save":"open");
         r.save=save;
         snprintf(r.title,sizeof r.title,"%s",media?"Import media":exporting?"Export montage":save?"Save project":"Open project");
-        snprintf(r.filters[0].name,sizeof r.filters[0].name,"%s",media?"Video and audio":exporting?"Matroska video":"Cast project");
-        snprintf(r.filters[0].extensions,sizeof r.filters[0].extensions,"%s",media?"mp4;mkv;mov;webm;wav;flac;mp3;ogg;m4a":exporting?"mkv":"cast");
-        if(save)snprintf(r.default_path,sizeof r.default_path,"%s",exporting?"Montage.mkv":a->live.project.path[0]?a->live.project.path:"Untitled.cast");
+        snprintf(r.filters[0].name,sizeof r.filters[0].name,"%s",media?"Video and audio":exporting?"Video export":"Cast project");
+        snprintf(r.filters[0].extensions,sizeof r.filters[0].extensions,"%s",media?"mp4;mkv;mov;webm;wav;flac;mp3;ogg;m4a":exporting?export_extension:"cast");
+        if(save)snprintf(r.default_path,sizeof r.default_path,"%s",exporting?export_name:a->live.project.path[0]?a->live.project.path:"Untitled.cast");
         return app_request_file(a,&r);
     }
     return app_request_command(a,argc,argv);

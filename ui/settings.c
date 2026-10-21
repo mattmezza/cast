@@ -140,7 +140,7 @@ static void segments(cui_context *ui,const cui_theme *t,const char *label,const 
     cui_end_box(ui); row_end(ui);
 }
 static bool record_settings_disabled(const AppState *a) {
-    return !a->live.connected||!a->live.enabled||a->edit_requested||a->live.pending||a->live.snapshot_busy||
+    return !a->live.connected||!a->live.enabled||a->edit_requested||a->extension_requested||a->live.pending||a->live.snapshot_busy||
         a->live.recording||a->live.record_countdown_active||a->live.record_finalizing;
 }
 static void settings_select(cui_context *ui,AppState *a,const cui_theme *t,const char *idname,const char *label,
@@ -154,7 +154,10 @@ static void settings_select(cui_context *ui,AppState *a,const cui_theme *t,const
     row_begin(ui,t,label,note,narrow);
     cui_choice_item items[8];cui_id selected=0;
     for(unsigned i=0;i<count;++i) {
-        items[i]=(cui_choice_item){id^(UINT64_C(0x6f7074696f6e)+i),cui_string(labels[i]),false};
+        bool unavailable = edit==APP_EDIT_RECORD_VIDEO_CODEC ?
+            !(a->live.encoders.video_allowed & CAST_ENCODER_BIT(i)) :
+            edit==APP_EDIT_RECORD_AUDIO_CODEC ? !(a->live.encoders.audio_allowed & CAST_ENCODER_BIT(i)) : false;
+        items[i]=(cui_choice_item){id^(UINT64_C(0x6f7074696f6e)+i),cui_string(labels[i]),unavailable};
         if(!strcmp(values[i],current))selected=items[i].id;
     }
     cui_rect viewport=cui_bounds(ui,cui_id_from(ui,"root"));
@@ -190,7 +193,7 @@ static void settings_select(cui_context *ui,AppState *a,const cui_theme *t,const
         cui_id chosen=selected;
         if(cui_list(ui,id^UINT64_C(0x6c697374),&theme,items,count,&chosen,&popup->list,
             (cui_list_options){.height=32,.dt=.016f,.scroll_scope=popup->overlay.id})) {
-            for(unsigned i=0;i<count;++i)if(chosen==items[i].id) {if(key)app_request_setting(a,key,values[i]);else app_request_edit(a,edit,values[i]);}
+            for(unsigned i=0;i<count;++i)if(chosen==items[i].id&&!items[i].disabled) {if(key)app_request_setting(a,key,values[i]);else app_request_edit(a,edit,values[i]);}
             cui_overlay_close(ui,&popup->overlay);cui_focus(ui,id);cui_invalidate(ui);
         }
         cui_end_box(ui);cui_overlay_end(ui);
@@ -302,7 +305,7 @@ static void content(cui_context *ui,AppState *a,const cui_theme *t,bool narrow) 
         "Durable defaults for takes and projects. The take itself stays in the Record workspace.",
         "One destination. The key is read from a file at start and never displayed.",
         "The prompter is drawn on top of the stage, never inside the outgoing frame.",
-        "A preset is a saved look: layout, camera geometry, background, logo and text. It is never output state.",
+        "Framing presets keep layout and camera geometry. Projects retain the full composition without activating outputs.",
         "Community keeps recording, streaming and the existing zoom, free and MIT-licensed.",
         "Local agent access uses the daemon. This preview cannot start a server or grant permissions.",
         "Rarely needed. Everything here is a fallback, not a preference.",
@@ -310,7 +313,7 @@ static void content(cui_context *ui,AppState *a,const cui_theme *t,bool narrow) 
     cui_text_ex(ui,cui_string(titles[c]),17,t->text,0,(cui_text_style){.weight=CUI_TEXT_WEIGHT_SEMIBOLD});
     cui_begin_box(ui,0,(cui_box){.width=-1,.max_width=480});
     txt(ui,subs[c],12,t->muted);cui_end_box(ui);
-    if(c!=0 && c!=1 && c!=2 && c!=3 && c!=4 && c!=6 && c!=9) txt(ui,connected ? "Read only · changes are not available in this workspace" : "Connect the daemon to inspect current settings",11,t->muted);
+    if(c!=0 && c!=1 && c!=2 && c!=3 && c!=4 && c!=5 && c!=6 && c!=9) txt(ui,connected ? "Read only · changes are not available in this workspace" : "Connect the daemon to inspect current settings",11,t->muted);
     const char *theme[]={"dark","light","system"};
     const char *density[]={"comfortable","compact"};
     const char *fit[]={"contain","cover"},*shape[]={"rect","rounded","circle"};
@@ -355,20 +358,20 @@ static void content(cui_context *ui,AppState *a,const cui_theme *t,bool narrow) 
     }
     case 2: {
         const char *containers[]={"MP4","MKV","MOV","WebM"},*container_values[]={"mp4","matroska","mov","webm"};
-        const char *encoders[]={"Automatic","H.264 · software","HEVC · software","VP9 · software","AV1 · software"},*encoder_values[]={"auto","libx264","libx265","libvpx-vp9","libaom-av1"};
+        const char *encoders[]={"Automatic","H.264 · OpenH264","H.264 · x264","HEVC · x265","VP9 · software","AV1 · software"},*encoder_values[]={"auto","libopenh264","libx264","libx265","libvpx-vp9","libaom-av1"};
         const char *audio[]={"AAC","Opus","PCM 16-bit","FLAC"},*audio_values[]={"aac","libopus","pcm_s16le","flac"};
         txt(ui,record_settings_disabled(a)?"Recording settings are locked while a take is active or the daemon is unavailable.":"Changes apply to the next take in this daemon session.",11,t->muted);
         if(a->live.edit_error[0])txt(ui,a->live.edit_error,11,t->danger);
         group(ui,t,"OUTPUT");
         record_select(ui,a,t,"record-container","Container",NULL,a->live.record_container,containers,container_values,4,APP_EDIT_RECORD_CONTAINER,narrow);
-        record_select(ui,a,t,"record-video-codec","Encoder","Available encoders depend on the backend.",a->live.record_codec,encoders,encoder_values,5,APP_EDIT_RECORD_VIDEO_CODEC,narrow);
+        record_select(ui,a,t,"record-video-codec","Encoder","Unavailable or profile-prohibited encoders are disabled.",a->live.record_codec,encoders,encoder_values,6,APP_EDIT_RECORD_VIDEO_CODEC,narrow);
         record_select(ui,a,t,"record-audio-codec","Audio codec",NULL,a->live.record_audio_codec,audio,audio_values,4,APP_EDIT_RECORD_AUDIO_CODEC,narrow);
         record_number(ui,a,t,"record-crf","Quality (CRF)","Lower values improve quality and increase file size.",a->live.record_crf,51,APP_EDIT_RECORD_CRF,narrow);
         FIELD("Frame rate","Requires restarting the capture daemon.",connected?fps:"— fps",'t');group_end(ui);
         group(ui,t,"TAKE");record_number(ui,a,t,"record-countdown","Countdown","Before each start and resume from a cut.",a->live.record_countdown,60,APP_EDIT_RECORD_COUNTDOWN,narrow);
         FIELD("Continue the same file after a cut","Cuts omit media time; resume continues the same file.","Always",'t');group_end(ui);
         group(ui,t,"PROJECT");record_directory(ui,a,t,narrow);
-        FIELD("Autosave the cut list","Editable recording projects are unavailable.","Unavailable",'t');group_end(ui);break;
+        FIELD("Project autosave","Open projects with a saved path autosave every 30 seconds.","Automatic",'t');group_end(ui);break;
     }
     case 3:
         app_stream_destination(ui,t,&a->live.stream,a->live.pending||a->edit_requested||a->extension_requested||a->live.snapshot_busy,app_stream_submit,a);
@@ -393,9 +396,7 @@ static void content(cui_context *ui,AppState *a,const cui_theme *t,bool narrow) 
         group(ui,t,"SUBTITLES · PRO");FIELD("Burn subtitles into recordings","Requires local inference support and an installed model.","",'s');
         FIELD("Model",NULL,"Not loaded",'c');group_end(ui);break;
     case 5:
-        group(ui,t,"SAVED LOOKS");txt(ui,"Connect the daemon to read your saved presets.",12,t->muted);
-        FIELD("Apply preset",NULL,"Apply",'b');FIELD("Delete preset",NULL,"Delete",'b');group_end(ui);
-        disabled_button(ui,t,"Save current look…",false);break;
+        group(ui,t,"FRAMING PRESETS");cui_push_id(ui,"settings-framing-presets");app_presets_controls(ui,a,t);cui_pop_id(ui);group_end(ui);break;
     case 6:
 #if defined(WITH_PRO) && defined(WITH_CUI)
         if(cast_workspace_settings(ui,a,t,6,narrow))break;

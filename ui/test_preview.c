@@ -798,6 +798,7 @@ static void record_fixture(Preview *p, const char *mode) {
     snprintf(p->app.live.mic_name,sizeof p->app.live.mic_name,"Microphone off");
     snprintf(p->app.live.desktop_name,sizeof p->app.live.desktop_name,"Desktop audio off");
     p->app.live.record_crf=23;
+    p->app.live.encoders=(CastEncoderCapabilities){.video_available=3,.video_allowed=3,.audio_available=13,.audio_allowed=13};
     if(!strcmp(mode,"recording")||!strcmp(mode,"paused")||!strcmp(mode,"cut")) {
         p->app.live.recording=true;p->app.live.record_paused=!strcmp(mode,"paused");p->app.live.record_cut=!strcmp(mode,"cut");
         const char *path=getenv("CAST_TEST_RECORD_PATH");
@@ -855,6 +856,36 @@ static void prompter_entitlement(void) {
     key(&p,CUI_KEY_T,0);assert(!p.app.edit_requested);
     cui_destroy(p.ui);
 }
+static void monitor_controls(void) {
+    Preview p=create(1360,1000);record_fixture(&p,"idle");
+    click(&p,"audio-mic-monitor");assert(!p.app.extension_requested);
+    p.app.live.mic=p.app.live.mic_ready=true;settle(&p);
+    click(&p,"audio-mic-monitor");
+    assert(p.app.extension_requested&&p.app.extension_argc==2&&!strcmp(p.app.extension_args[0],"monitor")&&!strcmp(p.app.extension_args[1],"on"));
+    assert(p.app.live.monitor.state==CAST_MONITOR_OFF);
+    p.app.extension_requested=false;p.app.live.monitor.state=CAST_MONITOR_STARTING;settle(&p);
+    click(&p,"audio-mic-monitor");assert(!p.app.extension_requested);
+    p.app.live.monitor.state=CAST_MONITOR_RUNNING;p.app.live.group_paused=true;settle(&p);
+    click(&p,"audio-mic-monitor");assert(p.app.extension_requested&&!strcmp(p.app.extension_args[1],"off"));
+    p.app.extension_requested=false;p.app.live.monitor.state=CAST_MONITOR_OFF;settle(&p);
+    click(&p,"audio-mic-monitor");assert(!p.app.extension_requested);
+    p.app.live.group_paused=false;p.app.live.pending=true;settle(&p);
+    click(&p,"audio-mic-monitor");assert(!p.app.extension_requested);
+    p.app.live.pending=false;p.app.live.connected=false;settle(&p);
+    click(&p,"audio-mic-monitor");assert(!p.app.extension_requested);
+    cui_destroy(p.ui);
+}
+static void encoder_controls(void) {
+    Preview p=create(1360,1000);record_fixture(&p,"settings");
+    click(&p,"record-video-codec");key(&p,CUI_KEY_HOME,0);key(&p,CUI_KEY_DOWN,0);key(&p,CUI_KEY_ENTER,0);
+    assert(p.app.edit_requested&&p.app.edit==APP_EDIT_RECORD_VIDEO_CODEC&&!strcmp(p.app.edit_value,"libopenh264"));
+    assert(!strcmp(p.app.live.record_codec,"libx264"));
+    p.app.edit_requested=false;settle(&p);click(&p,"record-video-codec");key(&p,CUI_KEY_END,0);key(&p,CUI_KEY_ENTER,0);
+    assert(!p.app.edit_requested||!strcmp(p.app.edit_value,"libopenh264")||!strcmp(p.app.edit_value,"auto"));
+    p.app.edit_requested=false;if(p.app.recording_selects[1].overlay.open)key(&p,CUI_KEY_ESCAPE,0);p.app.live.encoders.video_allowed=0;settle(&p);
+    click(&p,"record-video-codec");key(&p,CUI_KEY_HOME,0);key(&p,CUI_KEY_ENTER,0);assert(!p.app.edit_requested);
+    cui_destroy(p.ui);
+}
 static void recording_edits(void) {
     Preview p=create(1360,1000);record_fixture(&p,"idle");click(&p,"output-start");
     assert(p.app.edit_requested&&p.app.edit==APP_EDIT_RECORD_ACTION&&!strcmp(p.app.edit_value,"start"));
@@ -887,6 +918,16 @@ static const cui_semantic *semantic_named(Preview *p,cui_role role,const char *n
     size_t count=0;const cui_semantic *items=cui_semantics(p->ui,&count);
     for(size_t i=0;i<count;++i)if(items[i].role==role && items[i].name.length==strlen(name) && !memcmp(items[i].name.data,name,strlen(name)))return &items[i];
     return NULL;
+}
+static void framing_presets(void) {
+    Preview p=create(1360,1000);p.app.live.enabled=true;p.app.live.connected=true;p.app.live.generation=2;
+    p.app.live.preset_count=1;strcpy(p.app.live.preset_names[0],"Interview");settle(&p);
+    click(&p,"section-presets");click(&p,"framing-preset-0");
+    assert(p.app.extension_requested && p.app.extension_argc==2 && !strcmp(p.app.extension_args[0],"preset") && !strcmp(p.app.extension_args[1],"Interview"));
+    assert(!p.app.live.current_preset[0]);p.app.extension_requested=false;
+    click(&p,"settings-open");click(&p,"settings-category-5");
+    assert(!p.app.extension_requested && p.app.settings.overlay.open);
+    cui_destroy(p.ui);
 }
 static void composition_settings(void) {
     Preview p=create(1360,1000);p.app.live.enabled=true;p.app.live.connected=true;p.app.live.generation=5;
@@ -969,12 +1010,15 @@ int main(int argc,char **argv) {
         assert(cui_debug_layout_export(p.ui,CUI_DEBUG_LAYOUT_JSON,dump,required,&required));
         puts(dump);free(dump);cui_destroy(p.ui);return 0;
     }
+    framing_presets();
     composition_settings();
     virtual_edits();
     project_discard();
     prompter_entitlement();
     audio_pickers();
     recording_edits();
+    monitor_controls();
+    encoder_controls();
     look_edits();
     workspaces();
     compositions();

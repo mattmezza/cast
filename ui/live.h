@@ -3,6 +3,8 @@
 #include "cui/cui.h"
 #include "../src/project_session.h"
 #include "stream_controls.h"
+#include "../src/encoder_capabilities.h"
+#include "../src/audio_monitor_controller.h"
 typedef enum { APP_EDIT_NONE, APP_EDIT_LAYOUT, APP_EDIT_FIT, APP_EDIT_ANCHOR, APP_EDIT_SIZE,
     APP_EDIT_BACKGROUND_SOURCE, APP_EDIT_SCREEN_BACKGROUND, APP_EDIT_CAMERA_BACKGROUND,
     APP_EDIT_SCREEN_BACKGROUND_COLOR, APP_EDIT_CAMERA_BACKGROUND_COLOR,
@@ -33,10 +35,14 @@ typedef struct {
     bool enabled, connected, has_frame, pro, pending, snapshot_busy;
     CastProjectSnapshot project;
     AppStreamSnapshot stream;
+    CastEncoderCapabilities encoders;
+    CastMonitorControllerStatus monitor;
     bool audio_levels_supported;
     AppAudioLevel mic_level, desktop_level;
     bool notes_available, notes_window_open, license_valid;
     char license_id[32];
+    unsigned preset_count;
+    char preset_names[24][64], current_preset[64];
     unsigned setting_count;
     AppSetting settings[APP_SETTING_MAX];
     cui_bitmap frame;

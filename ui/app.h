@@ -76,6 +76,7 @@ const char *app_workspace_name(AppWorkspace);
 const char *app_layout_name(AppLayout);
 void app_open_settings(cui_context *, AppState *, cui_id trigger);
 void app_settings_frame(cui_context *, AppState *, const cui_theme *, float width, float height);
+void app_presets_controls(cui_context *,AppState *,const cui_theme *);
 void app_menu_bar(cui_context *, AppState *, const cui_theme *, float width);
 void app_frame(cui_context *, AppState *, float width, float height);
 #endif
