@@ -172,3 +172,14 @@ dirty. Undo/redo restores the previous reference and missing state. Snapshots
 continue to expose only media IDs, basename labels and missing flags, without
 full paths. Session tests cover missing references after a file move, short-file
 rejection, stale-generation rejection, successful relink and undo/redo.
+
+`make check-workspace-projects` runs the production daemon and CLI against a
+private socket/configuration/HOME with synthetic 640×360 video at 10 fps, camera
+and virtual output disabled, and microphone/desktop/virtual audio disabled. It
+records a short flattened take, saves/reopens a project, imports that actual movie,
+exercises seek/play/pause/live and invalid relink, then exports and fully decodes
+the exported video. It also checks no-overwrite behavior. FFmpeg/FFprobe programs
+are test inspection dependencies only; the application export uses linked
+libraries. The test terminates only its owned daemon and removes all temporary
+media. It verifies CLI/socket routing and export progress, without opening a UI,
+requesting device permissions, or claiming UI snapshot/visual integration.

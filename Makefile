@@ -580,4 +580,9 @@ $(BUILD)/test_timeline_preview: tests/test_timeline_preview.c $(PROJECT_TEST_SOU
 check-timeline-preview: $(BUILD)/test_timeline_preview
 	$(BUILD)/test_timeline_preview
 
+
+.PHONY: check-workspace-projects
+check-workspace-projects: $(BINARY)
+	CAST_TEST_BINARY='$(abspath $(BINARY))' python3 tests/test_workspace_projects.py
+
 endif # Darwin uses Makefile.macos
