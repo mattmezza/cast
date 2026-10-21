@@ -152,6 +152,7 @@ int bridge_edit(DaemonBridge *bridge, AppEdit edit, const char *value, char *err
         valid=!strcmp(value,"true") || !strcmp(value,"false"); break;
     case APP_EDIT_AUDIO_MIC_GAIN: case APP_EDIT_AUDIO_DESKTOP_GAIN:
         key=edit==APP_EDIT_AUDIO_MIC_GAIN ? "mic" : "desktop"; valid=decimal_range(value,0,400); break;
+    case APP_EDIT_NOTES_ACTION: key="notes"; valid=!strcmp(value,"open") || !strcmp(value,"close"); break;
     default: break;
     }
     if (!valid) return refuse_edit(bridge, error, size, "Unsupported composition value");
@@ -182,14 +183,21 @@ int bridge_edit(DaemonBridge *bridge, AppEdit edit, const char *value, char *err
         return refuse_edit(bridge,error,size,"Stop the recording before changing recording settings");
     if (edit == APP_EDIT_AUDIO_VIRTUAL && !strcmp(value,"true") && !strcmp(config->backend,"macos"))
         return refuse_edit(bridge,error,size,"Virtual microphone is unavailable on macOS");
+    if (edit == APP_EDIT_NOTES_ACTION) {
+        bool entitled = false;
+        for (unsigned i=0;i<CAST_FEATURE_COUNT;++i)
+            if (!strcmp(snapshot.edition.features[i].id,"speech_teleprompter"))
+                entitled = snapshot.edition.features[i].active;
+        if (!entitled) return refuse_edit(bridge,error,size,"Prompter requires an active Pro teleprompter entitlement");
+    }
     char transport_error[CAST_ERR];
     int result;
     if (edit == APP_EDIT_ZOOM_FOLLOW || edit == APP_EDIT_ZOOM_FACTOR) {
         const char *args[] = {"zoom", edit == APP_EDIT_ZOOM_FACTOR ? "set" : "follow",
             edit == APP_EDIT_ZOOM_FACTOR ? value : !strcmp(value, "true") ? "on" : "off"};
         result = panel_client_command(bridge->client, 3, args, transport_error, sizeof transport_error);
-    } else if (edit == APP_EDIT_RECORD_ACTION) {
-        const char *args[]={"record",value};
+    } else if (edit == APP_EDIT_RECORD_ACTION || edit == APP_EDIT_NOTES_ACTION) {
+        const char *args[]={edit == APP_EDIT_NOTES_ACTION ? "notes" : "record",value};
         result=panel_client_command(bridge->client,2,args,transport_error,sizeof transport_error);
     } else if (edit >= APP_EDIT_AUDIO_MIC && edit <= APP_EDIT_AUDIO_DESKTOP_GAIN) {
         bool gain=edit==APP_EDIT_AUDIO_MIC_GAIN || edit==APP_EDIT_AUDIO_DESKTOP_GAIN;
@@ -505,6 +513,10 @@ static void copy_config(AppLive *out, const PanelSnapshot *snapshot, const Daemo
     snprintf(out->screen_id, sizeof out->screen_id, "%.*s", (int)sizeof config->monitor - 1, config->monitor);
     snprintf(out->camera_id, sizeof out->camera_id, "%.*s", (int)sizeof config->camera_device - 1, config->camera_device);
     out->pro = snapshot->edition.identity.pro;
+    out->notes_window_open = snapshot->workflow.notes_window_open;
+    for (unsigned i=0;i<CAST_FEATURE_COUNT;++i)
+        if (!strcmp(snapshot->edition.features[i].id,"speech_teleprompter"))
+            out->notes_available = snapshot->edition.features[i].active;
     out->generation = snapshot->daemon_generation;
     out->privacy_epoch = snapshot->privacy_epoch;
     out->width = config->width;

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+import shlex
 import subprocess
 import sys
 import tarfile
@@ -107,6 +108,9 @@ def verify(args):
     if not path.is_file():
         raise ValueError('STT=1 requires an explicit reviewed speech profile; generate engineering evidence separately')
     data = json.loads(path.read_text())
+    if data.get('engine') == 'needle-whistle' or data.get('profile') == 'cast-pro-speech-needle-cpu':
+        verify_needle(data, args)
+        return
     if data.get('schema') != 1 or type(data.get('cpu_only')) is not bool or (data.get('profile'), data.get('cpu_only')) not in (('cast-pro-speech-cpu', True), ('cast-pro-speech-vulkan', False)):
         raise ValueError('unsupported speech backend profile')
     if data.get('cflags') != args.cflags.strip() or data.get('libs') != args.libs.strip():
@@ -137,6 +141,76 @@ def verify(args):
     print('speech profile validated: CPU-only, explicit engineering candidate, nonrelease')
 
 
+def verify_needle(data, args):
+    """A binary hash proves identity, not source provenance or release eligibility."""
+    lock_path = ROOT / 'packaging/speech-needle-lock.json'
+    lock = json.loads(lock_path.read_text())
+    if args.official:
+        raise ValueError('binary-only Needle SDK cannot be used for official release delivery')
+    if not args.engineering or data.get('release_eligible') is not False:
+        raise ValueError('Needle binary SDK requires STT_ENGINEERING=1 and release_eligible=false')
+    if (data.get('schema') != 1 or data.get('profile') != 'cast-pro-speech-needle-cpu' or
+            data.get('engine') != 'needle-whistle' or data.get('cpu_only') is not True or
+            data.get('build_kind') != 'pinned-binary-engineering' or
+            data.get('source_available') is not False or data.get('sources') != [] or
+            data.get('corresponding_sources') is not None or
+            data.get('sdk_revision') != lock['sdk_revision'] or
+            data.get('lock_sha256') != sha(lock_path) or
+            data.get('recipe_sha256') != sha(ROOT / 'tools/deps-stt.py')):
+        raise ValueError('Needle engineering provenance differs from the pinned binary recipe')
+    target = lock['platforms'].get(data.get('platform'))
+    if not target:
+        raise ValueError('unsupported Needle SDK platform')
+    if (data.get('cflags') != args.cflags.strip() or data.get('libs') != args.libs.strip() or
+            data.get('cpu_backend') != '' or args.cpu_backend != ''):
+        raise ValueError('Needle SDK flags/backend differ from audited profile')
+    entries = data.get('libraries')
+    if not isinstance(entries, list) or len(entries) != 1:
+        raise ValueError('Needle SDK requires exactly one pinned static archive')
+    item = entries[0]
+    library = Path(item['path'])
+    shared = data.get('runtime_variant') == 'linux-shared-wheel'
+    expected_digest = lock['linux_shared']['sha256'] if shared else target['sha256']
+    if (library.name != ('libneedle.so' if shared else 'libneedle.a') or item.get('sha256') != expected_digest or
+            item.get('chosen_license') != 'Apache-2.0' or library.is_symlink() or
+            not library.is_file() or sha(library) != expected_digest):
+        raise ValueError('missing or changed pinned Needle archive')
+    expected_cflags = '-I' + shlex.quote(str(Path(data['header']['path']).parent))
+    expected_libs = shlex.quote(str(library)) + (' -lc++ -lm -lpthread' if data['platform'].startswith('macos') else ' -lc++ -lc++abi -lm -lpthread')
+    if shared:
+        wheel = data.get('wheel', {}); wheel_path = Path(wheel.get('path', ''))
+        pin = lock['linux_shared']
+        if (data['platform'] != 'linux-x86_64' or wheel.get('sha256') != pin['wheel_sha256'] or
+                wheel.get('revision') != lock['sdk_revision'] or wheel.get('repository') != lock['sdk_repository'] or
+                wheel.get('upstream_file') != pin['wheel'] or wheel_path.is_symlink() or
+                not wheel_path.is_file() or sha(wheel_path) != pin['wheel_sha256']):
+            raise ValueError('missing or changed upstream Needle wheel provenance')
+        needed = re.findall(r'\(NEEDED\).*?\[(.*?)\]', run('readelf', '-d', str(library)))
+        if set(needed) != set(pin['needed']) or set(data.get('needed', [])) != set(needed):
+            raise ValueError('Needle shared dependency closure differs from pinned inventory')
+        if 'not found' in run('ldd', str(library)):
+            raise ValueError('Needle shared runtime closure unresolved')
+        expected_libs = shlex.quote(str(library)) + ' -Wl,-rpath,' + shlex.quote(str(library.parent)) + ' -lm -lpthread -ldl'
+    elif data.get('runtime_variant') not in (None, 'static'):
+        raise ValueError('unrecognized Needle runtime variant')
+    if data['cflags'] != expected_cflags or data['libs'] != expected_libs:
+        raise ValueError('Needle SDK flags do not match its exact pinned artifact paths')
+    for field, digest in [('header', lock['header_sha256']), ('license', lock['license_sha256'])]:
+        artifact = data.get(field, {})
+        file = Path(artifact.get('path', ''))
+        if (artifact.get('sha256') != digest or file.is_symlink() or
+                not file.is_file() or sha(file) != digest):
+            raise ValueError('missing or changed Needle ' + field)
+    if 'model' in data:
+        model = data['model']; file = Path(model['path'])
+        if (model.get('sha256') != lock['model_sha256'] or
+                model.get('revision') != lock['model_revision'] or
+                model.get('repository') != lock['model_repository'] or
+                file.is_symlink() or not file.is_file() or sha(file) != lock['model_sha256']):
+            raise ValueError('missing or changed pinned Whistle model')
+    print('speech profile validated: pinned Needle/Whistle binary engineering SDK; not release qualified')
+
+
 def sdk_identity(data):
     fields = ('source_commit', 'source_archive_sha256', 'lock_sha256', 'recipe_sha256',
               'whisper_version', 'ggml_version', 'cflags', 'libs', 'libraries',
@@ -147,7 +221,7 @@ def sdk_identity(data):
 
 def verify_controlled(data, *, official=False):
     lock_path = ROOT / 'packaging/speech-cpu-lock.json'
-    recipe_path = ROOT / 'tools/deps-stt.py'
+    recipe_path = ROOT / 'tools/deps-stt-whisper.py'
     lock = json.loads(lock_path.read_text())
     options = dict(lock['build_options'])
     vulkan = data.get('profile') == 'cast-pro-speech-vulkan'

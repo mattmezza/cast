@@ -372,6 +372,20 @@ int main(void)
  assert(!bridge_devices(b,APP_DEVICE_MIC,error,sizeof error));
  snap.command_completed=snap.command_queued;snap.device_reply_id=snap.command_queued;
  strcpy(snap.device_reply,"malformed\n");bridge_poll(b,0,&live);assert(live.devices.error[0] && !live.devices.count);
+ /* Paid notes commands require authoritative daemon entitlement, not a Pro label. */
+ snap.edition.identity.pro=true;
+ assert(bridge_edit(b,APP_EDIT_NOTES_ACTION,"open",error,sizeof error)<0);
+ strcpy(snap.edition.features[1].id,"speech_teleprompter");snap.edition.features[1].active=true;
+ bridge_poll(b,0,&live);assert(live.notes_available && !live.notes_window_open);
+ assert(!bridge_edit(b,APP_EDIT_NOTES_ACTION,"open",error,sizeof error));
+ assert(!strcmp(setting_key,"notes open") && !setting_value[0]);
+ snap.command_completed=snap.command_queued;snap.workflow.notes_window_open=true;
+ bridge_poll(b,0,&live);assert(live.notes_window_open);
+ assert(bridge_edit(b,APP_EDIT_NOTES_ACTION,"start",error,sizeof error)<0);
+ assert(!bridge_edit(b,APP_EDIT_NOTES_ACTION,"close",error,sizeof error));
+ snap.command_completed=snap.command_queued;bridge_poll(b,0,&live);
+ snap.edition.features[1].active=false;
+ assert(bridge_edit(b,APP_EDIT_NOTES_ACTION,"open",error,sizeof error)<0);
  strcpy(snap.config.backend,"macos");bridge_poll(b,0,&live);assert(!live.can_virtual_audio);
  assert(bridge_edit(b,APP_EDIT_AUDIO_VIRTUAL,"true",error,sizeof error)<0);
  assert(!bridge_devices(b,APP_DEVICE_MIC,error,sizeof error));

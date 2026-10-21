@@ -12,11 +12,11 @@ PANEL = 0
 CUI ?= 0
 STT = 0
 CXX = c++
-STT_CFLAGS = $(shell pkg-config --cflags whisper)
-STT_LIBS = $(shell pkg-config --libs --static whisper)
+STT_CFLAGS = $(shell pkg-config --cflags '$(dir $(STT_PROFILE))prefix/lib/pkgconfig/needle.pc')
+STT_LIBS = $(shell pkg-config --libs '$(dir $(STT_PROFILE))prefix/lib/pkgconfig/needle.pc')
 STT_CPU_BACKEND =
 STT_HELPER_PATH = $(PREFIX)/libexec/cast-pro-stt-helper
-STT_PROFILE = $(CURDIR)/build/deps-stt/profile.json
+STT_PROFILE = $(CURDIR)/build/deps-stt-needle/profile.json
 STT_ENGINEERING = 0
 STT_GPU_ENGINEERING = 0
 VERSION = 0.10.5
@@ -108,6 +108,9 @@ $(error CUI=1 requires PANEL=0; the prototype and legacy panel use incompatible 
 endif
 ifeq ($(CUI),1)
 PACKAGES += sdl3 freetype2 harfbuzz
+ifeq ($(EDITION),pro)
+PACKAGES += sdl3-ttf
+endif
 CUI_SOURCES = ui/main.c ui/app.c ui/menus.c ui/settings.c ui/cast_theme.c ui/brand.c ui/source_picker.c ui/daemon_bridge.c
 CUI_LIBRARIES = ui/build/vendor/libcui_sdl3.a ui/build/vendor/libcui_text.a ui/build/vendor/libcui_bidi.a ui/build/vendor/libcui.a
 CUI_FONT_OBJECT = $(BUILD)/ui/workspace_fonts.o
@@ -368,6 +371,12 @@ ifeq ($(EDITION):$(STT),pro:1)
 endif
 deps-lgpl:
 	sh tools/deps-lgpl.sh $(DEPS_ARGS)
+deps-stt:
+	python3 tools/deps-stt.py $(DEPS_ARGS)
+check-speech-profiles:
+	python3 tests/test_speech_profile.py
+	python3 tests/test_needle_profile.py
+.PHONY: deps-stt check-speech-profiles
 check-public-boundary:
 	python3 packaging/public-boundary.py
 check-licenses: $(BINARY)
@@ -467,14 +476,14 @@ check-editions: build/edition-contract-tests/test_editions build/edition-contrac
 ifeq ($(EDITION):$(STT),pro:1)
 STT_IDENTITY_SOURCES = src/os_compat.c src/edition.c src/license_store.c $(PRO_DIR)/src/license_verifier.c $(PRO_DIR)/src/bounded_json.c
 STT_IDENTITY_OBJECTS = $(STT_IDENTITY_SOURCES:%.c=$(BUILD)/helper/%.o)
-$(STT_HELPER) $(STT_IDENTITY_OBJECTS) $(BUILD)/helper/whisper_helper.o: | edition-preflight
+$(STT_HELPER) $(STT_IDENTITY_OBJECTS) $(BUILD)/helper/needle_helper.o: | edition-preflight
 $(BUILD)/helper/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) -Werror -ffunction-sections -fdata-sections -std=gnu11 -c $< -o $@
-$(BUILD)/helper/whisper_helper.o: $(PRO_DIR)/src/speech/whisper_helper.cpp
+$(BUILD)/helper/needle_helper.o: $(PRO_DIR)/src/speech/needle_helper.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) $(CPPFLAGS) $(STT_CFLAGS) -DCAST_SPEECH_HELPER_EXECUTABLE $(if $(filter 1,$(STT_GPU_ENGINEERING)),-DCAST_SPEECH_VULKAN_DEV=1) $(if $(STT_CPU_BACKEND),-DCAST_GGML_CPU_BACKEND_PATH='"$(STT_CPU_BACKEND)"') $(CFLAGS) -Wall -Wextra -Werror -std=c++17 -ffunction-sections -fdata-sections -c $< -o $@
-$(STT_HELPER): $(BUILD)/helper/whisper_helper.o $(STT_IDENTITY_OBJECTS)
+	$(CXX) $(CPPFLAGS) $(STT_CFLAGS) -DCAST_SPEECH_HELPER_EXECUTABLE $(CFLAGS) -Wall -Wextra -Werror -std=c++17 -ffunction-sections -fdata-sections -c $< -o $@
+$(STT_HELPER): $(BUILD)/helper/needle_helper.o $(STT_IDENTITY_OBJECTS)
 	$(CXX) $(LDFLAGS) $(STT_LDFLAGS) -Wl,-rpath,'$$ORIGIN/../lib/cast-pro/speech' -Wl,--gc-sections -o $@ $^ $(STT_LIBS) $(shell pkg-config --libs libsodium) -lpthread -lm
 endif
 

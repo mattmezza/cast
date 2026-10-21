@@ -226,7 +226,7 @@ int main(void)
     }
     pthread_mutex_unlock(&preparation_lock);
     assert(!atomic_load(&request.finished));
-    assert(!strcmp(config_extension_value(&app->config, "notes", "font_size"), "36"));
+    assert(!strcmp(config_extension_value(&app->config, "notes", "font_size"), "17"));
     char *off[] = {"transcription", "off"};
     assert(!app_runtime_safety(app, 2, off, error, sizeof error));
     assert(atomic_load(&cancelled) == 1);
@@ -237,7 +237,7 @@ int main(void)
     pthread_mutex_unlock(&preparation_lock);
     finish_request(app, &request, worker);
     assert(request.result && !atomic_load(&commits));
-    assert(!strcmp(config_extension_value(&app->config, "notes", "font_size"), "36"));
+    assert(!strcmp(config_extension_value(&app->config, "notes", "font_size"), "17"));
     worker = begin_request(&request, false);
     finish_request(app, &request, worker);
     assert(!request.result && atomic_load(&commits) == 1);

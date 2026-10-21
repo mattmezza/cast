@@ -10,7 +10,7 @@ typedef enum { APP_EDIT_NONE, APP_EDIT_LAYOUT, APP_EDIT_FIT, APP_EDIT_ANCHOR, AP
     APP_EDIT_RECORD_ACTION, APP_EDIT_RECORD_CONTAINER, APP_EDIT_RECORD_VIDEO_CODEC,
     APP_EDIT_RECORD_AUDIO_CODEC, APP_EDIT_RECORD_CRF, APP_EDIT_RECORD_COUNTDOWN, APP_EDIT_RECORD_DIRECTORY,
     APP_EDIT_AUDIO_MIC, APP_EDIT_AUDIO_DESKTOP, APP_EDIT_AUDIO_VIRTUAL,
-    APP_EDIT_AUDIO_MIC_GAIN, APP_EDIT_AUDIO_DESKTOP_GAIN } AppEdit;
+    APP_EDIT_AUDIO_MIC_GAIN, APP_EDIT_AUDIO_DESKTOP_GAIN, APP_EDIT_NOTES_ACTION } AppEdit;
 #define APP_DEVICE_ID_MAX 4096
 #define APP_DEVICE_MAX 64
 typedef enum { APP_DEVICE_NONE, APP_DEVICE_SCREEN, APP_DEVICE_CAMERA, APP_DEVICE_MIC, APP_DEVICE_DESKTOP } AppDeviceKind;
@@ -26,6 +26,7 @@ typedef struct {
 /* Sanitized daemon state. Pixels are borrowed until the next poll. */
 typedef struct {
     bool enabled, connected, has_frame, pro, pending, snapshot_busy;
+    bool notes_available, notes_window_open;
     cui_bitmap frame;
     int target, width, height, fps;
     bool virtual_enabled, virtual_paused, virtual_frozen, virtual_blurred;

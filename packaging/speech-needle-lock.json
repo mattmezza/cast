@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "name": "needle-whistle-binary-engineering",
+  "sdk_repository": "Cactus-Compute/needle3",
+  "sdk_revision": "d6c7d6a2e9655505e0f8e23339356dd1705900eb",
+  "license": "Apache-2.0",
+  "license_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+  "header_sha256": "a27dac4b3239eead91d124b7f7dbce5495c13019903fd817b68c16d39b055a99",
+  "platforms": {
+    "linux-x86_64": {
+      "sha256": "2f281877e24fed2658187a32d9a26e74c32d4f273ac9a2b36180b3a6e85942da",
+      "size": 2204068
+    },
+    "macos-arm64": {
+      "sha256": "7d1368a4a42a745aba055f310913c3ed6d929dee98a89dcb955b9032b2335700",
+      "size": 1534472
+    }
+  },
+  "model_repository": "Cactus-Compute/whistle",
+  "model_revision": "741118687e1f008f06d1351a402a731274789790",
+  "model_sha256": "b6e02f048568ac5d01a2042556c658061e699acbc0aa2a1439f52f3d461dffeb",
+  "model_size": 16919407,
+  "source_available": false,
+  "release_eligible": false,
+  "provenance": "Immutable Hugging Face revisions; archive/model hashes from LFS metadata, header/license hashes independently downloaded. Native runtime source/build recipe absent from public Needle repository at review time. No release qualification implied.",
+  "linux_shared": {
+    "wheel": "python/cactus_needle-3.3.3-py3-none-manylinux2014_x86_64.whl",
+    "wheel_sha256": "b909897e11cf4da9566df6370f8a63564693fbd6edeaac0b8678b71865d4dc24",
+    "member": "needle/libneedle3.so",
+    "sha256": "87476ff70e80334d7c766dbf236b72f42876072df22014c6ec8a9b087b82b260",
+    "soname": "libneedle.so",
+    "needed": [
+      "libm.so.6",
+      "libc.so.6",
+      "libpthread.so.0",
+      "libdl.so.2",
+      "ld-linux-x86-64.so.2"
+    ]
+  }
+}

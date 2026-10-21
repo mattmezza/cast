@@ -1,3 +1,5 @@
+> Historical Whisper/ggml evidence reference. The current Needle/Whistle engineering SDK uses [speech-sdk.md](speech-sdk.md), `speech-needle-lock.json` and the offline binary importer. The native runtime source is unavailable; Needle binary profiles cannot be release qualified. The recipe below is retained as `tools/deps-stt-whisper.py` for historical acceptance only.
+
 # CPU speech SDK provenance
 
 Speech is private Pro code and an optional `STT=1` build input. Ordinary Community

@@ -34,13 +34,14 @@ budget are reported. Default blur is off.
 ## Local captions and offline transcription
 
 The inference-enabled Pro build uses `STT=1` and its separate structured helper.
-Install a local Whisper GGML model explicitly; engine/VAD choices are shared with
-notes. CPU is the baseline. An explicit unavailable GPU fails; `auto` can use the
-available CPU backend. Energy VAD needs no extra model; Silero requires a compatible
-local model. Translation means Whisper translation into English.
+Install the local Whistle `.cact` model explicitly; engine choices are shared with
+notes. Needle runs on CPU (`cpu` or `auto`) with energy VAD and transcription only.
+Languages are `auto`, `en`, `de`, `fr`, `es`, `it`, `nl`, and `pl`. GPU, Silero VAD,
+Whisper GGML models and translation are unsupported and fail explicitly. The pinned
+native binary SDK is currently engineering-only; see [speech-profile.md](speech-profile.md).
 
 ```sh
-cast-pro settings transcription.model_path /absolute/path/ggml-base.bin
+cast-pro settings transcription.model_path /absolute/path/whistle.cact
 cast-pro audio mic on
 cast-pro transcription on
 cast-pro subtitles virtual on
@@ -131,7 +132,7 @@ These changes affect the session; neither path rewrites the INI.
 | Fields | Panel interaction | Runtime effect |
 |---|---|---|
 | `transcription.enabled` | Immediate | Enables lane transcription only. Off retires lane work and unaccepted automatic sidecars; independent Notes and already accepted bounded jobs remain separate. |
-| `transcription.backend` | Immediate | Only whisper is supported; no alternative backend is silently selected. |
+| `transcription.backend` | Immediate | Only Needle/Whistle is supported; legacy Whisper settings must be changed explicitly. |
 | `transcription.model_path`, `transcription.device`, `transcription.vad_backend`, `transcription.vad_model_path`, `transcription.window_ms`, `transcription.step_ms`, `transcription.max_backlog_ms` | Atomic draft / Apply | Prepares a replacement shared engine when entitled, then retires all consumer generations. Failure preserves the acknowledged engine. Window/step/backlog constraints validate together. |
 | `transcription.language`, `transcription.task`, `transcription.source`, `transcription.threads`, `transcription.vad_threshold`, `transcription.min_speech_ms`, `transcription.min_silence_ms`, `transcription.show_partial` | Immediate | Also changes shared engine settings: replacement preparation and consumer-generation retirement apply. Notes remains microphone-only and always transcribes original speech. |
 | `transcription.auto_finalize` | Immediate | Recording-start snapshot controls automatic final sidecars for that recording; it does not rewrite existing subtitles or modify an accepted job. |
@@ -154,13 +155,9 @@ floating-point PCM RMS with cutoff `threshold × 0.05`; default 0.5 therefore me
 RMS 0.025 (about −32 dBFS). This is an energy gate, not a probability. Speech and
 silence durations use the configured millisecond values.
 
-With Silero selected, the same threshold is additionally passed directly as its
-0–1 speech-probability threshold. The live service's energy gate and the helper's
-whole-window energy check still precede Silero; selecting Silero does not bypass
-them. Silero requires a readable whisper.cpp-compatible GGML VAD model; ONNX files
-are rejected. Actual same-model Silero recognition has not been accepted on this
-host. Privacy-filtered final recording jobs also split neutral/silent spans before
-inference independently of the user's VAD threshold.
+Whistle uses the energy gate; Silero and external VAD models are unsupported.
+Privacy-filtered final recording jobs split neutral/silent spans before inference
+independently of the user's VAD threshold.
 
 ## Complete added field inventory
 
@@ -200,14 +197,14 @@ inference independently of the user's VAD threshold.
 | Key | Default | Accepted values |
 |---|---|---|
 | `enabled` | `false` | true, false |
-| `backend` | `whisper` | whisper |
+| `backend` | `needle` | needle |
 | `model_path` | empty | Literal text/path; at most 1023 bytes |
-| `device` | `cpu` | cpu, auto, gpu |
-| `language` | `auto` | Literal text/path; at most 1023 bytes |
-| `task` | `transcribe` | transcribe, translate |
+| `device` | `auto` | cpu, auto |
+| `language` | `auto` | auto, en, de, fr, es, it, nl, pl |
+| `task` | `transcribe` | transcribe |
 | `source` | `mic` | mic, desktop, mix |
-| `threads` | `4` | 1–64 |
-| `vad_backend` | `energy` | energy, silero |
+| `threads` | `1` | 1; Needle manages its own worker count |
+| `vad_backend` | `energy` | energy |
 | `vad_model_path` | empty | Literal text/path; at most 1023 bytes |
 | `vad_threshold` | `0.5` | 0–1 |
 | `min_speech_ms` | `250` | 50–5000 |
@@ -253,20 +250,20 @@ inference independently of the user's VAD threshold.
 |---|---|---|
 | `file` | empty | Literal text/path; at most 1023 bytes |
 | `format` | `auto` | auto, plain, markdown |
-| `font` | `Noto Sans` | Literal text/path; at most 1023 bytes |
-| `font_size` | `36` | 12–128 |
+| `font` | `Inter` | Literal text/path; at most 1023 bytes |
+| `font_size` | `17` | 12–128 |
 | `foreground` | `#f8f9fb` | #RRGGBB |
 | `background` | `#101113` | #RRGGBB |
-| `highlight_color` | `#80c9ff` | #RRGGBB |
-| `read_opacity` | `0.7` | 0.3–1 |
-| `line_spacing` | `1.45` | 1–2.5 |
-| `padding` | `32` | 0–128 |
+| `highlight_color` | `#f8f9fb` | #RRGGBB |
+| `read_opacity` | `0.42` | 0.3–1 |
+| `line_spacing` | `1.55` | 1–2.5 |
+| `padding` | `16` | 0–128 |
 | `column_chars` | `42` | 20–100 |
 | `align` | `left` | left, center |
-| `window_width` | `760` | 320–3840 |
-| `window_height` | `560` | 240–2160 |
+| `window_width` | `560` | 320–3840 |
+| `window_height` | `260` | 240–2160 |
 | `always_on_top` | `false` | true, false |
-| `reading_line_percent` | `35` | 10–80 |
+| `reading_line_percent` | `50` | 10–80 |
 | `mode` | `timed` | timed, speech |
 | `speed_lines_per_minute` | `12` | 1–120 |
 | `scroll_smooth_ms` | `250` | 0–2000 |

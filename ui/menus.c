@@ -136,8 +136,9 @@ void app_menu_bar(cui_context *ui, AppState *app, const cui_theme *t, float widt
     MenuIcon prompter = {t,"cast-teleprompter",cui_id_from(ui,"menu-prompter-art")};
     MenuIcon settings = {t,"cast-gear",cui_id_from(ui,"menu-settings-art")};
     if (width >= 600)
-        (void)cui_button_ex(ui, cui_id_from(ui, "menu-prompter"), t, cui_string("Prompter"),
-            (cui_button_options){.variant = CUI_BUTTON_GHOST, .height = 24, .font_size = 11.5f, .leading_content = menu_icon, .leading_user = &prompter, .disabled = true});
+        if (cui_button_ex(ui, cui_id_from(ui, "menu-prompter"), t, cui_string("Prompter"),
+            (cui_button_options){.variant = CUI_BUTTON_GHOST, .height = 24, .font_size = 11.5f, .leading_content = menu_icon, .leading_user = &prompter, .toggle_semantics = true, .toggled = app->live.notes_window_open, .open = app->live.notes_window_open, .disabled = !app->live.notes_available || !app->live.connected || app->live.pending}))
+            app_request_edit(app, APP_EDIT_NOTES_ACTION, app->live.notes_window_open ? "close" : "open");
     if (cui_button_ex(ui, cui_id_from(ui, "settings-open"), t, cui_string("Settings"),
         (cui_button_options){.variant = CUI_BUTTON_GHOST, .height = 24, .font_size = 11.5f,
             .leading_content = menu_icon, .leading_user = &settings}))

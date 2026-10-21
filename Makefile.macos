@@ -26,9 +26,9 @@ RELEASE_TIMESTAMP ?= 0
 STT ?= 0
 STT_ENGINEERING ?= 0
 STT_GPU_ENGINEERING ?= 0
-STT_PROFILE ?= $(CURDIR)/build/deps-stt/profile.json
-STT_CFLAGS ?= $(if $(filter pro:1,$(EDITION):$(STT)),$(shell $(MACOS_PKG_CONFIG) --cflags whisper))
-STT_LIBS ?= $(if $(filter pro:1,$(EDITION):$(STT)),$(shell $(MACOS_PKG_CONFIG) --libs whisper))
+STT_PROFILE ?= $(CURDIR)/build/deps-stt-needle/profile.json
+STT_CFLAGS ?= $(if $(filter pro:1,$(EDITION):$(STT)),$(shell $(MACOS_PKG_CONFIG) --cflags '$(dir $(STT_PROFILE))prefix/lib/pkgconfig/needle.pc'))
+STT_LIBS ?= $(if $(filter pro:1,$(EDITION):$(STT)),$(shell $(MACOS_PKG_CONFIG) --libs '$(dir $(STT_PROFILE))prefix/lib/pkgconfig/needle.pc'))
 STT_CPU_BACKEND ?=
 STT_HELPER_PATH ?= $(PREFIX)/libexec/cast-pro-stt-helper
 BINARY = cast
@@ -100,6 +100,9 @@ $(error CUI=1 requires PANEL=0; the prototype and legacy panel use incompatible 
 endif
 ifeq ($(CUI),1)
 PACKAGES += sdl3 freetype2 harfbuzz
+ifeq ($(EDITION),pro)
+PACKAGES += sdl3-ttf
+endif
 CUI_SOURCES = ui/main.c ui/app.c ui/menus.c ui/settings.c ui/cast_theme.c ui/brand.c ui/source_picker.c ui/daemon_bridge.c
 CUI_LIBRARIES = ui/build/vendor/libcui_sdl3.a ui/build/vendor/libcui_text.a ui/build/vendor/libcui_bidi.a ui/build/vendor/libcui.a
 CUI_FONT_OBJECT = $(BUILD)/ui/workspace_fonts.o
@@ -114,7 +117,7 @@ endif
 PKG_CFLAGS := $(shell $(MACOS_PKG_CONFIG) --cflags $(PACKAGES))
 PKG_LIBS := $(shell $(MACOS_PKG_CONFIG) --libs $(PACKAGES))
 PKG_VERSIONS := $(shell $(MACOS_PKG_CONFIG) --modversion $(PACKAGES))
-INTEGRATION_ID := $(shell { printf '%s' 'darwin:$(EDITION):$(MEDIA_PROFILE):$(PRO_ROOT):$(PRO_TRUST_HEADER):$(STT):$(STT_CFLAGS):$(STT_LIBS):$(STT_CPU_BACKEND):$(STT_HELPER_PATH):$(STT_PROFILE):$(STT_ENGINEERING):$(CPPFLAGS):$(PANEL):$(CUI):$(MACOS_MIN):$(CC):$(CFLAGS):$(LDFLAGS):$(PRIVATE_REVISION):$(RELEASE_TIMESTAMP):$(PKG_CFLAGS):$(PKG_LIBS):$(PKG_VERSIONS)'; cat $(CUI_HASH_INPUTS) src/*.[chm] src/*.S Makefile.macos $(PRO_SOURCES) $(if $(filter pro,$(EDITION)),$(wildcard $(PRO_DIR)/src/*.h $(PRO_DIR)/src/*/*.h) $(PRO_TRUST_HEADER)) $(wildcard $(STT_PROFILE)); } | shasum -a 256 | cut -c1-32)
+INTEGRATION_ID := $(shell { printf '%s' 'darwin:$(EDITION):$(MEDIA_PROFILE):$(PRO_ROOT):$(PRO_TRUST_HEADER):$(STT):$(STT_CFLAGS):$(STT_LIBS):$(STT_CPU_BACKEND):$(STT_HELPER_PATH):$(STT_PROFILE):$(STT_ENGINEERING):$(CPPFLAGS):$(PANEL):$(CUI):$(MACOS_MIN):$(CC):$(CFLAGS):$(LDFLAGS):$(PRIVATE_REVISION):$(RELEASE_TIMESTAMP):$(PKG_CFLAGS):$(PKG_LIBS):$(PKG_VERSIONS)'; cat $(CUI_HASH_INPUTS) src/*.[chm] src/*.S Makefile.macos $(PRO_SOURCES) $(if $(filter pro,$(EDITION)),$(wildcard $(PRO_DIR)/src/*.h $(PRO_DIR)/src/*/*.h $(PRO_DIR)/src/*/*.cpp) $(PRO_TRUST_HEADER)) $(wildcard $(STT_PROFILE)); } | shasum -a 256 | cut -c1-32)
 BUILD = build/macos-$(EDITION)-p$(PANEL)-$(INTEGRATION_ID)
 CPPFLAGS += -Isrc -Ivendor/inih -D_DARWIN_C_SOURCE -DWITH_MACOS \
  -DCAST_APPLICATION_NAME='"$(BINARY)"' -DCAST_PLATFORM='"macos-$(shell uname -m)"' \
@@ -239,20 +242,24 @@ deps-lgpl:
 	sh tools/deps-lgpl.sh $(DEPS_ARGS)
 deps-stt:
 	python3 tools/deps-stt.py $(DEPS_ARGS)
+check-speech-profiles:
+	python3 tests/test_speech_profile.py
+	python3 tests/test_needle_profile.py
+.PHONY: check-speech-profiles
 check-pro-cli: $(BINARY)
 	python3 tests/test_pro_cli.py --binary ./$(BINARY) --pro-root '$(PRO_DIR)'
 ifeq ($(EDITION):$(STT),pro:1)
-$(STT_HELPER) $(STT_IDENTITY_OBJECTS) $(BUILD)/helper/whisper_helper.o: | edition-preflight
+$(STT_HELPER) $(STT_IDENTITY_OBJECTS) $(BUILD)/helper/needle_helper.o: | edition-preflight
 $(BUILD)/helper/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -MMD -MP -c $< -o $@
-$(BUILD)/helper/whisper_helper.o: $(PRO_DIR)/src/speech/whisper_helper.cpp
+$(BUILD)/helper/needle_helper.o: $(PRO_DIR)/src/speech/needle_helper.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) $(CPPFLAGS) $(STT_CFLAGS) -DCAST_SPEECH_HELPER_EXECUTABLE $(if $(STT_CPU_BACKEND),-DCAST_GGML_CPU_BACKEND_PATH='"$(STT_CPU_BACKEND)"') $(CFLAGS) -Wall -Wextra -Werror -std=c++17 -MMD -MP -c $< -o $@
-$(STT_HELPER): $(BUILD)/helper/whisper_helper.o $(STT_IDENTITY_OBJECTS)
+	$(CXX) $(CPPFLAGS) $(STT_CFLAGS) -DCAST_SPEECH_HELPER_EXECUTABLE $(CFLAGS) -Wall -Wextra -Werror -std=c++17 -MMD -MP -c $< -o $@
+$(STT_HELPER): $(BUILD)/helper/needle_helper.o $(STT_IDENTITY_OBJECTS)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CFLAGS) $(LDFLAGS) -Wl,-dead_strip -o $@ $^ $(STT_LIBS) $(shell $(MACOS_PKG_CONFIG) --libs libsodium) -lpthread -lm
--include $(STT_IDENTITY_OBJECTS:.o=.d) $(BUILD)/helper/whisper_helper.d
+-include $(STT_IDENTITY_OBJECTS:.o=.d) $(BUILD)/helper/needle_helper.d
 endif
 
 .PHONY: install

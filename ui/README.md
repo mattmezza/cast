@@ -305,3 +305,23 @@ The reference combo is 36px tall with a trailing chevron, a 4px popup inset,
 32px rows and a maximum height of 264px. It supports keyboard selection, Escape
 and outside dismissal, focus restoration, and selected checkmarks. Device commands
 share the bounded pending queue; discovery and choices are discarded on reconnect.
+
+## Pro prompter milestone
+
+In an entitled Pro daemon, the menu-bar Prompter button (or `T`) opens/closes the
+native notes window. Its availability follows the daemon's authoritative feature
+snapshot; a Pro label alone cannot grant access. The detached window uses the
+reference's compact Script header, reading guide, playback slider and mirror
+control. More reveals mode, navigation, file loading and status. Existing notes
+appearance overrides remain in effect; new defaults are 560×260 with 17px bundled Inter, a white reading line and dim surrounding text.
+Camera anchoring remains a native host integration task. Capture exclusion is
+reported from the real backend, with a visible warning when it is not effective.
+
+Whistle setup and explicit migration from legacy Whisper configs are documented
+in [speech-sdk.md](../docs/speech-sdk.md). The upstream native runtime is currently
+available as a pinned binary engineering SDK; this milestone does not qualify an
+official release. macOS runtime verification must be performed on macOS.
+
+The private `pro/tests/test_notes_host.py --workspace` acceptance test exercises
+real Xorg identity/masking, movement, Freeze, lifecycle and workspace reopening
+on its own invisible Xvfb, using an explicit signed nonproduction test license.

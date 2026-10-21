@@ -832,6 +832,21 @@ static void audio_pickers(void) {
     click(&p,"audio-desktop-source");picker_reply(&p,APP_DEVICE_DESKTOP,1);p.app.live.connected=false;settle(&p);
     assert(!p.app.source_picker.popup.overlay.open&&!p.app.source_choice_requested);cui_destroy(p.ui);
 }
+static void prompter_entitlement(void) {
+    Preview p=create(1360,820);
+    p.app.live.enabled=p.app.live.connected=p.app.live.pro=true;
+    settle(&p);click(&p,"menu-prompter");assert(!p.app.edit_requested);
+    key(&p,CUI_KEY_T,0);assert(!p.app.edit_requested);
+    p.app.live.notes_available=true;settle(&p);click(&p,"menu-prompter");
+    assert(p.app.edit_requested&&p.app.edit==APP_EDIT_NOTES_ACTION&&!strcmp(p.app.edit_value,"open"));
+    assert(!p.app.live.notes_window_open); /* No optimistic daemon state. */
+    p.app.edit_requested=false;p.app.live.notes_window_open=true;settle(&p);
+    key(&p,CUI_KEY_T,0);
+    assert(p.app.edit_requested&&!strcmp(p.app.edit_value,"close"));
+    p.app.edit_requested=false;p.app.live.connected=false;settle(&p);
+    key(&p,CUI_KEY_T,0);assert(!p.app.edit_requested);
+    cui_destroy(p.ui);
+}
 static void recording_edits(void) {
     Preview p=create(1360,1000);record_fixture(&p,"idle");click(&p,"output-start");
     assert(p.app.edit_requested&&p.app.edit==APP_EDIT_RECORD_ACTION&&!strcmp(p.app.edit_value,"start"));
@@ -891,6 +906,7 @@ int main(int argc,char **argv) {
         assert(cui_debug_layout_export(p.ui,CUI_DEBUG_LAYOUT_JSON,dump,required,&required));
         puts(dump);free(dump);cui_destroy(p.ui);return 0;
     }
+    prompter_entitlement();
     audio_pickers();
     recording_edits();
     look_edits();

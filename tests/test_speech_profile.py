@@ -47,7 +47,7 @@ class ProfileTest(unittest.TestCase):
         self.assertNotEqual(self.check(cpu_only=False).returncode, 0)
         self.assertNotEqual(self.check(cpu_only=True, libs='-lother').returncode, 0)
     def test_offline_builder_plan_and_absent_cache(self):
-        command = ['python3', str(ROOT / 'tools/deps-stt.py')]
+        command = ['python3', str(ROOT / 'tools/deps-stt-whisper.py')]
         result = subprocess.run(command + ['--print-plan'], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0)
         plan = json.loads(result.stdout)
@@ -75,7 +75,7 @@ class ControlledTest(unittest.TestCase):
             return hashlib.sha256(path.read_bytes()).hexdigest()
         self.digest = digest
         lock_path = ROOT / 'packaging/speech-cpu-lock.json'
-        recipe = ROOT / 'tools/deps-stt.py'
+        recipe = ROOT / 'tools/deps-stt-whisper.py'
         lock = json.loads(lock_path.read_text())
         entries = []
         for name in ['libwhisper.so', 'libggml.so', 'libggml-base.so', 'libggml-cpu-generic.so', 'libggml-cpu-avx2.so']:
@@ -194,7 +194,7 @@ class ResumeTest(unittest.TestCase):
             root = Path(directory)
             tools = root / 'tools'; tools.mkdir()
             recipe = tools / 'deps-stt.py'
-            recipe.write_bytes((ROOT / 'tools/deps-stt.py').read_bytes())
+            recipe.write_bytes((ROOT / 'tools/deps-stt-whisper.py').read_bytes())
             repo = root / 'cache'; repo.mkdir()
             def git(*args):
                 return subprocess.check_output(['git', '-C', str(repo), *args], stderr=subprocess.DEVNULL)

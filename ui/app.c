@@ -131,6 +131,9 @@ bool app_request_edit(AppState *s, AppEdit edit, const char *value) {
     } else if(edit==APP_EDIT_AUDIO_MIC||edit==APP_EDIT_AUDIO_DESKTOP||edit==APP_EDIT_AUDIO_VIRTUAL) {
         if(strcmp(value,"true")&&strcmp(value,"false"))return false;
         if(edit==APP_EDIT_AUDIO_VIRTUAL&&!s->live.can_virtual_audio)return false;
+    } else if(edit==APP_EDIT_NOTES_ACTION) {
+        if(!s->live.enabled||!s->live.connected||!s->live.notes_available)return false;
+        if(strcmp(value,"open")&&strcmp(value,"close"))return false;
     } else return false;
     if(edit>=APP_EDIT_RECORD_CONTAINER&&edit<=APP_EDIT_RECORD_DIRECTORY &&
        (s->live.recording||s->live.record_countdown_active||s->live.record_finalizing))return false;
@@ -310,7 +313,9 @@ static void shortcuts(cui_context *ui, AppState *s, float width) {
         if (s->settings.overlay.open || s->panel_sheet.overlay.open || s->source_picker.popup.overlay.open || s->zoom_popup.open) continue;
         bool handled = true;
         if (e->modifiers) continue;
-        if(e->key==CUI_KEY_R) {
+        if(e->key==CUI_KEY_T) {
+            if(!app_request_edit(s,APP_EDIT_NOTES_ACTION,s->live.notes_window_open?"close":"open"))continue;
+        } else if(e->key==CUI_KEY_R) {
             if(!app_request_edit(s,APP_EDIT_RECORD_ACTION,s->live.record_countdown_active?"cancel":s->live.recording?"stop":"start"))continue;
         } else if(e->key==CUI_KEY_C) {
             if(!app_request_edit(s,APP_EDIT_RECORD_ACTION,"cut"))continue;

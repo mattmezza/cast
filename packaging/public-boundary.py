@@ -12,7 +12,7 @@ import tarfile
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PUBLIC = ('Makefile', 'Makefile.macos', '.clang-format', '.gitignore', 'README.md', 'PRODUCT.md',
           'DESIGN.md', 'LICENSE', 'CONTRIBUTING.md', 'BRANDING.md', 'licenses', 'src',
-          'vendor', 'assets', 'completions', 'tests', 'docs', 'examples', 'packaging',
+          'vendor', 'ui', 'assets', 'completions', 'tests', 'docs', 'examples', 'packaging',
           'tools', '.github')
 FORBIDDEN = re.compile(r'(^|/)(cast-pro|cast-pro-private|private|issuer|secrets?)(/|$)|\.(key|pem|p12|pfx|o|d|a)$|\.so(?:\.[^/]+)?$|(^|/)(trusted_keys\.h|pro_provider\.c|bounded_json\.c|issuer\.py)$', re.I)
 SECRET = re.compile(rb'-----BEGIN (?:[A-Z ]*PRIVATE KEY)-----|"(?:secret_key|private_key)"\s*:')
@@ -28,14 +28,14 @@ def public_files(root=ROOT):
         if path.is_file():
             yield path
         elif path.is_dir():
-            yield from sorted(p for p in path.rglob('*') if (p.is_file() or p.is_symlink()) and '__pycache__' not in p.parts and p.suffix not in ('.pyc', '.pyo') and not p.name.endswith('-prompt.md') and p.name != 'prompt.md')
+            yield from sorted(p for p in path.rglob('*') if (p.is_file() or p.is_symlink()) and '__pycache__' not in p.parts and not p.is_relative_to(root / 'ui/build') and p.suffix not in ('.pyc', '.pyo') and not p.name.endswith('-prompt.md') and p.name != 'prompt.md')
 
 
 def check(root=ROOT):
     # The whole public checkout is checked for in-tree private paths, including ignored paths.
     for p in root.rglob('*'):
         relative = p.relative_to(root)
-        if relative.parts[0] in ('.git', 'build', 'dist', '.agents', '.codex') or '__pycache__' in relative.parts:
+        if relative.parts[0] in ('.git', 'build', 'dist', '.agents', '.codex') or '__pycache__' in relative.parts or relative.parts[:2] == ('ui', 'build'):
             continue
         if str(relative) in ('cast', 'cast-pro') and p.is_file() and not p.is_symlink():
             tracked = subprocess.run(['git', '-C', str(root), 'ls-files', '--error-unmatch', str(relative)],
