@@ -224,6 +224,18 @@ void media_status(Media *, bool *, bool *, uint64_t *, char *, size_t);
 uint64_t media_record_duration(Media *);
 void media_record_path(Media *, char *, size_t);
 void media_record_encoder(Media *, char *, size_t, char *, size_t);
+/* Actual post-gain input levels, independent of outgoing-lane pause/freeze/blur.
+ * Full-scale linear amplitudes are clamped to [0,1]; clipped means a source
+ * reached/exceeded full scale before clamping. No PCM/text is exposed. */
+typedef struct {
+    float peak, rms;
+    bool enabled, available, fresh, clipped;
+    uint64_t timestamp_ns, epoch;
+} AudioLaneLevel;
+typedef struct {AudioLaneLevel mic, desktop;bool supported;} AudioLevels;
+/* Constant-size snapshot; stale (>250 ms), muted and unavailable inputs read 0.
+ * Capture barriers retire previous measurements and advance each input epoch. */
+void media_audio_levels(Media *, AudioLevels *);
 void media_audio_status(Media *, char *, size_t);
 int media_audio_selection(Media *, int, uint64_t, float *, unsigned, char *, size_t);
 void media_doctor(const Config *, char *, size_t);

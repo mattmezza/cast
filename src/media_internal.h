@@ -32,6 +32,7 @@ bool audio_record_pending(CastAudio *, uint64_t, int);
 /* 0: captured window, 1: not captured yet (retry), -1: disabled/unavailable. */
 int audio_read_selection(CastAudio *, int source, uint64_t, float *, unsigned, char *, size_t);
 void audio_list(CastAudio *, char *, size_t);
+void audio_levels(CastAudio *, AudioLevels *);
 void audio_status(CastAudio *, char *, size_t);
 void audio_error(CastAudio *, char *, size_t);
 CastRecorder *recorder_open(CastAudio *);

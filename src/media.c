@@ -428,6 +428,12 @@ void media_record_path(Media *m, char *out, size_t n)
 {
     recorder_path(m->recorder, out, n);
 }
+void media_audio_levels(Media *m, AudioLevels *out)
+{
+    if(!out)return;
+    if(!m || !m->audio){memset(out,0,sizeof *out);return;}
+    audio_levels(m->audio,out);
+}
 void media_audio_status(Media *m, char *out, size_t n)
 {
     audio_status(m->audio, out, n);

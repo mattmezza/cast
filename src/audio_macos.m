@@ -3,6 +3,7 @@
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #include <CoreAudio/CoreAudioTypes.h>
 #include "media_internal.h"
+#include "audio_levels.h"
 #include <libswresample/swresample.h>
 #include <libavutil/channel_layout.h>
 #include <pthread.h>
@@ -31,6 +32,8 @@ struct CastAudio {
     SwrContext *resampler;
     pthread_mutex_t lock;
     Config cfg;
+    AudioLaneLevel levels[2];
+    uint64_t level_epoch;
     float samples[RING * 2];
     uint64_t begin, end, accept_after, record_after, stream_after;
     bool tap, silent, desktop_ready, desktop_pending;
@@ -53,7 +56,7 @@ int audio_validate(CastAudio *a, const Config *cfg, char *error, size_t size)
 {
     @synchronized(self) {
     (void)stream; CastAudio *a = self.owner; if (!a) return;
-    pthread_mutex_lock(&a->lock); a->desktop_ready = a->desktop_pending = false; snprintf(a->error, sizeof a->error, "Desktop capture stopped: %s", error.localizedDescription.UTF8String); pthread_mutex_unlock(&a->lock);
+    pthread_mutex_lock(&a->lock); a->desktop_ready = a->desktop_pending = false; audio_level_clear(&a->levels[1],++a->level_epoch); snprintf(a->error, sizeof a->error, "Desktop capture stopped: %s", error.localizedDescription.UTF8String); pthread_mutex_unlock(&a->lock);
     }
 }
 - (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sample ofType:(SCStreamOutputType)type
@@ -81,10 +84,12 @@ int audio_validate(CastAudio *a, const Config *cfg, char *error, size_t size)
             pthread_mutex_lock(&a->lock);
             if (!a->desktop_end || at > a->desktop_end + RATE/4 || at + count + RATE/4 < a->desktop_end) a->desktop_begin = at;
             else for (uint64_t p = a->desktop_end; p < at; ++p) a->desktop_samples[(p%RING)*2] = a->desktop_samples[(p%RING)*2+1] = 0;
+            AudioLevelAccumulator level={0};
             for (size_t i = 0; i < count; ++i) {
                 uint64_t p = at + i; if (p < a->accept_after) continue;
-                for (unsigned ch = 0; ch < 2; ++ch) a->desktop_samples[(p % RING)*2+ch] = ((float *)buffers->mBuffers[planar ? ch : 0].mData)[planar ? i : i*2+ch];
+                for (unsigned ch = 0; ch < 2; ++ch) a->desktop_samples[(p % RING)*2+ch] = audio_level_sample(&level,((float *)buffers->mBuffers[planar ? ch : 0].mData)[planar ? i : i*2+ch],a->cfg.desktop_gain);
             }
+            audio_level_finish(&a->levels[1],&level,audio_level_capture_end(at,(unsigned)count));
             a->desktop_end = at + count;
             if (a->desktop_end > RING && a->desktop_begin < a->desktop_end - RING) a->desktop_begin = a->desktop_end - RING;
             pthread_mutex_unlock(&a->lock);
@@ -169,6 +174,10 @@ static void stop(CastAudio *a)
     @synchronized(a->microphone_token) { a->microphone_token.owner = NULL; }
     a->microphone_token = nil; a->tap = false; a->engine = nil;
     swr_free(&a->resampler);
+    pthread_mutex_lock(&a->lock);
+    uint64_t epoch=++a->level_epoch;
+    for(unsigned i=0;i<2;++i)audio_level_clear(&a->levels[i],epoch);
+    pthread_mutex_unlock(&a->lock);
 }
 static int start(CastAudio *a, char *error, size_t size)
 {
@@ -207,12 +216,14 @@ static int start(CastAudio *a, char *error, size_t size)
             pthread_mutex_lock(&a->lock);
             if (!a->end || at > a->end + RATE/4 || at + (uint64_t)count + RATE/4 < a->end) a->begin = at;
             else for (uint64_t p = a->end; p < at; ++p) a->samples[(p%RING)*2] = a->samples[(p%RING)*2+1] = 0;
+            AudioLevelAccumulator level={0};
             for (int i = 0; i < count; ++i) {
                 uint64_t p = at + (uint64_t)i;
                 if (p < a->accept_after) continue;
-                a->samples[(p % RING)*2] = converted[i*2];
-                a->samples[(p % RING)*2+1] = converted[i*2+1];
+                a->samples[(p % RING)*2] = audio_level_sample(&level,converted[i*2],a->cfg.mic_gain);
+                a->samples[(p % RING)*2+1] = audio_level_sample(&level,converted[i*2+1],a->cfg.mic_gain);
             }
+            audio_level_finish(&a->levels[0],&level,audio_level_capture_end(at,(unsigned)count));
             a->end = at + (uint64_t)count;
             if (a->end > RING && a->begin < a->end - RING) a->begin = a->end - RING;
             pthread_mutex_unlock(&a->lock);
@@ -242,7 +253,11 @@ int audio_configure(CastAudio *a, const Config *cfg, char *error, size_t size)
         (!cfg->mic || a->engine.running) &&
         (!cfg->desktop || a->desktop_pending || a->desktop_ready);
     Config old = a->cfg;
-    if (unchanged) a->cfg = *cfg;
+    if (unchanged) {
+        a->cfg = *cfg;
+        uint64_t epoch=++a->level_epoch;
+        for(unsigned i=0;i<2;++i)audio_level_clear(&a->levels[i],epoch);
+    }
     pthread_mutex_unlock(&a->lock);
     if (unchanged) return 0;
     stop(a);
@@ -256,6 +271,8 @@ int audio_configure(CastAudio *a, const Config *cfg, char *error, size_t size)
 void audio_barrier(CastAudio *a, bool silent)
 {
     pthread_mutex_lock(&a->lock); a->silent = silent;
+    uint64_t epoch=++a->level_epoch;
+    for(unsigned i=0;i<2;++i)audio_level_clear(&a->levels[i],epoch);
     a->accept_after = a->record_after = a->stream_after = sample_time(cast_now_ns());
     a->begin = a->end = a->desktop_begin = a->desktop_end = 0; memset(a->samples, 0, sizeof a->samples); memset(a->desktop_samples, 0, sizeof a->desktop_samples); pthread_mutex_unlock(&a->lock);
 }
@@ -316,6 +333,17 @@ int audio_read_selection(CastAudio *a, int source, uint64_t ns, float *dst, unsi
 }
 void audio_list(CastAudio *a, char *out, size_t size)
 { (void)a; snprintf(out, size, "default [microphone] System Settings > Sound input\ndefault [desktop] ScreenCaptureKit system audio; virtual audio unavailable\n"); }
+void audio_levels(CastAudio *a, AudioLevels *out)
+{
+    if(!out)return;
+    memset(out,0,sizeof *out);if(!a)return;
+    pthread_mutex_lock(&a->lock);
+    out->supported=true;out->mic=a->levels[0];out->desktop=a->levels[1];
+    uint64_t now=cast_now_ns();
+    audio_level_gate(&out->mic,a->cfg.mic,out->mic.timestamp_ns!=0,now);
+    audio_level_gate(&out->desktop,a->cfg.desktop,out->desktop.timestamp_ns!=0,now);
+    pthread_mutex_unlock(&a->lock);
+}
 void audio_status(CastAudio *a, char *out, size_t size)
 { pthread_mutex_lock(&a->lock); snprintf(out, size, "{\"available\":true,\"mic_ready\":%s,\"desktop_ready\":%s,\"virtual_ready\":false,\"virtual_silent\":%s}", a->engine.running ? "true" : "false", a->desktop_ready && !a->error[0] ? "true" : "false", a->silent ? "true" : "false"); pthread_mutex_unlock(&a->lock); }
 void audio_error(CastAudio *a, char *out, size_t size)
@@ -336,12 +364,14 @@ void audio_test_push(CastAudio *a, int source, uint64_t ns, const float *samples
     uint64_t *begin = source == 0 ? &a->begin : &a->desktop_begin;
     uint64_t *end = source == 0 ? &a->end : &a->desktop_end;
     if (!*end) *begin = at;
+    AudioLevelAccumulator level={0};
     for (int i = 0; i < count; ++i) {
         uint64_t p = at + (unsigned)i;
         if (p < a->accept_after) continue;
-        ring[(p % RING)*2] = samples[i*2];
-        ring[(p % RING)*2+1] = samples[i*2+1];
+        ring[(p % RING)*2] = audio_level_sample(&level,samples[i*2],source?a->cfg.desktop_gain:a->cfg.mic_gain);
+        ring[(p % RING)*2+1] = audio_level_sample(&level,samples[i*2+1],source?a->cfg.desktop_gain:a->cfg.mic_gain);
     }
+    audio_level_finish(&a->levels[source?1:0],&level,audio_level_capture_end(at,(unsigned)count));
     *end = at + (unsigned)count;
     if (*end > RING && *begin < *end - RING) *begin = *end - RING;
     pthread_mutex_unlock(&a->lock);

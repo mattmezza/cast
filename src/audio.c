@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #endif
 #include "media_internal.h"
+#include "audio_levels.h"
 #include <errno.h>
 #include <math.h>
 #include <pipewire/extensions/metadata.h>
@@ -44,6 +45,8 @@ struct CastAudio {
     bool done, server_dead, started, virtual_silent;
     char default_mic[256], error[CAST_ERR];
     Config cfg;
+    AudioLaneLevel levels[2];
+    uint64_t level_epoch;
     struct AudioLane lane[2], virtual_lane;
 };
 static pthread_once_t pw_once = PTHREAD_ONCE_INIT;
@@ -63,6 +66,10 @@ static const char *prop(const struct spa_dict *d, const char *key)
 static void clear_lane(struct AudioLane *l)
 {
     l->begin = l->end = 0;
+    if(l->owner && (l==&l->owner->lane[0] || l==&l->owner->lane[1])) {
+        unsigned index=l==&l->owner->lane[1];
+        audio_level_clear(&l->owner->levels[index],++l->owner->level_epoch);
+    }
     if (l->samples) {
         memset(l->samples, 0, AUDIO_RING * 2 * sizeof(float));
     }
@@ -224,6 +231,7 @@ static void lane_format(void *data, uint32_t id, const struct spa_pod *param)
 }
 static void put_samples(struct AudioLane *l, uint64_t ns, const float *src, int count)
 {
+    if(count<=0)return;
     uint64_t start = sample_time(ns);
     uint64_t captured_at = start;
     if (start < l->owner->accept_after) {
@@ -232,6 +240,7 @@ static void put_samples(struct AudioLane *l, uint64_t ns, const float *src, int 
     if (count > AUDIO_RING) {
         int skip = count - AUDIO_RING;
         src += (size_t)skip * 2;
+        ns+=(uint64_t)skip*UINT64_C(1000000000)/AUDIO_RATE;
         start += (uint64_t)skip;
         count = AUDIO_RING;
     }
@@ -257,10 +266,17 @@ static void put_samples(struct AudioLane *l, uint64_t ns, const float *src, int 
         l->begin = start;
         l->end = start;
     }
+    AudioLevelAccumulator level={0};
+    unsigned index=l==&l->owner->lane[1];
+    double gain=index?l->owner->cfg.desktop_gain:l->owner->cfg.mic_gain;
     for (int i = 0; i < count; i++) {
         size_t p = (size_t)((start + (uint64_t)i) % AUDIO_RING) * 2;
-        l->samples[p] = isfinite(src[i * 2]) ? src[i * 2] : 0;
-        l->samples[p + 1] = isfinite(src[i * 2 + 1]) ? src[i * 2 + 1] : 0;
+        l->samples[p] = audio_level_sample(&level,src[i*2],gain);
+        l->samples[p+1] = audio_level_sample(&level,src[i*2+1],gain);
+    }
+    if(l==&l->owner->lane[index]) {
+        uint64_t timestamp=ns+(uint64_t)count*UINT64_C(1000000000)/AUDIO_RATE;
+        audio_level_finish(&l->owner->levels[index],&level,timestamp);
     }
     l->end = start + (uint64_t)count;
     if (l->end - l->begin > AUDIO_RING) {
@@ -700,6 +716,10 @@ int audio_configure(CastAudio *a, const Config *cfg, char *e, size_t n)
         }
     }
 done:
+    if(rc==0) {
+        uint64_t epoch=++a->level_epoch;
+        for(unsigned i=0;i<2;++i)audio_level_clear(&a->levels[i],epoch);
+    }
     if (a->started) {
         pw_thread_loop_unlock(a->loop);
     }
@@ -891,6 +911,18 @@ void audio_list(CastAudio *a, char *out, size_t n)
     if (a->started) {
         pw_thread_loop_unlock(a->loop);
     }
+}
+void audio_levels(CastAudio *a, AudioLevels *out)
+{
+    if(!out)return;
+    memset(out,0,sizeof *out);
+    if(!a)return;
+    if(a->started)pw_thread_loop_lock(a->loop);
+    out->supported=true;out->mic=a->levels[0];out->desktop=a->levels[1];
+    uint64_t now=cast_now_ns();
+    audio_level_gate(&out->mic,a->cfg.mic,!a->server_dead&&!a->lane[0].dead&&(a->lane[0].stream||out->mic.timestamp_ns),now);
+    audio_level_gate(&out->desktop,a->cfg.desktop,!a->server_dead&&!a->lane[1].dead&&(a->lane[1].stream||out->desktop.timestamp_ns),now);
+    if(a->started)pw_thread_loop_unlock(a->loop);
 }
 void audio_status(CastAudio *a, char *out, size_t n)
 {
