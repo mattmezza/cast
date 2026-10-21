@@ -27,3 +27,46 @@ with tempfile.TemporaryDirectory(prefix='cast-deps-fail-') as directory:
     assert marker.read_text() == 'existing-good-tree\n'
     assert not (tree / 'sources').exists()
 print('deps-lgpl missing/corrupt offline cache fails before mutation and preserves existing media')
+
+# Exercise native-platform policy directly: never build, download or open devices.
+import importlib.util
+spec = importlib.util.spec_from_file_location('cast_deps_lgpl', ROOT / 'tools/deps-lgpl.py')
+builder = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(builder)
+with tempfile.TemporaryDirectory(prefix='cast-vt-policy-') as directory:
+    existing = Path(directory)
+    fresh = existing / 'candidate'
+    assert builder.hardware_policy('none', False, existing, False) == ([], [])
+    for darwin, destination, explicit in [(False, fresh, True), (True, existing, True), (True, fresh, False)]:
+        try:
+            builder.hardware_policy('videotoolbox', darwin, destination, explicit)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError('unsafe candidate destination/platform accepted')
+    flags, integrations = builder.hardware_policy('videotoolbox', True, fresh, True)
+    assert flags == ['--enable-videotoolbox', '--enable-encoder=h264_videotoolbox']
+    assert integrations[0]['qualification'] == 'unqualified-candidate'
+    assert not fresh.exists()
+assert not lock['hardware_integrations']
+assert not any('videotoolbox' in flag for flag in lock['ffmpeg_flags'])
+print('VideoToolbox candidate policy: native macOS, explicit fresh root, unchanged defaults and unqualified provenance passed')
+spec = importlib.util.spec_from_file_location('cast_media_audit', ROOT / 'packaging/audit.py')
+audit = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(audit)
+candidate = {'platform': 'darwin', 'release_eligible': False,
+             'hardware_integrations': integrations, 'configure_flags': flags}
+audit.validate_hardware_profile(candidate, False)
+for changed, official in [(candidate, True),
+                          ({**candidate, 'release_eligible': True}, False),
+                          ({**candidate, 'platform': 'linux'}, False),
+                          ({**candidate, 'hardware_integrations': []}, False),
+                          ({**candidate, 'configure_flags': []}, False)]:
+    try:
+        audit.validate_hardware_profile(changed, official)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('unqualified/inconsistent hardware provenance accepted')
+audit.validate_hardware_profile({'configure_flags': lock['ffmpeg_flags']}, False)
+print('VideoToolbox provenance rejects official release and inconsistent platform/flags/eligibility metadata')

@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 const char *const cast_video_encoder_names[CAST_VIDEO_ENCODER_COUNT] = {
-    "auto", "libopenh264", "libx264", "libx265", "libvpx-vp9", "libaom-av1"};
+    "auto", "libopenh264", "libx264", "libx265", "libvpx-vp9", "libaom-av1", "h264_videotoolbox"};
 const char *const cast_audio_encoder_names[CAST_AUDIO_ENCODER_COUNT] = {
     "aac", "libopus", "pcm_s16le", "flac"};
 static bool registered(void *unused, const char *name, bool video)

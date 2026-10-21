@@ -10,6 +10,10 @@ static bool x264_only(void *unused, const char *name, bool video)
 {
     (void)unused; return video && !strcmp(name, "libx264");
 }
+static bool videotoolbox_only(void *unused, const char *name, bool video)
+{
+    (void)unused; return video && !strcmp(name, "h264_videotoolbox");
+}
 static bool absent(void *unused, const char *name, bool video)
 {
     (void)unused; (void)name; (void)video; return false;
@@ -31,6 +35,9 @@ int main(void)
     assert(!c.video_allowed && !c.audio_available);
     encoder_capabilities_query(&c, false, x264_only, NULL);
     assert(c.video_allowed == (CAST_ENCODER_BIT(CAST_VIDEO_AUTO) | CAST_ENCODER_BIT(CAST_VIDEO_X264)));
+    encoder_capabilities_query(&c, true, videotoolbox_only, NULL);
+    assert(c.video_allowed == CAST_ENCODER_BIT(CAST_VIDEO_VIDEOTOOLBOX));
+    assert(!(c.video_available & CAST_ENCODER_BIT(CAST_VIDEO_AUTO)));
     encoder_capabilities_query(&c, true, absent, NULL);
     assert(!c.video_available && !c.video_allowed && !c.audio_available && !c.audio_allowed);
     encoder_capabilities_query(&c, true, NULL, NULL);

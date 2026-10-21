@@ -52,6 +52,23 @@ def digest(path):
         return hashlib.file_digest(f, 'sha256').hexdigest()
 
 
+def validate_hardware_profile(data, official):
+    flags = ' '.join(data.get('configure_flags', []))
+    hardware = data.get('hardware_integrations', [])
+    if hardware:
+        if official:
+            raise ValueError('hardware media candidates require separate runtime/release qualification')
+        if (data.get('platform') != 'darwin' or len(hardware) != 1 or
+                hardware[0].get('name') != 'videotoolbox' or
+                hardware[0].get('qualification') != 'unqualified-candidate' or
+                '--enable-videotoolbox' not in flags or
+                '--enable-encoder=h264_videotoolbox' not in flags or
+                data.get('release_eligible')):
+            raise ValueError('invalid VideoToolbox candidate provenance')
+    elif '--enable-videotoolbox' in flags or '--enable-encoder=h264_videotoolbox' in flags:
+        raise ValueError('VideoToolbox build missing candidate hardware provenance')
+
+
 def profile(args):
     if args.edition == 'pro':
         if args.media_profile != 'lgpl':
@@ -88,6 +105,7 @@ def profile(args):
         if data.get('profile') != 'lgpl' or data.get('schema') != 1:
             raise ValueError('invalid controlled LGPL profile manifest')
         flags = ' '.join(data.get('configure_flags', []))
+        validate_hardware_profile(data, args.official)
         if '--disable-gpl' not in flags or '--disable-nonfree' not in flags or '--disable-autodetect' not in flags:
             raise ValueError('media profile must explicitly exclude GPL/nonfree/autodetected libraries')
         if '--enable-gpl' in flags or '--enable-nonfree' in flags:

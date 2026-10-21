@@ -250,6 +250,13 @@ static int encoder_open(const Config *cfg, bool stream, bool header, const char 
             av_dict_set(&options, "crf", value, 0);
         }
     }
+    if (!strcmp(name, "h264_videotoolbox")) {
+        /* Explicit opt-in hardware route. Never fall back to Apple software
+         * encoding or reinterpret CRF as an unrelated quality scale. */
+        av_dict_set(&options, "allow_sw", "0", 0);
+        av_dict_set(&options, "require_sw", "0", 0);
+        av_dict_set(&options, "realtime", "1", 0);
+    }
     if (x264) {
         av_dict_set(&options, "tune", "zerolatency", 0);
         if (stream) {
@@ -299,6 +306,10 @@ static int encoder_open(const Config *cfg, bool stream, bool header, const char 
             ? (crf ? "legacy CRF/preset active" : "bitrate; codec preset active")
             : (stream ? "target bitrate; stream.encoder_preset inactive for this encoder"
                       : "target bitrate; record.crf and record.preset inactive for this encoder"));
+    if (!strcmp(name, "h264_videotoolbox")) {
+        snprintf(selection->detail, sizeof(selection->detail),
+                 "VideoToolbox hardware required; realtime; CPU YUV420P upload; target bitrate; CRF/preset inactive");
+    }
     if (lossless) {
         snprintf(selection->detail, sizeof(selection->detail),
                  "lossless; record.bitrate_kbps, record.crf and record.preset inactive");

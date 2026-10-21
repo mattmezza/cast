@@ -27,10 +27,27 @@ def run(argv, directory, environment, log):
                        stderr=subprocess.STDOUT, check=True)
 
 
+
+def hardware_policy(hardware, darwin, root, root_explicit):
+    """Validate before downloads/mutations; candidate destinations are never reusable."""
+    if hardware == "none":
+        return [], []
+    if not darwin:
+        raise RuntimeError("VideoToolbox candidate requires a native macOS build")
+    if not root_explicit or root.exists():
+        raise RuntimeError("VideoToolbox candidate requires --root naming a new, nonexistent directory; existing SDK roots are never modified")
+    return ["--enable-videotoolbox", "--enable-encoder=h264_videotoolbox"], [{
+        "name": "videotoolbox", "encoder": "h264_videotoolbox",
+        "provider": "Apple system frameworks", "qualification": "unqualified-candidate",
+        "input": "CPU YUV420P; hardware encoding required; no zero-copy claim"}]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--hardware", choices=("none", "videotoolbox"), default="none",
+                        help="opt-in unqualified macOS hardware candidate; requires a new explicit --root")
     parser.add_argument("--offline", action="store_true", help="require verified archives in cache")
-    parser.add_argument("--root", type=Path, default=ROOT / "build/deps-lgpl")
+    parser.add_argument("--root", type=Path, default=None)
     parser.add_argument("--cache", type=Path, default=Path(os.environ.get("CAST_DEPS_CACHE", ROOT / "build/deps-cache")))
     parser.add_argument("--jobs", type=int, default=min(8, os.cpu_count() or 1))
     args = parser.parse_args()
@@ -38,7 +55,9 @@ def main():
         parser.error("jobs must be 1..128")
     darwin = os.uname().sysname == "Darwin"
     lock = json.loads(LOCK.read_text())
-    base, cache = args.root.resolve(), args.cache.resolve()
+    base = (args.root or ROOT / "build/deps-lgpl").resolve()
+    extra_flags, hardware = hardware_policy(args.hardware, darwin, base, args.root is not None)
+    cache = args.cache.resolve()
     prefix = base / "prefix"
     cache.mkdir(parents=True, exist_ok=True)
     # Validate/download everything before touching a previously usable prefix.
@@ -124,7 +143,7 @@ def main():
             commands.append({"source": name, "argv": argv})
             run(argv, destination, environment, materials / f"{name}-build.log")
     ffmpeg = source_root / "ffmpeg-9.0.2"
-    flags = [f"--prefix={prefix}", *lock["ffmpeg_flags"],
+    flags = [f"--prefix={prefix}", *lock["ffmpeg_flags"], *extra_flags,
              f"--extra-cflags=-I{prefix}/include", f"--extra-ldflags=-L{prefix}/lib -Wl,-rpath,'\\$\\$\\$\\$ORIGIN'"]
     if darwin:
         flags[-1] = f"--extra-ldflags=-L{prefix}/lib -Wl,-rpath,@loader_path"
@@ -176,7 +195,8 @@ def main():
                     if not resolved.is_relative_to(prefix / "lib"):
                         raise RuntimeError(f"media dependency escaped controlled tree: {line.strip()}")
     libs = {str(path.relative_to(base)): digest(path) for path in lib_files}
-    profile = {"schema": 1, "profile": "lgpl", "platform": "darwin" if darwin else "linux", "release_eligible": not darwin,
+    profile = {"schema": 1, "profile": "lgpl", "platform": "darwin" if darwin else "linux", "release_eligible": not darwin and not hardware,
+               "hardware_integrations": hardware,
                "configure_flags": flags, "libraries": libs, "sources": lock["sources"],
                "build_materials": "build-materials", "corresponding_sources": bundle.name,
                "corresponding_sources_sha256": digest(bundle), "patches": []}
