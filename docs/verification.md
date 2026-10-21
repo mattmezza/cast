@@ -543,6 +543,75 @@ measurement logs remain in `build/community-roadmap-validation/4k30-*`.
 This result establishes a current software 4K30 bottleneck, with no 4K60 or GPU
 performance claim.
 
+### Assembly-enabled LGPL SDK comparison (2026-10-21)
+
+The earlier SDK had `HAVE_AVX2_EXTERNAL=0` and `HAVE_SSE2_EXTERNAL=0`.
+A separate `build/deps-lgpl-simd` tree was built using the current pinned lock
+and builder, leaving `build/deps-lgpl-candidate` untouched. NASM 3.02 was extracted
+locally from the signed Arch package as a build-only tool, without a system
+installation. The package SHA256 was
+`3a749b14839e1ea665e42b991fa15dfb6e9fc871b8bf4f8a48a40b789edcf579`.
+The existing FFmpeg archive was reused; missing pinned OpenH264/OpenSSL/zlib
+archives were downloaded and checked against the unchanged lock hashes.
+
+```sh
+PATH="$PWD/build/tools-nasm/usr/bin:$PATH" TMPDIR="$PWD/ui/build/tmp" \
+  python tools/deps-lgpl.py --cache build/deps-cache \
+  --root build/deps-lgpl-simd --jobs 8
+```
+
+The new configuration has external SSE2/AVX2 assembly enabled, `CONFIG_GPL=0`,
+`CONFIG_NONFREE=0` and `CONFIG_VERSION3=1`. OpenH264 was built with x86 assembly
+and AVX2. The builder's shared-library origin-runpath and controlled dependency
+closure checks passed. Build tools, exact commands, source hashes, notices and
+configuration remain in that tree's build materials; its corresponding-source
+archive SHA256 is
+`3bad3b706cd2487b81f4b91402b6b2c43d047a10db165c4466713da9a61c62d9`.
+This is an isolated engineering candidate, not an automatic release SDK swap;
+full recording/stream/TLS/package qualification remains required before staging.
+
+The repeatable `tests/benchmark_conversion.c` fixture measured 4K RGBA-to-YUV420P
+conversion after three warmups, with 30 measured frames per worker count:
+
+| Conversion workers | Mean wall time | CPU time per frame |
+|---|---:|---:|
+| 1 | 29.655 ms | 29.530 ms |
+| 2 | 16.791 ms | 29.909 ms |
+| 4 | 11.188 ms | 37.603 ms |
+| 8 | 5.624 ms | 39.240 ms |
+
+Every worker count produced byte-identical output, full-plane hash
+`b5b280d7c7129340`. This isolates conversion cost; it is not total recording FPS.
+
+The same 60-second recording fixture and unchanged four-worker codec policy at
+4K30 improved to 1,370/1,800 encoded frames, with 430 drops (23.9%). Conversion
+averaged 11.481 ms and encoding/muxing 31.221 ms: the combined 42.702 ms still
+exceeds the 33.333 ms budget, so **4K30 throughput still fails**. Full independent
+decode read all 1,370 H.264 frames and 2,813 AAC frames without errors. Elapsed
+time was 60.737 seconds, CPU 343.50% of one core and peak RSS 498 MiB.
+
+The 1080p30 baseline passed with all 1,800 frames encoded and zero drops over
+60.021 seconds. Conversion averaged 3.682 ms and encoding/muxing 12.385 ms;
+CPU was 156.76% of one core and peak RSS 80.34 MiB. Both CPU measurements use
+the same Python resource/monotonic method described above; no concurrent heavy
+builds or other benchmarks ran during these measurements.
+
+`test_media_quality` now accepts optional width/height while retaining its
+1080p defaults, fixed per-plane PSNR/stripe/text thresholds and negative 720p
+resize control. With the new SDK and unchanged 6 Mbps target, both dimensions
+passed; 90 full-size frames decoded with zero queue drops in each run:
+
+| Source | Minimum Y/U/V PSNR | Minimum stripe contrast | Maximum text MAE | Actual video bitrate |
+|---|---|---:|---:|---:|
+| 1920×1080 | 39.554 / 48.716 / 49.010 dB | 97.33% | 1.8430 | 0.876 Mbps |
+| 3840×2160 | 35.897 / 42.260 / 42.563 dB | 95.16% | 3.8449 | 2.354 Mbps |
+
+The 720p downscale/upscale negative control failed the quality thresholds at
+both target sizes. This static detail-preservation check is separate from the
+moving-source sustained throughput failure; a nominal bitrate is not proof of
+actual bitrate or subjective desktop quality. Small logs remain under
+`build/community-roadmap-validation`; test movies were removed after inspection.
+
 ## v0.7 panel drill-in refinement
 
 The second UI round changes only the native panel. Private Xvfb workflows verify

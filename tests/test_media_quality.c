@@ -18,8 +18,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#define WIDTH 1920
-#define HEIGHT 1080
+static int WIDTH = 1920;
+static int HEIGHT = 1080;
 #define SUBMISSIONS 90
 
 uint64_t cast_now_ns(void)
@@ -120,7 +120,7 @@ static void inspect_frame(const AVFrame *frame, const AVFrame *reference, Qualit
         double actual_sums[2] = {0}, expected_sums[2] = {0};
         unsigned counts[2] = {0};
         for (unsigned y = band * 64 + 8; y < band * 64 + 56; ++y) {
-            for (unsigned x = 48; x < WIDTH - 48; ++x) {
+            for (unsigned x = 48; x < (unsigned)WIDTH - 48; ++x) {
                 unsigned side = (x / stripe) & 1;
                 actual_sums[side] += frame->data[0][y * frame->linesize[0] + x];
                 expected_sums[side] += reference->data[0][y * reference->linesize[0] + x];
@@ -137,7 +137,7 @@ static void inspect_frame(const AVFrame *frame, const AVFrame *reference, Qualit
     }
     double text_error = 0;
     for (unsigned y = 320; y < 768; ++y) {
-        for (unsigned x = 32; x < WIDTH - 32; ++x) {
+        for (unsigned x = 32; x < (unsigned)WIDTH - 32; ++x) {
             int difference = frame->data[0][y * frame->linesize[0] + x] -
                              reference->data[0][y * reference->linesize[0] + x];
             text_error += abs(difference);
@@ -176,8 +176,8 @@ static void check_downscale_control(const AVFrame *reference)
     inspect_frame(upscaled, reference, &control);
     assert(!control.accepted);
     assert(control.minimum_contrast < 0.90);
-    printf("negative 720p->1080p control rejected: Y PSNR %.3f dB; stripe contrast %.4f\n",
-           control.minimum_psnr[0], control.minimum_contrast);
+    printf("negative 720p->%dx%d control rejected: Y PSNR %.3f dB; stripe contrast %.4f\n",
+           WIDTH, HEIGHT, control.minimum_psnr[0], control.minimum_contrast);
     av_frame_free(&upscaled);
     av_frame_free(&smaller);
 }
@@ -222,9 +222,10 @@ static Quality inspect(const char *path, const AVFrame *reference)
     assert(result == AVERROR_EOF);
     quality.accepted &= quality.frames >= 30;
     printf(
-        "decoded quality: %u full1920x1080 frames; minimum Y/U/V PSNR %.3f/%.3f/%.3f dB; "
+        "decoded quality: %u full%dx%d frames; minimum Y/U/V PSNR %.3f/%.3f/%.3f dB; "
         "minimum stripe contrast %.4f; maximum text MAE %.4f; video packet bitrate %.3f Mbps; %s\n",
-        quality.frames, quality.minimum_psnr[0], quality.minimum_psnr[1], quality.minimum_psnr[2],
+        quality.frames, WIDTH, HEIGHT, quality.minimum_psnr[0], quality.minimum_psnr[1],
+        quality.minimum_psnr[2],
         quality.minimum_contrast, quality.maximum_text_error,
         quality.video_bytes * 8.0 / (format->duration / 1000000.0) / 1000000.0,
         quality.accepted ? "PASS" : "FAIL");
@@ -236,10 +237,22 @@ static Quality inspect(const char *path, const AVFrame *reference)
 }
 int main(int argc, char **argv)
 {
-    if (argc != 2) {
+    if (argc != 2 && argc != 4) {
         fprintf(stderr,
-                "usage: test_media_quality NEW_OUTPUT.mkv (3s CPU H.264, full1080p, 6Mbps)\n");
+                "usage: test_media_quality NEW_OUTPUT.mkv [WIDTH HEIGHT] (3s CPU H.264, 6Mbps)\n");
         return 2;
+    }
+    if (argc == 4) {
+        char *end_width, *end_height;
+        long width = strtol(argv[2], &end_width, 10);
+        long height = strtol(argv[3], &end_height, 10);
+        if (*end_width || *end_height || width < 1920 || width > 7680 ||
+            height < 1080 || height > 4320 || width % 2 || height % 2) {
+            fprintf(stderr, "quality dimensions must be even, 1920..7680 by 1080..4320\n");
+            return 2;
+        }
+        WIDTH = (int)width;
+        HEIGHT = (int)height;
     }
     assert(access(argv[1], F_OK));
     av_log_set_level(AV_LOG_ERROR);
