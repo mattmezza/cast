@@ -97,3 +97,27 @@ with isolated application/recording handoff stubs. It covers dirty-save revision
 stale and idle project open, WAV import, playlist/network rejection, captured-clip
 locking/finalization, concurrent editing on another track and undo/redo. These are
 not claims of end-to-end application command routing or separately captured tracks.
+
+`timeline_render.h` provides a thread-confined CPU renderer and an asynchronous
+movie exporter. Visual tracks composite in track order, contain fitted against a
+black canvas; decoded RGBA alpha is preserved during blending. Video embedded
+audio and audio clips mix at stereo 48 kHz with clip gain/mute and final limiting.
+Trim/source offsets and document positions use the timeline's nanosecond clock.
+Missing sources fail with a media ID. Input decoders use regular local file
+handles, a format allowlist, bounded probing, and cancellation/deadline callbacks.
+The bounded reader cache holds eight decoder instances rather than entire media.
+
+Exports use the configured dimensions, frame rate, video/audio encoders and
+Matroska/MP4/MOV container. A worker owns conversion, encoding and muxing through
+linked FFmpeg libraries; no external executable, capture device or audio device
+is started. Output remains a mode-0600 sibling temporary until its trailer and
+file synchronization succeed. Failure/cancellation removes that temporary and
+preserves an existing destination; source media cannot be an export destination.
+An optional worker frame callback allows application/private overlays without
+putting private feature code into the renderer. Callback state must remain alive
+until the export is joined. These APIs are a rendering foundation; application
+playback/export controls require their own integration.
+
+`tests/test_timeline_render.c` generates stereo WAV data, exports colored FFV1
+frames and FLAC audio, reopens that movie, and checks trim/split position, gain,
+forward/reverse seeking, frame color, cancellation preservation and missing input.
