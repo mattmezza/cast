@@ -287,7 +287,7 @@ int main(void)
  snap.command_completed=snap.command_queued;snap.command_failed=true;
  bridge_poll(b,0,&live);assert(!live.pending && live.edit_error[0] && !live.zoom_follow);
  snap.command_failed=false;
- strcpy(snap.edition.features[0].id,"cinematic_zoom");snap.edition.features[0].active=true;
+ strcpy(snap.edition.features[0].id,"cinematic_zoom");snap.edition.features[0].entitled=true; /* Available before it is active. */
  snap.cinematic_active=true;bridge_poll(b,0,&live);
  assert(live.can_zoom_follow && live.cinematic_zoom_available && live.cinematic_zoom_active);
  assert(!bridge_edit(b,APP_EDIT_GRADIENT_FROM,"#123456",error,sizeof error));
@@ -374,9 +374,11 @@ int main(void)
  strcpy(snap.device_reply,"malformed\n");bridge_poll(b,0,&live);assert(live.devices.error[0] && !live.devices.count);
  /* Paid notes commands require authoritative daemon entitlement, not a Pro label. */
  snap.edition.identity.pro=true;
+ snap.edition.license.state=CAST_LICENSE_VALID;strcpy(snap.edition.license.masked_id,"***only");
  assert(bridge_edit(b,APP_EDIT_NOTES_ACTION,"open",error,sizeof error)<0);
- strcpy(snap.edition.features[1].id,"speech_teleprompter");snap.edition.features[1].active=true;
+ strcpy(snap.edition.features[1].id,"speech_teleprompter");snap.edition.features[1].entitled=true; /* Opening must work before playback. */
  bridge_poll(b,0,&live);assert(live.notes_available && !live.notes_window_open);
+ assert(live.license_valid && !strcmp(live.license_id,"***only"));
  assert(!bridge_edit(b,APP_EDIT_NOTES_ACTION,"open",error,sizeof error));
  assert(!strcmp(setting_key,"notes open") && !setting_value[0]);
  snap.command_completed=snap.command_queued;snap.workflow.notes_window_open=true;
@@ -384,7 +386,8 @@ int main(void)
  assert(bridge_edit(b,APP_EDIT_NOTES_ACTION,"start",error,sizeof error)<0);
  assert(!bridge_edit(b,APP_EDIT_NOTES_ACTION,"close",error,sizeof error));
  snap.command_completed=snap.command_queued;bridge_poll(b,0,&live);
- snap.edition.features[1].active=false;
+ snap.edition.features[1].entitled=false;snap.edition.features[1].active=true;
+ bridge_poll(b,0,&live);assert(!live.notes_available); /* Activity cannot grant access. */
  assert(bridge_edit(b,APP_EDIT_NOTES_ACTION,"open",error,sizeof error)<0);
  strcpy(snap.config.backend,"macos");bridge_poll(b,0,&live);assert(!live.can_virtual_audio);
  assert(bridge_edit(b,APP_EDIT_AUDIO_VIRTUAL,"true",error,sizeof error)<0);

@@ -843,7 +843,14 @@ static void prompter_entitlement(void) {
     p.app.edit_requested=false;p.app.live.notes_window_open=true;settle(&p);
     key(&p,CUI_KEY_T,0);
     assert(p.app.edit_requested&&!strcmp(p.app.edit_value,"close"));
-    p.app.edit_requested=false;p.app.live.connected=false;settle(&p);
+    p.app.edit_requested=false;
+    app_open_settings(p.ui,&p.app,0);p.app.settings_category=4;settle(&p);
+    click(&p,"settings-prompter-open");
+    assert(p.app.edit_requested&&p.app.edit==APP_EDIT_NOTES_ACTION&&!strcmp(p.app.edit_value,"open"));
+    assert(p.app.settings.overlay.open);
+    p.app.edit_requested=false;p.app.live.notes_available=false;settle(&p);
+    click(&p,"settings-prompter-open");assert(!p.app.edit_requested);
+    p.app.live.connected=false;settle(&p);
     key(&p,CUI_KEY_T,0);assert(!p.app.edit_requested);
     cui_destroy(p.ui);
 }

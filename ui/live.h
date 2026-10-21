@@ -26,7 +26,8 @@ typedef struct {
 /* Sanitized daemon state. Pixels are borrowed until the next poll. */
 typedef struct {
     bool enabled, connected, has_frame, pro, pending, snapshot_busy;
-    bool notes_available, notes_window_open;
+    bool notes_available, notes_window_open, license_valid;
+    char license_id[32];
     cui_bitmap frame;
     int target, width, height, fps;
     bool virtual_enabled, virtual_paused, virtual_frozen, virtual_blurred;

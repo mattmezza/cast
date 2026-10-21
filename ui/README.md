@@ -310,7 +310,7 @@ share the bounded pending queue; discovery and choices are discarded on reconnec
 
 In an entitled Pro daemon, the menu-bar Prompter button (or `T`) opens/closes the
 native notes window. Its availability follows the daemon's authoritative feature
-snapshot; a Pro label alone cannot grant access. The detached window uses the
+snapshot's entitlement flag; running/activity state does not grant access. A Pro label alone cannot grant access. The detached window uses the
 reference's compact Script header, reading guide, playback slider and mirror
 control. More reveals mode, navigation, file loading and status. Existing notes
 appearance overrides remain in effect; new defaults are 560×260 with 17px bundled Inter, a white reading line and dim surrounding text.
@@ -325,3 +325,8 @@ official release. macOS runtime verification must be performed on macOS.
 The private `pro/tests/test_notes_host.py --workspace` acceptance test exercises
 real Xorg identity/masking, movement, Freeze, lifecycle and workspace reopening
 on its own invisible Xvfb, using an explicit signed nonproduction test license.
+
+The Licence settings page reflects the daemon's license validity and masked ID.
+Teleprompter settings offers an entitled Open Prompter action; its remaining
+preference controls are explicitly marked as unfinished. Use More in the native
+window or the CLI for the implemented settings.

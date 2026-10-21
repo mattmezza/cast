@@ -187,7 +187,7 @@ int bridge_edit(DaemonBridge *bridge, AppEdit edit, const char *value, char *err
         bool entitled = false;
         for (unsigned i=0;i<CAST_FEATURE_COUNT;++i)
             if (!strcmp(snapshot.edition.features[i].id,"speech_teleprompter"))
-                entitled = snapshot.edition.features[i].active;
+                entitled = snapshot.edition.features[i].entitled;
         if (!entitled) return refuse_edit(bridge,error,size,"Prompter requires an active Pro teleprompter entitlement");
     }
     char transport_error[CAST_ERR];
@@ -506,17 +506,19 @@ static void copy_config(AppLive *out, const PanelSnapshot *snapshot, const Daemo
     out->cinematic_zoom_active = snapshot->cinematic_active;
     for (unsigned i = 0; i < CAST_FEATURE_COUNT; ++i)
         if (!strncmp(snapshot->edition.features[i].id, "cinematic_zoom", sizeof snapshot->edition.features[i].id))
-            out->cinematic_zoom_available = snapshot->edition.features[i].active;
+            out->cinematic_zoom_available = snapshot->edition.features[i].entitled;
     out->can_select_monitor = monitor_backend(config);
     out->can_reselect_portal = !strcmp(config->backend, "wayland");
     out->can_select_camera = true;
     snprintf(out->screen_id, sizeof out->screen_id, "%.*s", (int)sizeof config->monitor - 1, config->monitor);
     snprintf(out->camera_id, sizeof out->camera_id, "%.*s", (int)sizeof config->camera_device - 1, config->camera_device);
     out->pro = snapshot->edition.identity.pro;
+    out->license_valid = snapshot->edition.license.state == CAST_LICENSE_VALID;
+    snprintf(out->license_id, sizeof out->license_id, "%s", snapshot->edition.license.masked_id);
     out->notes_window_open = snapshot->workflow.notes_window_open;
     for (unsigned i=0;i<CAST_FEATURE_COUNT;++i)
         if (!strcmp(snapshot->edition.features[i].id,"speech_teleprompter"))
-            out->notes_available = snapshot->edition.features[i].active;
+            out->notes_available = snapshot->edition.features[i].entitled;
     out->generation = snapshot->daemon_generation;
     out->privacy_epoch = snapshot->privacy_epoch;
     out->width = config->width;

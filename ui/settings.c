@@ -268,7 +268,7 @@ static void content(cui_context *ui,AppState *a,const cui_theme *t,bool narrow) 
     cui_text_ex(ui,cui_string(titles[c]),17,t->text,0,(cui_text_style){.weight=CUI_TEXT_WEIGHT_SEMIBOLD});
     cui_begin_box(ui,0,(cui_box){.width=-1,.max_width=480});
     txt(ui,subs[c],12,t->muted);cui_end_box(ui);
-    if(c!=0 && c!=2 && c!=9) txt(ui,connected ? "Read only · changes are not available in this workspace" : "Connect the daemon to inspect current settings",11,t->muted);
+    if(c!=0 && c!=2 && c!=4 && c!=6 && c!=9) txt(ui,connected ? "Read only · changes are not available in this workspace" : "Connect the daemon to inspect current settings",11,t->muted);
     const char *theme[]={"dark","light","system"};
     const char *density[]={"comfortable","compact"};
     const char *fit[]={"contain","cover"},*shape[]={"rect","rounded","circle"};
@@ -320,7 +320,15 @@ static void content(cui_context *ui,AppState *a,const cui_theme *t,bool narrow) 
         group(ui,t,"SAFETY");FIELD("Start paused","Not a preference. Revealing is always separate.","Required",'t');
         FIELD("Reconnect attempts","0 means never retry automatically.","—",'r');group_end(ui);break;
     case 4:
-        txt(ui,"Pro · requires a supported Pro build and licence",11,t->primary);
+        txt(ui,a->live.notes_available?"Available · entitled by the connected daemon":"Requires a connected daemon with a teleprompter entitlement",11,t->primary);
+        group(ui,t,"PROMPTER");
+        if(cui_button_ex(ui,cui_id_from(ui,"settings-prompter-open"),t,
+            cui_string(a->live.notes_window_open?"Show controls in Prompter":"Open Prompter"),
+            (cui_button_options){.variant=CUI_BUTTON_OUTLINE,.height=28,.font_size=11,
+                .disabled=!connected||!a->live.notes_available||a->live.pending}))
+            app_request_edit(a,APP_EDIT_NOTES_ACTION,"open");
+        txt(ui,"Use More in the Prompter window for script, mode and playback controls. Workspace preferences below are not implemented yet.",11,t->muted);
+        group_end(ui);
         group(ui,t,"SCRIPT");FIELD("Text size",NULL,"— px",'r');FIELD("Scroll speed",NULL,"—",'r');
         FIELD("Mirror text","For beam-splitter glass in front of the lens.","",'s');group_end(ui);
         group(ui,t,"PLACEMENT · PRO");SEG("Default anchor","At camera keeps the reading line on the lens.",anchor,-1);group_end(ui);
@@ -332,8 +340,8 @@ static void content(cui_context *ui,AppState *a,const cui_theme *t,bool narrow) 
         disabled_button(ui,t,"Save current look…",false);break;
     case 6:
         group(ui,t,"PRO");txt(ui,"Cinematic zoom, teleprompter, subtitles.",17,t->text);
-        txt(ui,"Pro features require a supported build and a valid licence. Licence status is not available in this preview.",12,t->muted);group_end(ui);
-        group(ui,t,"THIS MACHINE");FIELD("Edition",NULL,connected?(a->live.pro?"Pro build":"Community"):"Not connected",'t');FIELD("Key",NULL,"—",'t');
+        txt(ui,"Licence status comes from the connected daemon. Features also depend on build and platform support.",12,t->muted);group_end(ui);
+        group(ui,t,"THIS MACHINE");FIELD("Edition",NULL,connected?(a->live.pro?"Pro build":"Community"):"Not connected",'t');FIELD("Licence",NULL,connected?(a->live.license_valid?"Valid":"Not valid"):"Not connected",'t');FIELD("Key",NULL,connected&&a->live.license_id[0]?a->live.license_id:"—",'t');
         FIELD("Updates included until",NULL,"—",'t');group_end(ui);break;
     case 7:
         group(ui,t,"SERVER");FIELD("MCP server","Off by default. No endpoint exists while it is disabled.","",'s');
