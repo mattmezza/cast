@@ -475,6 +475,36 @@ ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
   python3 tests/test_stream_network.py --binary /tmp/cast-stream-asan/test_stream
 ```
 
+### LGPL local streaming rerun (2026-10-21)
+
+The current loopback streaming suite was rerun against the LGPL candidate SDK
+(`libavcodec 63.1.102`) with no capture devices or external publish endpoints:
+
+```sh
+make -j4 MEDIA_PROFILE=lgpl LGPL_ROOT="$PWD/build/deps-lgpl-candidate" PANEL=0 CUI=0 check-stream
+```
+
+The decoded ingest contained 128 video frames and 198 audio frames, a 66 ms
+maximum video interval and 21 ms A/V end difference. Active audio RMS was
+0.1974 and privacy audio RMS was zero. Privacy and stop calls took 0.131 and
+0.162 ms respectively. Receiver termination/restart produced 50 decoded fresh
+video frames, including no frames from the retired sensitive epoch. Actual
+stopped-reader backpressure, finite retries, cancellation during backoff,
+trusted TLS, rejected certificates/hostnames, stalled TLS, permanent publish
+rejection and blocked DNS cancellation passed; network-fixture control calls
+were at most 0.223 ms. The synthetic audio fixture opens no input devices.
+
+The same binary also passed `tests/test_stream_sustained.py --binary BINARY`:
+64.833 seconds of decoded media, 1,946 stream frames, 1,650 simultaneous recording
+frames, 34 ms maximum frame interval, 1 ms A/V end difference, active RMS 0.2033
+and final privacy RMS zero. Five queued stream frames were retired. Streaming
+alone measured 13.30% of one CPU core and 39.87 MiB summed parent/worker peak
+RSS over 9.85 seconds; simultaneous software recording measured 113.19% and
+71.13 MiB over 54.86 seconds. This candidate run exceeds the older one-core
+comparison budget during simultaneous recording while meeting the media
+continuity checks; those historical system-media CPU figures are not a promise
+for the LGPL encoder profile. Receiver/decode cost remains excluded.
+
 ## v0.7 panel drill-in refinement
 
 The second UI round changes only the native panel. Private Xvfb workflows verify
