@@ -12,7 +12,8 @@ typedef struct {
 } CastProjectMediaView;
 typedef struct {
     bool open, busy, dirty, recording;
-    bool exporting;
+    bool exporting, reviewing, preview_busy;
+    char preview_error[1024];
     CastTimelineExportSnapshot export;
     uint64_t revision, duration_ns, playhead_ns;
     unsigned clip_count, media_count, missing_count;
@@ -22,6 +23,9 @@ typedef struct {
 } CastProjectSnapshot;
 CastProjectSession *project_session_open(void);
 void project_session_close(CastProjectSession *);
+/* Main-thread borrowed view; invalidated by tick/command/close. */
+struct CastFrame;
+const struct CastFrame *project_session_review_frame(CastProjectSession *);
 void project_session_tick(struct App *);
 void project_session_snapshot(CastProjectSession *, CastProjectSnapshot *);
 int project_session_command(struct App *, int, char **, char *, size_t);

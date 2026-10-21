@@ -1,6 +1,7 @@
 #include "project_session.h"
 #include "app_internal.h"
 #include "project.h"
+#include "timeline_preview.h"
 #include "timeline_render.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -37,6 +38,11 @@ typedef struct {
     int result;
 } ProjectJob;
 struct CastProjectSession {
+    CastTimelinePreview *preview, *retired_preview;
+    Frame review_frame;
+    bool reviewing, preview_busy;
+    uint64_t seek_generation, copied_generation;
+    char preview_error[1024];
     CastTimelineExport *export;
     CastTimelineExportSnapshot export_snapshot;
     pthread_t worker;
@@ -51,6 +57,22 @@ struct CastProjectSession {
     uint64_t revision, playhead_ns, capture_clip, capture_start, next_autosave_ns;
     char path[PATH_MAX], cwd[PATH_MAX], status[256], error[256];
 };
+static void review_clear(CastProjectSession *s)
+{
+    s->reviewing = s->preview_busy = false;
+    s->preview_error[0] = 0;
+    frame_free(&s->review_frame);
+    if (s->preview) {
+        timeline_preview_cancel(s->preview);
+        s->retired_preview = s->preview;
+    }
+    s->preview = NULL;
+    s->copied_generation = 0;
+}
+const Frame *project_session_review_frame(CastProjectSession *s)
+{
+    return s && s->reviewing && s->review_frame.data ? &s->review_frame : NULL;
+}
 static int fail(char *error, size_t size, const char *format, ...)
 {
     va_list args;
@@ -309,6 +331,8 @@ void project_session_close(CastProjectSession *s)
     if (!s) {
         return;
     }
+    review_clear(s);
+    timeline_preview_close(s->retired_preview);
     timeline_export_close(s->export);
     pthread_mutex_lock(&s->mutex);
     s->stop = true;
@@ -363,6 +387,7 @@ static int queue(App *a, JobKind kind, const char *path, unsigned track, char *o
 }
 static void changed(CastProjectSession *s)
 {
+    review_clear(s);
     ++s->revision;
     s->dirty = true;
     s->open = true;
@@ -401,6 +426,7 @@ static void complete(App *a)
         } else if (app_apply_candidate(a, &job->config, job->error, sizeof job->error)) {
             snprintf(s->error, sizeof s->error, "%.255s", job->error);
         } else {
+            review_clear(s);
             s->timeline = job->timeline;
             strcpy(s->path, job->path);
             s->open = true;
@@ -548,6 +574,10 @@ void project_session_tick(App *a)
         return;
     }
     CastProjectSession *s = a->project;
+    if (s->retired_preview && timeline_preview_finished(s->retired_preview)) {
+        timeline_preview_close(s->retired_preview);
+        s->retired_preview = NULL;
+    }
     if (!s->observed_valid) {
         s->observed = a->config;
         s->observed_valid = true;
@@ -557,8 +587,27 @@ void project_session_tick(App *a)
             changed(s);
         }
     }
+    if (!idle(a)) {
+        review_clear(s);
+    }
     complete(a);
     recording(a);
+    if (s->reviewing && s->preview) {
+        CastTimelinePreviewSnapshot view;
+        timeline_preview_snapshot(s->preview, &view);
+        s->preview_busy = view.busy;
+        snprintf(s->preview_error, sizeof s->preview_error, "%s", view.error);
+        if (view.ready && view.completed_generation == s->seek_generation &&
+            view.completed_generation != s->copied_generation) {
+            uint64_t generation = 0;
+            if (!timeline_preview_copy(s->preview, &s->review_frame, &generation)) {
+                s->copied_generation = generation;
+            } else {
+                snprintf(s->preview_error, sizeof s->preview_error,
+                         "Cannot copy timeline review frame");
+            }
+        }
+    }
     uint64_t now = cast_now_ns();
     if (!s->busy && s->dirty && *s->path && now >= s->next_autosave_ns) {
         s->next_autosave_ns = now + UINT64_C(30000000000);
@@ -585,6 +634,9 @@ void project_session_snapshot(CastProjectSession *s, CastProjectSnapshot *out)
     }
     out->export = s->export_snapshot;
     out->exporting = s->export && s->export_snapshot.state < CAST_TIMELINE_EXPORT_COMPLETE;
+    out->reviewing = s->reviewing;
+    out->preview_busy = s->preview_busy;
+    snprintf(out->preview_error, sizeof out->preview_error, "%s", s->preview_error);
     out->open = s->open;
     out->busy = s->busy;
     out->dirty = s->dirty;
@@ -654,6 +706,7 @@ int project_session_command(App *a, int argc, char **argv, char *out, size_t siz
                 return fail(out, size,
                             "stop recording/finalization and streaming before opening a project");
             }
+            review_clear(s);
             return queue(a, JOB_OPEN, argv[2], 0, out, size);
         }
         if (!strcmp(argv[1], "new") && argc == 2) {
@@ -742,11 +795,54 @@ int project_session_command(App *a, int argc, char **argv, char *out, size_t siz
         }
         return queue(a, JOB_IMPORT, argv[2], (unsigned)track, out, size);
     }
+    if (!strcmp(argv[1], "live") && argc == 2) {
+        review_clear(s);
+        snprintf(out, size, "OK live composition");
+        return 0;
+    }
     if (!strcmp(argv[1], "seek") && argc == 3) {
+        if (!idle(a) || s->capture_clip) {
+            return fail(out, size, "timeline review requires idle outputs");
+        }
         uint64_t position;
         if (unsigned_number(argv[2], &position) || position > timeline_duration(&s->timeline)) {
             return fail(out, size, "seek exceeds timeline duration");
         }
+        if (!s->preview) {
+            if (s->retired_preview) {
+                if (!timeline_preview_finished(s->retired_preview)) {
+                    return fail(out, size, "previous preview cancelling; retry");
+                }
+                timeline_preview_close(s->retired_preview);
+                s->retired_preview = NULL;
+            }
+            Config preview = a->config;
+            double scale = fmin(1., fmin(1920. / preview.width, 1080. / preview.height));
+            preview.width = (int)(preview.width * scale);
+            preview.height = (int)(preview.height * scale);
+            if (preview.width < 64) {
+                preview.width = 64;
+            }
+            if (preview.height < 64) {
+                preview.height = 64;
+            }
+            if (preview.width % 2) {
+                --preview.width;
+            }
+            if (preview.height % 2) {
+                --preview.height;
+            }
+            s->preview = timeline_preview_open(&s->timeline, &preview, out, size);
+            if (!s->preview) {
+                return -1;
+            }
+        }
+        if (timeline_preview_request(s->preview, position, ++s->seek_generation)) {
+            return fail(out, size, "cannot queue timeline review");
+        }
+        s->reviewing = true;
+        s->preview_busy = true;
+        s->preview_error[0] = 0;
         s->playhead_ns = position;
         snprintf(out, size, "OK playhead=%" PRIu64, position);
         return 0;

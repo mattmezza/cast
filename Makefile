@@ -80,7 +80,7 @@ override LDFLAGS += -Wl,-rpath,$(LGPL_ROOT)/prefix/lib
 endif
 endif
 CPPFLAGS += -DCAST_APPLICATION_NAME='"$(BINARY)"' -DCAST_MEDIA_PROFILE='"$(MEDIA_PROFILE)"' -DCAST_PLATFORM='"linux-$(shell uname -m)"' -DCAST_CORE_REVISION='"$(CORE_REVISION)"' -DCAST_PRIVATE_REVISION='"$(PRIVATE_REVISION)"' -DCAST_RELEASE_TIMESTAMP=$(RELEASE_TIMESTAMP) -DCAST_OFFICIAL_RELEASE=$(OFFICIAL_RELEASE)
-SOURCES = src/os_compat.c src/main.c src/commands.c src/config.c src/config_migrate.c src/state.c src/compositor.c src/composition_assets.c src/presentation_text.c src/platform.c src/media.c src/webcam.c src/audio.c src/record.c src/stream.c src/panel_transport.c src/panel_lifecycle.c src/help_commands.c src/update.c src/desktop_update.c src/desktop_update_ui.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/edition_service.c src/media_codec.c src/app_runtime.c vendor/inih/ini.c src/timeline.c src/project.c src/project_session.c src/timeline_render.c
+SOURCES = src/os_compat.c src/main.c src/commands.c src/config.c src/config_migrate.c src/state.c src/compositor.c src/composition_assets.c src/presentation_text.c src/platform.c src/media.c src/webcam.c src/audio.c src/record.c src/stream.c src/panel_transport.c src/panel_lifecycle.c src/help_commands.c src/update.c src/desktop_update.c src/desktop_update_ui.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/edition_service.c src/media_codec.c src/app_runtime.c vendor/inih/ini.c src/timeline.c src/project.c src/project_session.c src/timeline_render.c src/timeline_preview.c
 INI_FLAGS = -DINI_HANDLER_LINENO=1 -DINI_CALL_HANDLER_ON_NEW_SECTION=1 -DINI_ALLOW_MULTILINE=0 -DINI_ALLOW_INLINE_COMMENTS=0 -DINI_STOP_ON_FIRST_ERROR=1 -DINI_MAX_LINE=8192
 CPPFLAGS += $(if $(filter 1,$(STATIC_PANEL_X11)),-DCAST_PANEL_STATIC_X11=1)
 CPPFLAGS += -Isrc -Ivendor/inih $(INI_FLAGS) -D_GNU_SOURCE
@@ -534,7 +534,7 @@ check-desktop-update-guard: $(BUILD)/test_commands
 
 # Isolated document/renderer tests never open capture or audio devices.
 PROJECT_TEST_SOURCES = src/project.c src/timeline.c src/config.c src/edition_extensions.c src/workflow_schema.c src/edition.c src/license_store.c src/presentation_text.c src/os_compat.c vendor/inih/ini.c
-PROJECT_RENDER_TEST_SOURCES = src/timeline_render.c src/media_codec.c src/compositor.c src/state.c
+PROJECT_RENDER_TEST_SOURCES = src/timeline_preview.c src/timeline_render.c src/media_codec.c src/compositor.c src/state.c
 PROJECT_TEST_FLAGS = -D_GNU_SOURCE -DCAST_TEST -Isrc -Ivendor/inih -DINI_HANDLER_LINENO=1 -DINI_CALL_HANDLER_ON_NEW_SECTION=1 -DINI_ALLOW_MULTILINE=0 -DINI_ALLOW_INLINE_COMMENTS=0 -DINI_STOP_ON_FIRST_ERROR=1 -DINI_MAX_LINE=8192
 $(BUILD)/test_timeline: tests/test_timeline.c src/timeline.c src/timeline.h
 	@mkdir -p $(BUILD)
@@ -571,5 +571,13 @@ check-audio-levels: $(BUILD)/test_audio_levels
 check-encoder-policy: $(BUILD)/test_encoder_policy
 	$(BUILD)/test_encoder_policy
 check-unit: check-audio-levels check-encoder-policy
+
+
+$(BUILD)/test_timeline_preview: tests/test_timeline_preview.c $(PROJECT_TEST_SOURCES) $(PROJECT_RENDER_TEST_SOURCES)
+	@mkdir -p $(BUILD)
+	$(CC) $(PROJECT_TEST_FLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -ffunction-sections -fdata-sections -o $@ $^ -Wl,--gc-sections $(PKG_LIBS) -lpthread -lm
+.PHONY: check-timeline-preview
+check-timeline-preview: $(BUILD)/test_timeline_preview
+	$(BUILD)/test_timeline_preview
 
 endif # Darwin uses Makefile.macos

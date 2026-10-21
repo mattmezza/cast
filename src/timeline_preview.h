@@ -19,5 +19,7 @@ void timeline_preview_snapshot(CastTimelinePreview *, CastTimelinePreviewSnapsho
  * takes place on the caller: use a UI/transport worker, never a capture callback. */
 int timeline_preview_copy(CastTimelinePreview *, Frame *, uint64_t *generation);
 /* Cancels pending/active decode and joins the worker. */
+void timeline_preview_cancel(CastTimelinePreview *);
+bool timeline_preview_finished(CastTimelinePreview *);
 void timeline_preview_close(CastTimelinePreview *);
 #endif

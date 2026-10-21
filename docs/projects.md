@@ -89,8 +89,9 @@ clip stays locked through finalization, grows with the recorder's active duratio
 and receives the final recording path when finalized. The rest of the timeline
 can be edited while recording; the future part of track 0 remains reserved so
 edits cannot obstruct the growing take. Undo/redo is unavailable while recording
-and never restores a history snapshot containing capture locks. Timeline seek
-currently moves the document playhead only; it does not claim media playback.
+and never restores a history snapshot containing capture locks. Timeline seek enters asynchronous still-frame review while outputs are idle;
+`timeline live` returns to live composition. Review does not mix live capture or
+start audio playback.
 
 `tests/test_project_session.c` exercises the real worker/codec and FFmpeg probe
 with isolated application/recording handoff stubs. It covers dirty-save revisions,
@@ -135,3 +136,14 @@ causes publication to fail without changing that destination.
 Permanent isolated targets on Linux and macOS are `check-timeline`,
 `check-project`, `check-project-session`, and `check-timeline-render`. They exercise
 public document and renderer code independently of edition feature providers.
+
+Review workers keep immutable document/configuration snapshots and coalesce seek
+requests. The session caps review frames to a 1920×1080 contain fit, copies each
+completed generation once on the controller tick, and exposes a borrowed cached
+frame for composition-lane transport. Review clears before timeline edits,
+project replacement, configuration changes, recording or streaming can publish
+stale pixels. Invalidation cancels workers without joining on the controller;
+finished workers are reaped on later ticks. A replacement seek may need to retry
+while the previous worker finishes cancellation. `check-timeline-preview` tests
+real generated video, generation coalescing, color/position, capture-lock refusal,
+missing media and shutdown. Session tests cover review/live and privacy barriers.

@@ -8,7 +8,7 @@ struct CastTimelinePreview {
     pthread_t worker;
     pthread_mutex_t mutex, frame_mutex;
     pthread_cond_t wake;
-    atomic_bool stop;
+    atomic_bool stop, finished;
     atomic_uint_fast64_t serial;
     uint64_t active_serial, pending_position, pending_generation, published_generation;
     bool pending;
@@ -74,6 +74,7 @@ static void *worker(void *opaque)
     }
     frame_free(&frame);
     timeline_renderer_close(renderer);
+    atomic_store(&p->finished, true);
     return NULL;
 }
 CastTimelinePreview *timeline_preview_open(const CastTimeline *timeline, const Config *config,
@@ -106,6 +107,7 @@ CastTimelinePreview *timeline_preview_open(const CastTimeline *timeline, const C
     p->config = c;
     p->snapshot.revision = t.revision;
     atomic_init(&p->stop, false);
+    atomic_init(&p->finished, false);
     atomic_init(&p->serial, 0);
     pthread_mutex_init(&p->mutex, NULL);
     pthread_mutex_init(&p->frame_mutex, NULL);
@@ -176,6 +178,20 @@ int timeline_preview_copy(CastTimelinePreview *p, Frame *out, uint64_t *generati
     }
     pthread_mutex_unlock(&p->frame_mutex);
     return 0;
+}
+bool timeline_preview_finished(CastTimelinePreview *p)
+{
+    return !p || atomic_load(&p->finished);
+}
+void timeline_preview_cancel(CastTimelinePreview *p)
+{
+    if (!p) {
+        return;
+    }
+    atomic_store(&p->stop, true);
+    pthread_mutex_lock(&p->mutex);
+    pthread_cond_signal(&p->wake);
+    pthread_mutex_unlock(&p->mutex);
 }
 void timeline_preview_close(CastTimelinePreview *p)
 {

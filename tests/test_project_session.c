@@ -37,6 +37,18 @@ static int command(App *app, int count, const char *const *args)
     char output[CAST_ERR];
     return project_session_command(app, count, (char **)args, output, sizeof output);
 }
+static void seek_review(App *app)
+{
+    const char *args[] = {"timeline", "seek", "100000000"};
+    for (unsigned i = 0; i < 5000; ++i) {
+        if (!command(app, 3, args)) {
+            return;
+        }
+        project_session_tick(app);
+        usleep(1000);
+    }
+    assert(!"preview cancellation did not finish");
+}
 static CastProjectSnapshot snapshot(App *a)
 {
     CastProjectSnapshot s;
@@ -143,6 +155,34 @@ int main(void)
     }
     assert(snapshot(a).export.state == CAST_TIMELINE_EXPORT_CANCELLED);
     assert(access(movie, F_OK));
+    project_session_tick(a);
+    const char *seek[] = {"timeline", "seek", "100000000"};
+    const char *live[] = {"timeline", "live"};
+    seek_review(a);
+    assert(snapshot(a).reviewing);
+    for (unsigned i = 0; i < 5000; ++i) {
+        project_session_tick(a);
+        if (!snapshot(a).preview_busy) {
+            break;
+        }
+        usleep(1000);
+    }
+    assert(project_session_review_frame(a->project));
+    const Frame *acknowledged = project_session_review_frame(a->project);
+    seek_review(a);
+    assert(project_session_review_frame(a->project) == acknowledged);
+    assert(!command(a, 2, live));
+    assert(!snapshot(a).reviewing && !project_session_review_frame(a->project));
+    seek_review(a);
+    a->state.stream_active = true;
+    project_session_tick(a);
+    assert(!snapshot(a).reviewing && !project_session_review_frame(a->project));
+    assert(command(a, 3, seek));
+    a->state.stream_active = false;
+    seek_review(a);
+    a->config.mic_gain += .1;
+    project_session_tick(a);
+    assert(!snapshot(a).reviewing && !project_session_review_frame(a->project));
     char clip[32];
     snprintf(clip, sizeof clip, "%llu", (unsigned long long)s.clips[0].id);
     const char *gain[] = {"timeline", "gain", clip, "0.5,1"};
