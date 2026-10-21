@@ -948,6 +948,27 @@ static int handler(void *u, const char *section, const char *key, const char *va
     strcpy(p->seen[p->seen_count++], full);
     int rc = -1;
     if (preset) {
+        char disabled_key[128];
+        snprintf(disabled_key, sizeof disabled_key, "%s.disabled", section);
+        bool disabled = !strcmp(key, "disabled");
+        for (int i = 0; i < p->seen_count - 1; ++i) {
+            if ((!strcmp(p->seen[i], disabled_key)) ||
+                (disabled && !strncmp(p->seen[i], section, strlen(section)) &&
+                 p->seen[i][strlen(section)] == '.')) {
+                fail(p->err, p->n, "%s:%d: disabled preset must contain only disabled=true", p->path, line);
+                return 0;
+            }
+        }
+        if (disabled) {
+            if (strcmp(value, "true")) {
+                fail(p->err, p->n, "%s:%d: disabled preset requires disabled=true", p->path, line);
+                return 0;
+            }
+            int index = (int)(preset - p->c->presets);
+            memmove(preset, preset + 1, (size_t)(p->c->preset_count - index - 1) * sizeof *preset);
+            memset(&p->c->presets[--p->c->preset_count], 0, sizeof *preset);
+            return 1;
+        }
         rc = preset_assign(preset, key, value, e, sizeof e);
     } else {
         for (size_t i = 0; i < NSET; i++) {

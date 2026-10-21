@@ -67,3 +67,19 @@ it does not claim camera freshness, encoded output FPS or display presentation
 rate. Tick cost includes capture, composition and publication on that thread;
 independent encoder/decoder workers are outside that cost. Recorder drops describe
 the recorder's current/most recent take, while loop misses span the daemon run.
+
+Framing presets can be saved, renamed and deleted from the Presets section or
+settings. Saving an existing name asks before replacing it; deletion also asks
+for confirmation. Names use 1–42 ASCII letters, digits, underscores or hyphens.
+These presets contain framing fields, rather than a full project or device
+configuration. `preset save NAME`, `preset rename OLD NEW` and
+`preset delete NAME` persist the library to the daemon's configuration file;
+unrelated configuration is preserved. A failed save leaves the active library
+unchanged. Use project Save for the full composition and timeline.
+
+Timeline waveform requests follow the visible document window after navigation
+settles. Each envelope represents at most 30 seconds of source samples; the UI
+draws only that represented interval. A wide view can therefore show partial
+waveforms on long clips. Panning into another part loads that source region,
+with bounded memory and no waveform decoding on the UI thread. Assets remain
+deferred while capture or streaming needs the workers.

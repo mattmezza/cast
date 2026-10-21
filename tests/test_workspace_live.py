@@ -77,6 +77,7 @@ def main():
                 command('project', 'save', str(document))
                 wait(project_done, 'source project save')
                 media_id = re.search(r'^M (\d+) ', document.read_text(), re.MULTILINE).group(1)
+                assert command('media', 'list').split()[0] == media_id
                 assert state() == 0
                 command('record', 'start', str(take))
                 time.sleep(.2)

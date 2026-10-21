@@ -15,6 +15,7 @@ typedef struct {
     uint64_t selected, revision, generation, cancelled_drag;
     cui_scroll_state scroll, pan;
     float zoom;
+    struct {uint64_t start,span;float idle;bool initialized,dirty;} window;
     struct {uint64_t id, revision, generation; float x,y; unsigned mode; bool moved;} drag;
 } TimelineView;
 typedef struct { float fraction; cui_color color; } Playhead;
@@ -55,7 +56,8 @@ static const CastProjectAssetView *clip_asset(const CastProjectSnapshot *p,const
     for(unsigned i=0;i<p->asset_count&&i<CAST_PROJECT_ASSET_MAX;++i) {
         const CastProjectAssetView *a=&p->assets[i];
         if(a->clip_id==clip->id&&a->media_id==clip->media_id&&a->revision==p->revision&&
-            a->source_start_ns==clip->source_in_ns&&a->generation&&!a->missing)return a;
+            a->source_start_ns>=clip->source_in_ns&&a->source_start_ns-clip->source_in_ns<clip->duration_ns&&
+            a->span_ns<=clip->duration_ns-(a->source_start_ns-clip->source_in_ns)&&a->generation&&!a->missing)return a;
     }
     return NULL;
 }
@@ -351,6 +353,7 @@ void app_timeline_dock(cui_context *ui, const cui_theme *t, const CastProjectSna
     const bool editing_locked=blocked||p->recording||o.recording||o.countdown||o.finalizing||p->playing||p->exporting;
     if(editing_locked||v->generation!=o.generation||!selected(p,v->drag.id)||v->drag.revision!=p->revision)
         {if(v->drag.id)v->cancelled_drag=v->drag.id;v->drag.id=0;}
+    if(v->generation!=o.generation)memset(&v->window,0,sizeof v->window);
     v->generation=o.generation;
     CastDesignTokens tokens = cast_design_tokens(t->dark);
     cui_begin_box(ui, cui_id_from(ui, "timeline-dock"), (cui_box){.width = -1,
@@ -400,6 +403,22 @@ void app_timeline_dock(cui_context *ui, const cui_theme *t, const CastProjectSna
     v->pan.x=fmaxf(0,fminf(v->pan.x,content_width-track_width));
     const double visible=(double)extent/v->zoom;
     const double origin=(double)v->pan.x/content_width*extent;
+    uint64_t window_start=(uint64_t)origin,window_span=(uint64_t)visible;
+    if(!v->window.initialized) {
+        v->window.start=window_start;v->window.span=window_span;v->window.initialized=true;
+    } else if(v->window.start!=window_start||v->window.span!=window_span) {
+        v->window.start=window_start;v->window.span=window_span;v->window.idle=0;v->window.dirty=true;
+    }
+    if(o.assets_window_requests&&v->window.dirty) {
+        v->window.idle+=cui_frame_delta(ui);
+        if(v->window.idle>=.2f&&!editing_locked) {
+            char start[32],span[32];snprintf(start,sizeof start,"%llu",(unsigned long long)window_start);
+            snprintf(span,sizeof span,"%llu",(unsigned long long)window_span);
+            const char *args[]={"timeline","assets","window",start,span};
+            if(submit&&submit(user,5,args))v->window.dirty=false;
+        }
+        if(!editing_locked)cui_invalidate(ui);
+    }
     uint64_t completed_drag=0;
     float pointer_x=0,pointer_y=0;
     bool pointer_valid=cui_pointer_position(ui,&pointer_x,&pointer_y);
@@ -521,8 +540,9 @@ void app_timeline_dock(cui_context *ui, const cui_theme *t, const CastProjectSna
                     char name[56];snprintf(name,sizeof name,"timeline-waveform-%llu",(unsigned long long)c->id);
                     WavePaint wave={.bins=asset->bins,.color=t->secondary};wave.color.a=140;
                     memcpy(wave.peak,asset->peak,sizeof wave.peak);
-                    float span=fminf(1,(float)((double)asset->span_ns/c->duration_ns));
-                    cui_begin_absolute_box(ui,cui_id_from(ui,name),(cui_box){.clip=true},(cui_rect){6,4,fmaxf(1,(width-12)*span),clip_height-8});
+                    float span=(float)((double)asset->span_ns/c->duration_ns);
+                    float offset=(float)((double)(asset->source_start_ns-c->source_in_ns)/c->duration_ns);
+                    cui_begin_absolute_box(ui,cui_id_from(ui,name),(cui_box){.clip=true},(cui_rect){width*offset,4,fmaxf(1,width*span),clip_height-8});
                     cui_set_prepaint(ui,(cui_prepaint_options){.callback=paint_wave,.payload=&wave,.payload_bytes=sizeof wave,.command_budget=192,.deferred_layer=1});
                     cui_end_box(ui);
                 }

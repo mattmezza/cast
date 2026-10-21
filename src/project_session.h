@@ -51,5 +51,8 @@ struct CastFrame;
 const struct CastFrame *project_session_review_frame(CastProjectSession *);
 void project_session_tick(struct App *);
 void project_session_snapshot(CastProjectSession *, CastProjectSnapshot *);
+/* Read-only assets window START_NS SPAN_NS selects a document-clock viewport.
+ * Asset source_start/span describe actual bounded source-clock coverage (max30s
+ * per clip), including panned offsets; no revision/history/dirty state changes. */
 int project_session_command(struct App *, int, char **, char *, size_t);
 #endif

@@ -134,7 +134,7 @@ complete -c cast -n '__cast_at timeline import; or __cast_at timeline source; or
 complete -c cast -n '__cast_at audio' -a 'list mic desktop virtual'
 complete -c cast -n '__cast_at audio mic; or __cast_at audio desktop' -a 'on off toggle source gain'
 complete -c cast -n '__cast_at audio virtual' -a 'on off toggle'
-complete -c cast -n '__cast_at preset' -a 'next prev'
+complete -c cast -n '__cast_at preset' -a 'next prev save delete rename'
 complete -c cast -n '__cast_at preview' -a 'on off toggle target'
 complete -c cast -n '__cast_at preview target' -a 'virtual record stream'
 complete -c cast -n '__cast_at status' -l json -d 'Print JSON status'
@@ -245,7 +245,7 @@ complete -c cast-pro -n '__cast_at timeline import; or __cast_at timeline source
 complete -c cast-pro -n '__cast_at audio' -a 'list mic desktop virtual'
 complete -c cast-pro -n '__cast_at audio mic; or __cast_at audio desktop' -a 'on off toggle source gain'
 complete -c cast-pro -n '__cast_at audio virtual' -a 'on off toggle'
-complete -c cast-pro -n '__cast_at preset' -a 'next prev'
+complete -c cast-pro -n '__cast_at preset' -a 'next prev save delete rename'
 complete -c cast-pro -n '__cast_at preview' -a 'on off toggle target'
 complete -c cast-pro -n '__cast_at preview target' -a 'virtual record stream'
 complete -c cast-pro -n '__cast_at status' -l json -d 'Print JSON status'
@@ -353,8 +353,8 @@ end
 complete -c cast -n "__cast_at timeline play" -a silent
 complete -c cast-pro -n "__cast_at timeline play" -a silent
 
-complete -c cast -n "__cast_at timeline assets" -a focus
-complete -c cast-pro -n "__cast_at timeline assets" -a focus
+complete -c cast -n "__cast_at timeline assets" -a 'focus window'
+complete -c cast-pro -n "__cast_at timeline assets" -a 'focus window'
 
-complete -c cast -n '__cast_at media' -a 'play pause resume stop status'
-complete -c cast-pro -n '__cast_at media' -a 'play pause resume stop status'
+complete -c cast -n '__cast_at media' -a 'list play pause resume stop status'
+complete -c cast-pro -n '__cast_at media' -a 'list play pause resume stop status'

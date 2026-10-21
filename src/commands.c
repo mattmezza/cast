@@ -1,6 +1,7 @@
 #include "app_internal.h"
 #include "compositor.h"
 #include "edition.h"
+#include "config_presets.h"
 #include <errno.h>
 #include <math.h>
 #include <stdarg.h>
@@ -1732,6 +1733,21 @@ int app_command(App *a, int ac, char **av, char *out, size_t n)
         app_runtime_sync(a);
         return 0;
     } else if (IS(0, "preset")) {
+        if (ac > 2 && (IS(1, "save") || IS(1, "delete") || IS(1, "rename"))) {
+            bool rename = IS(1, "rename");
+            if (ac != (rename ? 4 : 3)) return app_error(out, n, "preset save NAME|delete NAME|rename OLD NEW");
+            if (config_presets_edit(a->startup.config_path, &a->config, av[1], av[2], rename ? av[3] : NULL,
+                                    &c, out, n)) return -1;
+            a->config = c;
+            if (IS(1, "save")) snprintf(a->current_preset, sizeof a->current_preset, "%s", av[2]);
+            else if (!strcmp(a->current_preset, av[2])) {
+                if (rename) snprintf(a->current_preset, sizeof a->current_preset, "%s", av[3]);
+                else a->current_preset[0] = 0;
+            }
+            app_runtime_sync(a);
+            snprintf(out, n, "ok preset %s persisted", av[1]);
+            return 0;
+        }
         if (command_preset(a, &c, ac, av, applied_preset, out, n)) {
             return -1;
         }

@@ -660,3 +660,24 @@ recording frames prove the configured mask reaches media output without UI chrom
 or recursion; countdown first-frame checks contain no guide pixels. These fixtures
 run only on private Xvfb displays. The unreleased transparent exclusion setting is
 removed and rejected rather than claiming to reconstruct covered desktop content.
+
+### Live source lane and flattened capture
+
+`make check-live-media` exercises the file-decoder worker with actual PCM and
+FFV1 fixtures, a controlled clock, source ranges, prebuffer/startup cancellation,
+additive timestamped mixing, pause/resume, completion tails and stale generations.
+It opens no capture or playback device. A null service reports a fully initialized
+Idle status.
+
+`make check-workspace-live` runs the production daemon with synthetic video and
+all native audio routes disabled. It imports a bin-only source, records actual
+source video/audio, verifies pause/resume and privacy stop with no automatic
+replay, then exports the single captured clip. Decoded pixels and PCM must show
+the live source and silent intervals; export must not double the source-bin mix.
+The test uses temporary local files and removes its daemon and media afterwards.
+
+The extra-audio recorder and RTMP fixtures also run with `test_media --extra-audio`
+and `test_stream --extra-audio`. They use synthetic audio and loopback transport,
+including privacy acceptance-prefix rejection; sanitized focused runs passed
+ASan, UBSan and leak checking. Native macOS runtime behavior is not established
+by these Linux tests.

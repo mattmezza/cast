@@ -81,6 +81,16 @@ def main():
                 command("monitor", "on", success=False)
                 assert "state=0 capture_ready=0" in command("monitor", "status")
                 assert not status()["audio"]["mic"]["enabled"]
+                # Framing-library edits persist without activating any output.
+                original_config = config.read_text()
+                command("preset", "save", "workspace_test")
+                command("preset", "rename", "workspace_test", "workspace_renamed")
+                command("preset", "workspace_renamed")
+                command("preset", "delete", "workspace_renamed")
+                command("preset", "workspace_renamed", success=False)
+                assert "[preset.workspace_renamed]" not in config.read_text()
+                assert all(line in config.read_text() for line in original_config.splitlines())
+                assert not status()["virtual"]["enabled"]
                 command("project", "new")
                 take, project, movie = folder / "take.mkv", folder / "test.cast", folder / "export.mkv"
                 command("record", "start", str(take))

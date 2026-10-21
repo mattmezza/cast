@@ -2,21 +2,23 @@
 #include "timeline_controls.h"
 #include "cast_theme.h"
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 typedef struct {
     cui_context *ui;cui_theme theme;CastProjectSnapshot project;CastLiveMediaStatus live;bool privacy;
-    unsigned page,calls;float width;bool blocked;char verb[32],action[32],value[4096],parameter[128];
+    unsigned page,calls;float width;bool blocked,window_requests;char verb[32],action[32],value[4096],parameter[128],extra[128];
 } Fixture;
 static cui_size measure(void *user,cui_str text,float size)
 {(void)user;return (cui_size){text.length*size*.6f,size*1.2f};}
 static bool submit(void *user,unsigned argc,const char *const *argv)
 {
-    Fixture *f=user;assert(!f->blocked && argc>=2 && argc<=4);++f->calls;
+    Fixture *f=user;assert(!f->blocked && argc>=2 && argc<=5);++f->calls;
     snprintf(f->verb,sizeof f->verb,"%s",argv[0]);
     snprintf(f->action,sizeof f->action,"%s",argv[1]);
     snprintf(f->value,sizeof f->value,"%s",argc>2?argv[2]:"");
-    snprintf(f->parameter,sizeof f->parameter,"%s",argc>3?argv[3]:"");return true;
+    snprintf(f->parameter,sizeof f->parameter,"%s",argc>3?argv[3]:"");
+    snprintf(f->extra,sizeof f->extra,"%s",argc>4?argv[4]:"");return true;
 }
 static void frame(Fixture *f)
 {
@@ -24,7 +26,7 @@ static void frame(Fixture *f)
     cui_begin_box(f->ui,cui_id_from(f->ui,"root"),(cui_box){.width=-1,.height=-1});
     if(f->page)app_project_controls(f->ui,&f->theme,&f->project,f->blocked,f->privacy,&f->live,submit,f);
     else app_timeline_dock(f->ui,&f->theme,&f->project,
-        (AppTimelineOptions){.connected=true,.blocked=f->blocked,.width=f->width,.height=262},submit,f);
+        (AppTimelineOptions){.connected=true,.assets_window_requests=f->window_requests,.blocked=f->blocked,.width=f->width,.height=262},submit,f);
     cui_end_box(f->ui);cui_draw_list draw=cui_end_frame(f->ui);
     if(cui_last_error(f->ui)!=CUI_OK){cui_diagnostic d;if(cui_first_diagnostic(f->ui,&d))fprintf(stderr,"%s %s\n",d.operation,d.message);}
     assert(cui_last_error(f->ui)==CUI_OK);assert(draw.count>0);
@@ -168,10 +170,15 @@ int main(void)
         .generation=1,.span_ns=UINT64_C(10000000000),.thumbnail_ready=true,.waveform_ready=true,.bins=256};
     for(unsigned i=0;i<sizeof asset->rgba;i+=4){asset->rgba[i]=255;asset->rgba[i+3]=255;}
     for(unsigned i=0;i<256;++i)asset->peak[i]=i/255.f;
+    asset->source_start_ns=UINT64_C(2000000000);asset->span_ns=UINT64_C(3000000000);
     unsigned asset_before=f.calls;settle(&f);
     assert(cui_bounds(f.ui,cui_id_from(f.ui,"timeline-thumbnail-2")).w>0);
     assert(cui_bounds(f.ui,cui_id_from(f.ui,"timeline-waveform-2")).w>0);
     assert(f.calls==asset_before);
+    cui_rect wave_bounds=cui_bounds(f.ui,cui_id_from(f.ui,"timeline-waveform-2"));
+    cui_rect body_bounds=cui_bounds(f.ui,cui_id_from(f.ui,"timeline-clip-2"));
+    assert(fabsf(wave_bounds.x-(body_bounds.x+body_bounds.w*.2f))<1);
+    assert(fabsf(wave_bounds.w-body_bounds.w*.3f)<1);
     ++asset->revision;settle(&f);
     assert(!cui_bounds(f.ui,cui_id_from(f.ui,"timeline-thumbnail-2")).w);
     asset->revision=f.project.revision;f.project.clips[0].capture_locked=true;settle(&f);
@@ -184,5 +191,12 @@ int main(void)
     unsigned focus_before=f.calls;click(&f,"timeline-clip-2");
     assert(f.calls==focus_before+1&&!strcmp(f.action,"assets")&&!strcmp(f.value,"focus")&&!strcmp(f.parameter,"2"));
     settle(&f);settle(&f);assert(f.calls==focus_before+1);
+    f.window_requests=true;unsigned window_before=f.calls;click(&f,"timeline-zoom-in");
+    assert(f.calls==window_before);
+    f.blocked=true;for(unsigned i=0;i<20;++i){frame(&f);}
+    assert(f.calls==window_before);f.blocked=false;frame(&f);
+    assert(f.calls==window_before+1&&!strcmp(f.action,"assets")&&!strcmp(f.value,"window")&&f.extra[0]);
+    for(unsigned i=0;i<20;++i){frame(&f);}
+    assert(f.calls==window_before+1);
     cui_destroy(f.ui);puts("Timeline UI: clip selection, split, import, acknowledgement, capture locks and project controls passed");
 }

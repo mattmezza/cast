@@ -89,7 +89,7 @@ static const char help[] =
     "  virtual message TEXT; virtual|record title|subtitle|footer TEXT\n"
     "  record start [PATH]; record stop|pause|resume|toggle|freeze|unfreeze|cut|cancel\n"
     "  record blur on|off|toggle; cut resume reuses the file with the configured countdown\n"
-    "  media play MEDIA_ID [IN_NS,DURATION_NS]; media pause|resume|stop|status\n"
+    "  media list; media play MEDIA_ID [IN_NS,DURATION_NS]; media pause|resume|stop|status\n"
     "  timeline source PATH (media bin only; never inserts an edit clip)\n"
     "  monitor on|off|status (microphone only; default audio output)\n"
     "  project new|open PATH|save [PATH]|recover PATH|status\n"
@@ -100,7 +100,8 @@ static const char help[] =
     "  timeline export PATH|status|cancel (new destination; never overwrites)\n"
     "  audio list; audio mic|desktop|virtual on|off|toggle\n"
     "  audio mic|desktop source NAME; audio mic|desktop gain PERCENT%\n"
-    "  preset NAME|next|prev; preview on|off|toggle; preview target "
+    "  preset NAME|next|prev; preset save NAME; preset delete NAME; preset rename OLD NEW\n"
+    "  preview on|off|toggle; preview target "
 #ifdef WITH_MACOS
     "composition|"
 #endif
@@ -525,8 +526,28 @@ static int live_number(const char *text, uint64_t *value)
 }
 static int live_command(App *a, int argc, char **argv, char *out, size_t size)
 {
-    if (argc < 2) return app_error(out,size,"media play MEDIA_ID [IN_NS,DURATION_NS]|pause|resume|stop|status");
+    if (argc < 2) return app_error(out,size,"media list|play MEDIA_ID [IN_NS,DURATION_NS]|pause|resume|stop|status");
     CastLiveMedia *live = media_live(a->media, false);
+    if (argc == 2 && !strcmp(argv[1], "list")) {
+        CastProjectSnapshot *project = calloc(1, sizeof *project);
+        if (!project) return app_error(out,size,"cannot allocate source list");
+        project_session_snapshot(a->project, project);
+        size_t used = 0;
+        for (unsigned i = 0; i < project->media_count; ++i) {
+            const CastProjectMediaView *m = &project->media[i];
+            char line[256];
+            int count = snprintf(line,sizeof line,"%llu %s %llu%s %s\n",
+                (unsigned long long)m->id,
+                m->kind==CAST_TIMELINE_AUDIO?"audio":m->kind==CAST_TIMELINE_IMAGE?"image":"video",
+                (unsigned long long)m->duration_ns,m->missing?" missing":"",m->label);
+            if (count < 0 || (size_t)count >= sizeof line || used + (size_t)count >= size) break;
+            memcpy(out + used,line,(size_t)count); used += (size_t)count;
+        }
+        if (!used) snprintf(out,size,"No imported sources");
+        else out[used] = 0;
+        free(project);
+        return 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "status")) {
         CastLiveMediaStatus status;
         live_media_status(live, cast_now_ns(), &status);
@@ -550,7 +571,7 @@ static int live_command(App *a, int argc, char **argv, char *out, size_t size)
         snprintf(out,size,"live media resume queued");return 0;
     }
     if (strcmp(argv[1],"play") || (argc != 3 && argc != 4))
-        return app_error(out,size,"media play MEDIA_ID [IN_NS,DURATION_NS]|pause|resume|stop|status");
+        return app_error(out,size,"media list|play MEDIA_ID [IN_NS,DURATION_NS]|pause|resume|stop|status");
     uint64_t id, source_in=0, duration=0;
     if (live_number(argv[2],&id)) return app_error(out,size,"invalid live media ID");
     if (argc == 4) {

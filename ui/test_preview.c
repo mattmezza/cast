@@ -921,10 +921,37 @@ static const cui_semantic *semantic_named(Preview *p,cui_role role,const char *n
 }
 static void framing_presets(void) {
     Preview p=create(1360,1000);p.app.live.enabled=true;p.app.live.connected=true;p.app.live.generation=2;
-    p.app.live.preset_count=1;strcpy(p.app.live.preset_names[0],"Interview");settle(&p);
+    p.app.live.preset_count=1;strcpy(p.app.live.preset_names[0],"Interview");
+    p.app.source_sections[0]=p.app.source_sections[1]=false;settle(&p);
     click(&p,"section-presets");click(&p,"framing-preset-0");
     assert(p.app.extension_requested && p.app.extension_argc==2 && !strcmp(p.app.extension_args[0],"preset") && !strcmp(p.app.extension_args[1],"Interview"));
     assert(!p.app.live.current_preset[0]);p.app.extension_requested=false;
+    strcpy(p.app.live.current_preset,"Interview");settle(&p);
+    click(&p,"preset-name");key(&p,CUI_KEY_A,CUI_MOD_CTRL);
+    event(&p,(cui_event){.type=CUI_EVENT_TEXT,.text="Closeup"});
+    click(&p,"preset-rename");
+    assert(p.app.extension_requested&&p.app.extension_argc==4&&!strcmp(p.app.extension_args[1],"rename")&&
+        !strcmp(p.app.extension_args[2],"Interview")&&!strcmp(p.app.extension_args[3],"Closeup"));
+    assert(!strcmp(p.app.live.current_preset,"Interview"));p.app.extension_requested=false;settle(&p);
+    click(&p,"preset-name");key(&p,CUI_KEY_A,CUI_MOD_CTRL);event(&p,(cui_event){.type=CUI_EVENT_TEXT,.text="Interview"});
+    click(&p,"preset-save");assert(!p.app.extension_requested);click(&p,"preset-confirm");
+    assert(p.app.extension_requested&&p.app.extension_argc==3&&!strcmp(p.app.extension_args[1],"save"));
+    p.app.extension_requested=false;settle(&p);click(&p,"preset-delete");assert(!p.app.extension_requested);
+    click(&p,"preset-confirm");assert(p.app.extension_requested&&!strcmp(p.app.extension_args[1],"delete"));
+    assert(p.app.live.preset_count==1);p.app.extension_requested=false;settle(&p);
+    click(&p,"preset-name");key(&p,CUI_KEY_A,CUI_MOD_CTRL);event(&p,(cui_event){.type=CUI_EVENT_TEXT,.text="bad name"});
+    click(&p,"preset-save");assert(!p.app.extension_requested);
+    click(&p,"preset-name");key(&p,CUI_KEY_A,CUI_MOD_CTRL);
+    event(&p,(cui_event){.type=CUI_EVENT_TEXT,.text="abcdefghijklmnopqrstuvwxyz0123456789ABCDEF"});
+    click(&p,"preset-save");assert(p.app.extension_requested&&strlen(p.app.extension_args[2])==42);
+    assert(!strcmp(p.app.extension_args[1],"save"));p.app.extension_requested=false;settle(&p);
+    click(&p,"preset-name");key(&p,CUI_KEY_END,0);event(&p,(cui_event){.type=CUI_EVENT_TEXT,.text="G"});
+    click(&p,"preset-save");assert(!p.app.extension_requested);
+    p.app.live.pending=true;settle(&p);click(&p,"preset-delete");assert(!p.app.extension_requested);
+    p.app.live.pending=false;settle(&p);
+    const char *preset_controls[]={"preset-save","preset-rename","preset-delete"};
+    cui_rect sources=cui_bounds(p.ui,id(&p,"source-content"));
+    for(unsigned i=0;i<3;++i){cui_rect r=cui_bounds(p.ui,id(&p,preset_controls[i]));assert(r.w>0&&r.x>=sources.x&&r.x+r.w<=sources.x+sources.w+1);}
     click(&p,"settings-open");click(&p,"settings-category-5");
     assert(!p.app.extension_requested && p.app.settings.overlay.open);
     cui_destroy(p.ui);

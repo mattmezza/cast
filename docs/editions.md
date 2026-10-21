@@ -10,13 +10,14 @@ MIT permits commercial use and forks. Dependency obligations still apply to bina
 SuperScreencast Pro is a distinct proprietary binary linked with a separately licensed private
 provider. An unlicensed Pro installation retains Community functionality. A signed
 license can enable only implemented, compiled, supported, dependency-ready modules.
-The private provider implements three workflows. Editable recording projects remain
-unimplemented. Local speech requires the optional inference helper and an explicitly
+The private provider implements three workflows. Community includes project
+save/open, a timeline for flattened takes and imported media, clip editing,
+review and export. Separate editable layer/source recording remains unimplemented. Local speech requires the optional inference helper and an explicitly
 installed model; timed notes and cinematic motion do not require inference.
 
 | Capability ID | Workflow | Current Community | Current Pro |
 |---|---|---|---|
-| `editable_projects` | Layer/source recording, editor, reframing/export | Absent | Not implemented |
+| `editable_projects` | Separate layer/source capture and later source reframing | Absent; flattened projects/editor/export are free | Not implemented |
 | `cinematic_zoom` | Advanced animation, automatic zoom, cursor smoothing | Absent; existing zoom remains free | Implemented; license required |
 | `transcription_subtitles` | Local transcription, styled captions, exports | Absent | Implemented; `STT=1`, model and license required |
 | `speech_teleprompter` | Notes window, timed/speech following | Absent | Implemented; native window needs `PANEL=1`, speech mode needs shared inference |

@@ -263,7 +263,8 @@ restarts the source.
 
 The corresponding daemon commands are `timeline source PATH`,
 `media play MEDIA_ID [IN_NS,DURATION_NS]`, `media pause`, `media resume`,
-`media stop` and `media status`. Source IDs are stable project media IDs.
+`media stop` and `media status`. Source IDs are stable project media IDs; `media list` lists their kind, duration
+in nanoseconds, missing-file status and display label.
 `timeline import PATH` still inserts a montage clip, and `timeline live` still
 returns from montage review to the live composition. Keeping bin-only sources
 out of the montage prevents adding their audio a second time when exporting a

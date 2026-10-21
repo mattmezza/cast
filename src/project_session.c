@@ -47,6 +47,8 @@ struct CastProjectSession {
     CastTimelineAssetResult asset_result;
     CastProjectAssetView asset_views[CAST_PROJECT_ASSET_MAX];
     uint64_t asset_ids[CAST_PROJECT_ASSET_MAX], asset_generation, asset_focus;
+    uint64_t asset_window_start, asset_window_span;
+    bool asset_window;
     unsigned asset_count;
     bool assets_prepared, assets_suspended;
     CastTimelinePreview *preview, *retired_preview;
@@ -112,6 +114,11 @@ static void assets_clear(CastProjectSession *s)
     memset(s->asset_views, 0, sizeof s->asset_views);
     memset(s->asset_ids, 0, sizeof s->asset_ids);
 }
+static bool asset_visible(const CastProjectSession *s, const CastTimelineClip *clip)
+{
+    return !s->asset_window || (clip->start_ns < s->asset_window_start + s->asset_window_span &&
+                               clip->start_ns + clip->duration_ns > s->asset_window_start);
+}
 static void assets_tick(CastProjectSession *s, bool outputs_idle)
 {
     if (!outputs_idle) {
@@ -135,14 +142,14 @@ static void assets_tick(CastProjectSession *s, bool outputs_idle)
         s->assets_prepared = true;
         s->asset_count = 0;
         const CastTimelineClip *focus = timeline_clip(&s->timeline, s->asset_focus);
-        if (focus && focus->capture_locked) focus = NULL;
+        if (focus && (focus->capture_locked || !asset_visible(s, focus))) focus = NULL;
         unsigned extra = focus != NULL;
         for (unsigned i = 0; i < s->timeline.clip_count + extra &&
                              s->asset_count < CAST_PROJECT_ASSET_MAX; ++i) {
             const CastTimelineClip *clip = focus && i == 0 ? focus : &s->timeline.clips[i - extra];
             if (focus && i != 0 && clip == focus) continue;
             const CastTimelineMedia *media = timeline_media(&s->timeline, clip->media_id);
-            if (clip->capture_locked || !media) {
+            if (clip->capture_locked || !media || !asset_visible(s, clip)) {
                 continue;
             }
             unsigned slot = s->asset_count++;
@@ -151,9 +158,15 @@ static void assets_tick(CastProjectSession *s, bool outputs_idle)
             v->media_id = media->id;
             v->revision = s->revision;
             v->generation = s->asset_generation;
-            v->source_start_ns = clip->source_in_ns;
-            v->span_ns = clip->duration_ns < CAST_ASSET_SPAN_MAX_NS ? clip->duration_ns
-                                                                    : CAST_ASSET_SPAN_MAX_NS;
+            uint64_t left = clip->start_ns, right = clip->start_ns + clip->duration_ns;
+            if (s->asset_window) {
+                if (left < s->asset_window_start) left = s->asset_window_start;
+                uint64_t end = s->asset_window_start + s->asset_window_span;
+                if (right > end) right = end;
+            }
+            v->source_start_ns = clip->source_in_ns + left - clip->start_ns;
+            v->span_ns = right - left;
+            if (v->span_ns > CAST_ASSET_SPAN_MAX_NS) v->span_ns = CAST_ASSET_SPAN_MAX_NS;
             v->missing = media->missing;
             if (media->missing) {
                 strcpy(v->thumbnail_error, "Source media is missing");
@@ -164,7 +177,7 @@ static void assets_tick(CastProjectSession *s, bool outputs_idle)
                                                 .generation = s->asset_generation,
                                                 .source_start_ns = v->source_start_ns,
                                                 .span_ns = v->span_ns,
-                                                .thumbnail = media->kind == CAST_TIMELINE_VIDEO,
+                                                .thumbnail = media->kind != CAST_TIMELINE_AUDIO,
                                                 .waveform = media->kind != CAST_TIMELINE_IMAGE};
             if (!request.thumbnail) {
                 strcpy(v->thumbnail_error, "Thumbnail unavailable for this media kind");
@@ -638,6 +651,8 @@ static void complete(App *a)
         } else {
             assets_clear(s);
             s->asset_focus = 0;
+            s->asset_window = false;
+            s->asset_window_start = s->asset_window_span = 0;
             review_clear(s);
             s->timeline = job->timeline;
             strcpy(s->path, job->path);
@@ -1028,6 +1043,8 @@ int project_session_command(App *a, int argc, char **argv, char *out, size_t siz
             }
             timeline_init(&s->timeline);
             s->asset_focus = 0;
+            s->asset_window = false;
+            s->asset_window_start = s->asset_window_span = 0;
             CastTimelineHistory *fresh = timeline_history_open(8);
             timeline_history_close(s->history);
             s->history = fresh;
@@ -1045,6 +1062,21 @@ int project_session_command(App *a, int argc, char **argv, char *out, size_t siz
         return fail(out, size, "unknown project command");
     }
     if (!strcmp(argv[1], "assets")) {
+        if (argc >= 3 && !strcmp(argv[2], "window")) {
+            uint64_t start, span;
+            if (argc != 5 || unsigned_number(argv[3], &start) ||
+                unsigned_number(argv[4], &span) || !span || span > CAST_TIMELINE_LIMIT_NS ||
+                start > CAST_TIMELINE_LIMIT_NS - span)
+                return fail(out, size, "timeline assets window START_NS SPAN_NS requires a positive window within seven days");
+            if (!s->asset_window || start != s->asset_window_start || span != s->asset_window_span) {
+                assets_clear(s);
+                s->asset_window = true;
+                s->asset_window_start = start;
+                s->asset_window_span = span;
+            }
+            snprintf(out, size, "OK asset window start_ns=%" PRIu64 " span_ns=%" PRIu64, start, span);
+            return 0;
+        }
         uint64_t id;
         if (argc != 4 || strcmp(argv[2], "focus") || unsigned_number(argv[3], &id))
             return fail(out, size, "timeline assets focus CLIP_ID");

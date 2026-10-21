@@ -1,7 +1,9 @@
 #include "app_internal.h"
 #include "project_session.h"
 #include "timeline_audio.h"
+#include "timeline_assets.h"
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -104,9 +106,30 @@ static void wav(const char *path)
     }
     assert(!fclose(f));
 }
+static void long_wave(const char *path)
+{
+    const unsigned frames=16000*60;
+    FILE *f=fopen(path,"wb");assert(f);fputs("RIFF",f);little(f,36+frames*2,4);
+    fputs("WAVEfmt ",f);little(f,16,4);little(f,1,2);little(f,1,2);
+    little(f,16000,4);little(f,32000,4);little(f,2,2);little(f,16,2);
+    fputs("data",f);little(f,frames*2,4);
+    for(unsigned i=0;i<frames;++i)little(f,i<16000*30?10000:20000,2);
+    assert(!fclose(f));
+}
+static void wait_assets(App *a)
+{
+    for(unsigned i=0;i<10000;++i){
+        project_session_tick(a);
+        if(snapshot(a).asset_count&&!snapshot(a).assets[0].pending)return;
+        usleep(1000);
+    }
+    assert(!"asset viewport timed out");
+}
 int main(void)
 {
-    char folder[] = "/tmp/cast-project-session-XXXXXX";
+    char folder[512];
+    const char *temporary=getenv("TMPDIR");
+    assert(snprintf(folder,sizeof folder,"%s/cast-project-session-XXXXXX",temporary?temporary:"/tmp")<(int)sizeof folder);
     assert(mkdtemp(folder));
     char project[PATH_MAX], audio[PATH_MAX], bad[PATH_MAX], capture[PATH_MAX];
     snprintf(project, sizeof project, "%s/test.cast", folder);
@@ -451,6 +474,8 @@ int main(void)
     assert(!command(a,4,image_import));wait_done(a);
     assert(snapshot(a).clip_count==1 && snapshot(a).media[0].kind==CAST_TIMELINE_IMAGE);
     assert(snapshot(a).clips[0].duration_ns==UINT64_C(5000000000));
+    wait_assets(a);assert(snapshot(a).assets[0].thumbnail_ready);
+    assert(!snapshot(a).assets[0].waveform_ready);
     /* Source-bin imports add no montage clip; the live document API is memory only. */
     assert(!command(a, 2, new_project));
     const char *source_import[] = {"timeline", "source", audio};
@@ -511,6 +536,65 @@ int main(void)
     assert(snapshot(a).media_count == 4 && snapshot(a).clip_count == 1);
     a->state.recording = false;
     project_session_tick(a);
+    /* Viewport requests are read-only and decode actual source windows after30s. */
+    char long_audio[PATH_MAX];
+    assert(snprintf(long_audio,sizeof long_audio,"%s/long.wav",folder)<(int)sizeof long_audio);
+    long_wave(long_audio);assert(!command(a,2,new_project));
+    const char *long_import[]={"timeline","import",long_audio,"1"};
+    assert(!command(a,4,long_import));wait_done(a);s=snapshot(a);
+    assert(s.clips[0].duration_ns==UINT64_C(60000000000));
+    uint64_t viewport_revision=s.revision;bool viewport_dirty=s.dirty;
+    const char *window[]={"timeline","assets","window","35000000000","5000000000"};
+    assert(!command(a,5,window));assert(!snapshot(a).asset_count);wait_assets(a);
+    s=snapshot(a);assert(s.assets[0].waveform_ready&&s.assets[0].source_start_ns==UINT64_C(35000000000));
+    assert(s.assets[0].span_ns==UINT64_C(5000000000)&&s.assets[0].peak[0]>0);
+    assert(s.revision==viewport_revision&&s.dirty==viewport_dirty);
+    uint64_t viewport_generation=s.assets[0].generation;
+    float late_peak=s.assets[0].peak[0];
+    assert(!command(a,5,window));assert(snapshot(a).assets[0].generation==viewport_generation);
+    const char *invalid_window[]={"timeline","assets","window","0","0"};
+    assert(command(a,5,invalid_window));invalid_window[3]="-1";invalid_window[4]="100";
+    assert(command(a,5,invalid_window));invalid_window[3]="604800000000000";
+    assert(command(a,5,invalid_window));invalid_window[3]="18446744073709551615";
+    assert(command(a,5,invalid_window));invalid_window[3]="abc";
+    assert(command(a,5,invalid_window));assert(command(a,4,window));
+    assert(snapshot(a).assets[0].generation==viewport_generation&&snapshot(a).revision==viewport_revision);
+    window[3]="0";window[4]="60000000000";assert(!command(a,5,window));wait_assets(a);
+    assert(snapshot(a).assets[0].span_ns==CAST_ASSET_SPAN_MAX_NS);
+    assert(snapshot(a).assets[0].peak[0]>0&&fabsf(snapshot(a).assets[0].peak[0]*2-late_peak)<.01f);
+    window[3]="45000000000";window[4]="5000000000";
+    a->state.stream_active=true;assert(!command(a,5,window));
+    for(unsigned i=0;i<5;++i)project_session_tick(a);
+    assert(!snapshot(a).asset_count);assert(snapshot(a).revision==viewport_revision);
+    a->state.stream_active=false;a->countdown=true;
+    project_session_tick(a);assert(!snapshot(a).asset_count);
+    a->countdown=false;a->record_finalizing=true;
+    project_session_tick(a);assert(!snapshot(a).asset_count);
+    a->record_finalizing=false;wait_assets(a);s=snapshot(a);
+    assert(s.assets[0].source_start_ns==UINT64_C(45000000000)&&s.assets[0].waveform_ready);
+    uint64_t prior_generation=s.assets[0].generation;
+    window[3]="1000000000";assert(!command(a,5,window));
+    window[3]="50000000000";assert(!command(a,5,window));wait_assets(a);s=snapshot(a);
+    assert(s.assets[0].generation>prior_generation&&s.assets[0].source_start_ns==UINT64_C(50000000000));
+    assert(fabsf(s.assets[0].peak[0]-late_peak)<.01f&&s.revision==viewport_revision&&s.dirty==viewport_dirty);
+    assert(!command(a,2,undo));assert(snapshot(a).clip_count==0); /* windows consume no history */
+    assert(!command(a,2,redo));assert(snapshot(a).clip_count==1);
+    s=snapshot(a);char window_clip_id[32];
+    snprintf(window_clip_id,sizeof window_clip_id,"%llu",(unsigned long long)s.clips[0].id);
+    const char *window_trim[]={"timeline","trim",window_clip_id,"10000000000,40000000000"};
+    const char *window_move[]={"timeline","move",window_clip_id,"1,20000000000"};
+    assert(!command(a,4,window_trim));assert(!command(a,4,window_move));
+    window[3]="50000000000";assert(!command(a,5,window));wait_assets(a);
+    assert(snapshot(a).assets[0].source_start_ns==UINT64_C(40000000000));
+    window[3]="58000000000";window[4]="10000000000";assert(!command(a,5,window));wait_assets(a);
+    assert(snapshot(a).assets[0].source_start_ns==UINT64_C(48000000000));
+    assert(snapshot(a).assets[0].span_ns==UINT64_C(2000000000));
+    const char *window_focus[]={"timeline","assets","focus",window_clip_id};
+    assert(!command(a,4,window_focus));
+    window[3]="61000000000";assert(!command(a,5,window));project_session_tick(a);assert(!snapshot(a).asset_count);
+    assert(!command(a,2,new_project));assert(!command(a,4,import));wait_done(a);wait_assets(a);
+    assert(snapshot(a).assets[0].source_start_ns==0&&snapshot(a).assets[0].span_ns==UINT64_C(1000000000));
+    assert(!unlink(long_audio));
     free(source_before); free(source_doc);
     project_session_close(a->project);
     free(a);

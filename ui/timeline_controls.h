@@ -6,7 +6,7 @@
 #include "../src/live_media_status.h"
 typedef bool (*AppTimelineSubmit)(void *, unsigned, const char *const *);
 typedef struct {
-    bool connected, blocked, recording, cut, countdown, finalizing;
+    bool connected, blocked, recording, cut, countdown, finalizing, assets_window_requests;
     float width, height;
     uint64_t generation;
 } AppTimelineOptions;

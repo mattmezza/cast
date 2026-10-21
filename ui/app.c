@@ -304,7 +304,7 @@ static void shortcuts(cui_context *ui, AppState *s, float width) {
     bool text_focused=s->text_input_owner && cui_focused(ui)==s->text_input_owner;
     /* Bare character shortcuts must yield to the focused text editor. Semantics
      * are rebuilt later in this frame, so use these stable editor identities. */
-    const char *editors[]={"background-from","background-via","background-to","background-fill"};
+    const char *editors[]={"background-from","background-via","background-to","background-fill","preset-name"};
     for(unsigned i=0;i<sizeof editors/sizeof editors[0];++i)
         if(cui_focused(ui)==cui_id_from(ui,editors[i]))return;
     size_t count = 0;
@@ -715,9 +715,26 @@ static void source_content(cui_context *ui, AppState *s, const cui_theme *t) {
     if (section(ui, s, t, 3, "Presets"))app_presets_controls(ui,s,t);
     cui_end_box(ui);
 }
+typedef struct {
+    cui_edit *edit;cui_input_state input;char name[64],current[64];
+    uint64_t generation;unsigned confirm;bool connected;
+} PresetDraft;
+static void preset_draft_close(void *user){cui_edit_destroy(((PresetDraft *)user)->edit);}
+static bool preset_name_valid(const char *name) {
+    if(!name[0]||strlen(name)>42)return false;
+    for(const unsigned char *p=(const unsigned char *)name;*p;++p)
+        if(!((*p>='a'&&*p<='z')||(*p>='A'&&*p<='Z')||(*p>='0'&&*p<='9')||*p=='_'||*p=='-'))return false;
+    const char *reserved[]={"save","delete","rename","next","prev"};
+    for(unsigned i=0;i<5;++i)if(!strcmp(name,reserved[i]))return false;
+    return true;
+}
 void app_presets_controls(cui_context *ui,AppState *a,const cui_theme *t) {
     bool blocked=!a->live.connected || composition_disabled(a) || a->extension_requested;
-    if(!a->live.connected) {text(ui,t,"Connect the daemon to load presets.");return;}
+    if(!a->live.connected) {
+        PresetDraft *old=cui_resource_find(ui,cui_id_from(ui,"preset-draft"),UINT64_C(0x7072657365746472));
+        if(old){old->connected=false;old->confirm=0;if(old->edit)cui_edit_set_content(old->edit,(cui_edit_content){.text=cui_string("")});}
+        text(ui,t,"Connect the daemon to load presets.");return;
+    }
     if(!a->live.preset_count)text(ui,t,"No framing presets configured.");
     for(unsigned i=0;i<a->live.preset_count && i<24;++i) {
         char id[48];snprintf(id,sizeof id,"framing-preset-%u",i);
@@ -726,7 +743,54 @@ void app_presets_controls(cui_context *ui,AppState *a,const cui_theme *t) {
             const char *args[]={"preset",a->live.preset_names[i]};app_request_command(a,2,args);
         }
     }
-    text(ui,t,"Framing presets keep layout and camera geometry. Save a project to retain the full composition.");
+    PresetDraft *draft=cui_resource_get(ui,cui_id_from(ui,"preset-draft"),UINT64_C(0x7072657365746472),sizeof *draft,NULL,preset_draft_close);
+    if(!draft)return;
+    if(!draft->edit)draft->edit=cui_edit_create((cui_edit_config){.buffer=draft->name,.capacity=sizeof draft->name});
+    if(!draft->edit)return;
+    if(draft->generation!=a->live.generation||draft->connected!=a->live.connected||strcmp(draft->current,a->live.current_preset)) {
+        draft->confirm=0;
+        cui_edit_set_content(draft->edit,(cui_edit_content){.text=cui_string(a->live.current_preset)});
+    }
+    draft->generation=a->live.generation;draft->connected=a->live.connected;
+    snprintf(draft->current,sizeof draft->current,"%s",a->live.current_preset);
+    bool existing=false,current=false;
+    for(unsigned i=0;i<a->live.preset_count&&i<24;++i) {
+        if(!strcmp(draft->name,a->live.preset_names[i]))existing=true;
+        if(!strcmp(a->live.current_preset,a->live.preset_names[i]))current=true;
+    }
+    char previous_name[64];snprintf(previous_name,sizeof previous_name,"%s",draft->name);
+    text(ui,t,"Preset name");
+    cui_input_ex(ui,cui_id_from(ui,"preset-name"),t,cui_string("Preset name"),draft->edit,&draft->input,
+        (cui_input_options){.width=-1,.height=30,.disabled=blocked,.invalid=draft->name[0]&&!preset_name_valid(draft->name)});
+    if(strcmp(previous_name,draft->name))draft->confirm=0;
+    existing=false;
+    for(unsigned i=0;i<a->live.preset_count&&i<24;++i)if(!strcmp(draft->name,a->live.preset_names[i]))existing=true;
+    bool valid=preset_name_valid(draft->name);
+    cui_begin_box(ui,0,(cui_box){.width=-1,.row=true,.gap=4});
+    if(button(ui,t,"preset-save","Save",NULL,56,28,false,blocked||!valid)) {
+        if(existing)draft->confirm=1;
+        else {const char *args[]={"preset","save",draft->name};app_request_command(a,3,args);}
+    }
+    if(button(ui,t,"preset-rename","Rename",NULL,72,28,false,blocked||!valid||!current||existing)) {
+        const char *args[]={"preset","rename",a->live.current_preset,draft->name};app_request_command(a,4,args);
+    }
+    if(button(ui,t,"preset-delete","Delete",NULL,64,28,false,blocked||!current))draft->confirm=2;
+    cui_end_box(ui);
+    if(draft->confirm) {
+        const char *target=draft->confirm==1?draft->name:a->live.current_preset;
+        char label[96];snprintf(label,sizeof label,"%s %s?",draft->confirm==1?"Replace":"Delete",target);
+        cui_text_ellipsis(ui,cui_id_from(ui,"preset-confirm-label"),cui_string(label),
+            (cui_text_ellipsis_options){.width=200,.font_size=11,.color=t->text});
+        cui_begin_box(ui,0,(cui_box){.width=-1,.row=true,.gap=4});
+        if(button(ui,t,"preset-confirm",draft->confirm==1?"Replace":"Delete",NULL,76,28,false,blocked||(draft->confirm==1?!valid:!current))) {
+            const char *args[]={"preset",draft->confirm==1?"save":"delete",target};
+            if(app_request_command(a,3,args))draft->confirm=0;
+        }
+        if(button(ui,t,"preset-cancel","Cancel",NULL,68,28,false,blocked))draft->confirm=0;
+        cui_end_box(ui);
+    }
+    text(ui,t,"Letters, numbers, _ and -\nUp to 42 characters.");
+    text(ui,t,"Presets keep layout and framing.\nProjects keep full compositions.");
 }
 static void card_begin(cui_context *ui, const cui_theme *t, const char *id, const char *heading) {
     cui_begin_box(ui, cui_id_from(ui, id), (cui_box){.width = -1, .padding = 10, .gap = 9,
@@ -1198,7 +1262,7 @@ static void center(cui_context *ui, AppState *s, const cui_theme *t,
     }
     cui_end_box(ui);
     if (dock_height > 0)
-        app_timeline_dock(ui,t,&s->live.project,(AppTimelineOptions){.connected=s->live.connected,.generation=s->live.generation,
+        app_timeline_dock(ui,t,&s->live.project,(AppTimelineOptions){.connected=s->live.connected,.assets_window_requests=true,.generation=s->live.generation,
             .blocked=composition_disabled(s)||s->extension_requested||s->settings.overlay.open||
                 s->panel_sheet.overlay.open||s->source_picker.popup.overlay.open||s->zoom_popup.open||
                 s->discard_requested||s->discard_dialog.overlay.open,.recording=s->live.recording,

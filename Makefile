@@ -80,7 +80,7 @@ override LDFLAGS += -Wl,-rpath,$(LGPL_ROOT)/prefix/lib
 endif
 endif
 CPPFLAGS += -DCAST_APPLICATION_NAME='"$(BINARY)"' -DCAST_MEDIA_PROFILE='"$(MEDIA_PROFILE)"' -DCAST_PLATFORM='"linux-$(shell uname -m)"' -DCAST_CORE_REVISION='"$(CORE_REVISION)"' -DCAST_PRIVATE_REVISION='"$(PRIVATE_REVISION)"' -DCAST_RELEASE_TIMESTAMP=$(RELEASE_TIMESTAMP) -DCAST_OFFICIAL_RELEASE=$(OFFICIAL_RELEASE)
-SOURCES = src/os_compat.c src/main.c src/commands.c src/config.c src/config_migrate.c src/state.c src/compositor.c src/composition_assets.c src/presentation_text.c src/platform.c src/media.c src/webcam.c src/audio.c src/record.c src/stream.c src/panel_transport.c src/panel_lifecycle.c src/help_commands.c src/update.c src/desktop_update.c src/desktop_update_ui.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/edition_service.c src/media_codec.c src/app_runtime.c vendor/inih/ini.c src/timeline.c src/project.c src/project_session.c src/timeline_assets.c src/timeline_render.c src/local_image_input.c src/timeline_preview.c src/timeline_audio.c src/timeline_audio_native.c src/live_media.c src/runtime_metrics.c src/encoder_capabilities.c src/audio_monitor.c src/audio_monitor_session.c src/audio_monitor_session_media.c src/audio_monitor_controller.c src/audio_monitor_controller_media.c src/audio_monitor_pipewire.c
+SOURCES = src/os_compat.c src/main.c src/commands.c src/config.c src/config_presets.c src/config_migrate.c src/state.c src/compositor.c src/composition_assets.c src/presentation_text.c src/platform.c src/media.c src/webcam.c src/audio.c src/record.c src/stream.c src/panel_transport.c src/panel_lifecycle.c src/help_commands.c src/update.c src/desktop_update.c src/desktop_update_ui.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/edition_service.c src/media_codec.c src/app_runtime.c vendor/inih/ini.c src/timeline.c src/project.c src/project_session.c src/timeline_assets.c src/timeline_render.c src/local_image_input.c src/timeline_preview.c src/timeline_audio.c src/timeline_audio_native.c src/live_media.c src/runtime_metrics.c src/encoder_capabilities.c src/audio_monitor.c src/audio_monitor_session.c src/audio_monitor_session_media.c src/audio_monitor_controller.c src/audio_monitor_controller_media.c src/audio_monitor_pipewire.c
 INI_FLAGS = -DINI_HANDLER_LINENO=1 -DINI_CALL_HANDLER_ON_NEW_SECTION=1 -DINI_ALLOW_MULTILINE=0 -DINI_ALLOW_INLINE_COMMENTS=0 -DINI_STOP_ON_FIRST_ERROR=1 -DINI_MAX_LINE=8192
 CPPFLAGS += $(if $(filter 1,$(STATIC_PANEL_X11)),-DCAST_PANEL_STATIC_X11=1)
 CPPFLAGS += -Isrc -Ivendor/inih $(INI_FLAGS) -D_GNU_SOURCE
@@ -150,7 +150,7 @@ LDLIBS += $(PANEL_LIBS)
 
 
 endif
-CORE_SOURCES = src/os_compat.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c $(PRO_SOURCES) src/compositor.c src/composition_assets.c src/presentation_text.c src/config.c src/state.c vendor/inih/ini.c
+CORE_SOURCES = src/os_compat.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c $(PRO_SOURCES) src/compositor.c src/composition_assets.c src/presentation_text.c src/config.c src/config_presets.c src/state.c vendor/inih/ini.c
 MEDIA_SOURCES = src/os_compat.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c $(PRO_SOURCES) src/media.c src/webcam.c src/audio.c src/record.c src/stream.c src/compositor.c src/composition_assets.c src/presentation_text.c src/media_codec.c src/live_media.c src/timeline.c src/timeline_render.c src/local_image_input.c
 
 ifeq ($(EDITION):$(STT),pro:1)
@@ -195,7 +195,7 @@ $(BUILD)/test_core: tests/test_core.c $(CORE_SOURCES) src/cast.h
 $(BUILD)/test_visual: tests/test_visual.c tests/compositor_runtime_stubs.c src/compositor.c src/composition_assets.c src/presentation_text.c src/cast.h src/compositor.h src/pro_runtime.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ $(filter %.c,$^) $(PKG_LIBS) $(LDLIBS) $(LDFLAGS)
-$(BUILD)/test_media: tests/test_media.c $(MEDIA_SOURCES) src/config.c vendor/inih/ini.c src/cast.h src/media_internal.h
+$(BUILD)/test_media: tests/test_media.c $(MEDIA_SOURCES) src/config.c src/config_presets.c vendor/inih/ini.c src/cast.h src/media_internal.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -DCAST_TEST -o $@ $(filter %.c,$^) $(PKG_LIBS) $(LDLIBS) $(LDFLAGS)
 # Static executables cannot use the LD_PRELOAD DNS fixture.
@@ -203,7 +203,7 @@ ifeq ($(TEST_LINK_DNS),1)
 STREAM_DNS_SOURCE = tests/fixtures/stream_block_dns.c
 STREAM_DNS_FLAGS = -DCAST_TEST_LINK_DNS -Wl,--wrap=getaddrinfo
 endif
-$(BUILD)/test_stream: tests/test_stream.c $(MEDIA_SOURCES) src/config.c vendor/inih/ini.c src/cast.h src/media_internal.h src/stream.h $(STREAM_DNS_SOURCE)
+$(BUILD)/test_stream: tests/test_stream.c $(MEDIA_SOURCES) src/config.c src/config_presets.c vendor/inih/ini.c src/cast.h src/media_internal.h src/stream.h $(STREAM_DNS_SOURCE)
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -DCAST_TEST $(STREAM_DNS_FLAGS) -o $@ $(filter %.c,$^) $(PKG_LIBS) $(LDLIBS) $(LDFLAGS)
 check-stream-sustained: $(BUILD)/test_stream
@@ -405,14 +405,14 @@ clean:
 
 .PHONY: edition-preflight deps-lgpl check-public-boundary check-licenses check-editions package-pro install-community install-pro
 
-$(BUILD)/media_sustained: tests/media_sustained.c $(MEDIA_SOURCES) src/config.c vendor/inih/ini.c src/cast.h src/media_internal.h
+$(BUILD)/media_sustained: tests/media_sustained.c $(MEDIA_SOURCES) src/config.c src/config_presets.c vendor/inih/ini.c src/cast.h src/media_internal.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -DCAST_TEST -o $@ $(filter %.c,$^) $(PKG_LIBS) $(LDLIBS) $(LDFLAGS)
 check-media-sustained: $(BUILD)/media_sustained
 	@test '$(MEDIA_PROFILE)' = lgpl || { echo 'check-media-sustained requires MEDIA_PROFILE=lgpl' >&2; exit 1; }
 	$(BUILD)/media_sustained "$(BUILD)/sustained-$$(date +%s).mkv" $(SUSTAINED_WIDTH) $(SUSTAINED_HEIGHT)
 .PHONY: check-media-sustained
-$(BUILD)/test_media_quality: tests/test_media_quality.c $(MEDIA_SOURCES) src/config.c vendor/inih/ini.c src/cast.h src/media_internal.h src/media_codec.h
+$(BUILD)/test_media_quality: tests/test_media_quality.c $(MEDIA_SOURCES) src/config.c src/config_presets.c vendor/inih/ini.c src/cast.h src/media_internal.h src/media_codec.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -DCAST_TEST -o $@ $(filter %.c,$^) $(PKG_LIBS) $(LDLIBS) $(LDFLAGS)
 check-media-quality: $(BUILD)/test_media_quality
@@ -449,15 +449,15 @@ check-edition-install:
 build/edition-contract-tests/test_editions: tests/test_editions.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/edition.h src/license_store.h src/edition_extensions.h src/pro_extension.h src/ipc_identity.h src/cast.h src/os_compat.c
 	@mkdir -p build/edition-contract-tests
 	$(CC) -D_GNU_SOURCE -Isrc -std=gnu11 -O2 $(WARN) -Werror -o $@ $(filter %.c,$^)
-build/edition-contract-tests/test_editions_contract: tests/test_editions_contract.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/config.c src/presentation_text.c vendor/inih/ini.c src/edition.h src/license_store.h src/edition_extensions.h src/pro_extension.h src/presentation_text.h src/cast.h src/os_compat.c
+build/edition-contract-tests/test_editions_contract: tests/test_editions_contract.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/config.c src/config_presets.c src/presentation_text.c vendor/inih/ini.c src/edition.h src/license_store.h src/edition_extensions.h src/pro_extension.h src/presentation_text.h src/cast.h src/os_compat.c
 	@mkdir -p build/edition-contract-tests
 	$(CC) -D_GNU_SOURCE -DWITH_PRO -Isrc -Ivendor/inih $(INI_FLAGS) $(shell pkg-config --cflags fontconfig freetype2) -std=gnu11 -O2 -ffunction-sections -fdata-sections $(WARN) -Werror -o $@ $(filter %.c,$^) -Wl,--gc-sections $(shell pkg-config --libs fontconfig freetype2) -lm
-build/edition-contract-tests/test_edition_service: tests/test_edition_service.c src/edition_service.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/config.c src/presentation_text.c vendor/inih/ini.c src/edition_service.h src/edition.h src/license_store.h src/edition_extensions.h src/pro_extension.h src/presentation_text.h src/cast.h src/os_compat.c
+build/edition-contract-tests/test_edition_service: tests/test_edition_service.c src/edition_service.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/config.c src/config_presets.c src/presentation_text.c vendor/inih/ini.c src/edition_service.h src/edition.h src/license_store.h src/edition_extensions.h src/pro_extension.h src/presentation_text.h src/cast.h src/os_compat.c
 	@mkdir -p build/edition-contract-tests
 	$(CC) -D_GNU_SOURCE -Isrc -Ivendor/inih $(INI_FLAGS) $(shell pkg-config --cflags fontconfig freetype2) -std=gnu11 -O2 -ffunction-sections -fdata-sections $(WARN) -Werror -o $@ $(filter %.c,$^) -Wl,--gc-sections $(shell pkg-config --libs fontconfig freetype2) -lpthread -lm
 check-edition-service: build/edition-contract-tests/test_edition_service
 	build/edition-contract-tests/test_edition_service
-build/edition-contract-tests/test_workflow_service: tests/test_workflow_service.c src/edition_service.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/config.c src/presentation_text.c vendor/inih/ini.c src/pro_runtime.h src/pro_extension.h src/edition_service.h src/cast.h src/os_compat.c
+build/edition-contract-tests/test_workflow_service: tests/test_workflow_service.c src/edition_service.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/config.c src/config_presets.c src/presentation_text.c vendor/inih/ini.c src/pro_runtime.h src/pro_extension.h src/edition_service.h src/cast.h src/os_compat.c
 	@mkdir -p build/edition-contract-tests
 	$(CC) -D_GNU_SOURCE -DWITH_PRO -Isrc -Ivendor/inih $(INI_FLAGS) $(shell pkg-config --cflags fontconfig freetype2) -std=gnu11 -O2 -ffunction-sections -fdata-sections $(WARN) -Werror -o $@ $(filter %.c,$^) -Wl,--gc-sections $(shell pkg-config --libs fontconfig freetype2) -lpthread -lm
 check-workflow-service: build/edition-contract-tests/test_workflow_service
@@ -533,7 +533,7 @@ check-desktop-update-guard: $(BUILD)/test_commands
 	CAST_TEST_DESKTOP_UPDATE_GUARD_ONLY=1 $(BUILD)/test_commands
 
 # Isolated document/renderer tests never open capture or audio devices.
-PROJECT_TEST_SOURCES = src/project.c src/timeline.c src/config.c src/edition_extensions.c src/workflow_schema.c src/edition.c src/license_store.c src/presentation_text.c src/os_compat.c vendor/inih/ini.c
+PROJECT_TEST_SOURCES = src/project.c src/timeline.c src/config.c src/config_presets.c src/edition_extensions.c src/workflow_schema.c src/edition.c src/license_store.c src/presentation_text.c src/os_compat.c vendor/inih/ini.c
 PROJECT_RENDER_TEST_SOURCES = src/local_image_input.c src/timeline_preview.c src/timeline_render.c src/media_codec.c src/compositor.c src/state.c
 PROJECT_TEST_FLAGS = $(filter -DCAST_MEDIA_PROFILE_LGPL=%,$(CPPFLAGS)) -D_GNU_SOURCE -DCAST_TEST -Isrc -Ivendor/inih -DINI_HANDLER_LINENO=1 -DINI_CALL_HANDLER_ON_NEW_SECTION=1 -DINI_ALLOW_MULTILINE=0 -DINI_ALLOW_INLINE_COMMENTS=0 -DINI_STOP_ON_FIRST_ERROR=1 -DINI_MAX_LINE=8192
 $(BUILD)/test_timeline: tests/test_timeline.c src/timeline.c src/timeline.h
@@ -625,6 +625,13 @@ $(BUILD)/test_local_image_input: tests/test_local_image_input.c src/timeline_ass
 check-local-image-input: $(BUILD)/test_local_image_input
 	$(BUILD)/test_local_image_input
 
+
+$(BUILD)/test_config_presets: tests/test_config_presets.c $(PROJECT_TEST_SOURCES)
+	@mkdir -p $(BUILD)
+	$(CC) $(PROJECT_TEST_FLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -ffunction-sections -fdata-sections -o $@ $^ $(LDFLAGS) -Wl,--gc-sections $(PKG_LIBS) -lpthread -lm
+.PHONY: check-config-presets
+check-config-presets: $(BUILD)/test_config_presets
+	$(BUILD)/test_config_presets
 
 $(BUILD)/test_live_media: tests/test_live_media.c src/live_media.c $(PROJECT_TEST_SOURCES) $(PROJECT_RENDER_TEST_SOURCES)
 	@mkdir -p $(BUILD)
