@@ -83,3 +83,12 @@ build/test_native_layout.o: test_preview.c app.h live.h
 build/test_native_layout: build/test_native_layout.o build/app.o build/menus.o build/cast_theme.o build/brand.o build/settings.o build/source_picker.o build/vendor/libcui_text.a build/vendor/libcui_bidi.a build/vendor/libcui.a
 	$(CC) $(LDFLAGS) $^ $(LDLIBS) -o $@
 -include build/test_native_layout.d
+
+# Local interface persistence is portable; no SDL, daemon or real user config.
+build/test_workspace_preferences: test_workspace_preferences.c workspace_preferences.c workspace_preferences.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) -Werror test_workspace_preferences.c workspace_preferences.c -o $@
+.PHONY: check-preferences
+check-preferences: build/test_workspace_preferences
+	./build/test_workspace_preferences
+check: check-preferences

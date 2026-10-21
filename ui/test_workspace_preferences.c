@@ -11,7 +11,9 @@ static void put(const char *path,const char *data)
 {FILE *f=fopen(path,"w");assert(f);assert(fputs(data,f)>=0);assert(!fclose(f));}
 int main(void)
 {
-    char directory[]="/tmp/cast-workspace-pref-XXXXXX";assert(mkdtemp(directory));
+    const char *temporary=getenv("TMPDIR");if(!temporary||!*temporary)temporary="/tmp";
+    char directory[4000];int count=snprintf(directory,sizeof directory,"%s/cast-workspace-pref-XXXXXX",temporary);
+    assert(count>0&&(size_t)count<sizeof directory&&mkdtemp(directory));
     char path[4096],error[256];snprintf(path,sizeof path,"%s/local/workspace.ini",directory);
     WorkspacePreferences p,before;workspace_preferences_defaults(&p);before=p;
     assert(workspace_preferences_valid(&p));

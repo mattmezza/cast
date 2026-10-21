@@ -43,7 +43,8 @@ int main(void)
     assert(!audio_configure(audio,&cfg,error,sizeof error));audio_levels(audio,&levels);
     assert(!levels.mic.enabled&&!levels.desktop.enabled);zero(&levels.mic);zero(&levels.desktop);
     fill(samples,.8f,.8f);audio_test_push(audio,0,clock_ns,samples,480);audio_levels(audio,&levels);zero(&levels.mic);
-    cfg.mic_gain=4;assert(!audio_configure(audio,&cfg,error,sizeof error));
+    /* A fresh synthetic route avoids opening a real device on either OS. */
+    audio_close(audio);cfg.mic=true;cfg.mic_gain=4;audio=audio_test_open(&cfg);assert(audio);
     clock_ns+=UINT64_C(10000000);fill(samples,.5f,-.5f);audio_test_push(audio,0,clock_ns,samples,480);
     audio_levels(audio,&levels);assert(levels.mic.peak==1&&levels.mic.clipped);
     audio_close(audio);puts("audio levels PASS: real batch RMS/peak, gain, silence, clipping, stale expiry and privacy epoch");

@@ -558,4 +558,18 @@ check-project-session: $(BUILD)/test_project_session
 check-timeline-render: $(BUILD)/test_timeline_render
 	$(BUILD)/test_timeline_render
 
+# Synthetic capture/codec policy checks: no desktop, microphone or network.
+$(BUILD)/test_audio_levels: tests/test_audio_levels.c src/audio.c src/audio_levels.h src/media_internal.h src/cast.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -DCAST_TEST -o $@ tests/test_audio_levels.c src/audio.c $(PKG_LIBS) $(LDLIBS) $(LDFLAGS)
+$(BUILD)/test_encoder_policy: tests/test_encoder_policy.c src/media_codec.c src/media_codec.h src/cast.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -o $@ tests/test_encoder_policy.c src/media_codec.c $(PKG_LIBS) $(LDLIBS) $(LDFLAGS)
+.PHONY: check-audio-levels check-encoder-policy
+check-audio-levels: $(BUILD)/test_audio_levels
+	$(BUILD)/test_audio_levels
+check-encoder-policy: $(BUILD)/test_encoder_policy
+	$(BUILD)/test_encoder_policy
+check-unit: check-audio-levels check-encoder-policy
+
 endif # Darwin uses Makefile.macos
