@@ -213,3 +213,24 @@ frame counts for the existing record/stream encoder fixtures. Logs are under
 `build/community-roadmap-simd/eight-workers-*`; the 4K sustained movie SHA256 was
 `420b0d74e9876528cb090a36a70957b642684c5e73e80e549583607c129aa170` before cleanup.
 The existing SDK default was not replaced by this comparison.
+
+### Rejected twelve-thread experiment
+
+A subsequent serial 20-second comparison kept the optimized SDK, 3840×2160
+YUV420P H.264/AAC output, 30 fps target, 6 Mbps bitrate, eight converter workers,
+queue capacity and disabled codec frame skipping fixed. Increasing only the
+OpenH264 encoder workers/slices from eight to twelve regressed on this host:
+
+| Encoder workers | Submitted / encoded / queue drops | Conversion / encode+mux | CPU / peak RSS |
+|---|---|---|---|
+| 8 | 583 / 488 / 95 | 7.307 / 32.775 ms | 389% / 500.8 MiB |
+| 12 | 477 / 376 / 101 | 11.042 / 40.358 ms | 407.5% / 500.8 MiB |
+
+Both failed the short-run throughput gate. The twelve-worker candidate encoded
+23% fewer frames over the same interval and does not justify a longer run or a
+default change. The existing eight-worker policy remains intact. This comparison
+does not establish a universal hardware ceiling; it rejects this candidate on
+this host. Probes confirmed unchanged output dimensions/chroma/codecs. Commands,
+source copies, revision, probes and output hashes are retained under
+`ui/build/tmp/encoder12-experiment`; experimental binaries and encoded media were
+removed. Native hardware-encoder acceptance remains separate work.
