@@ -624,6 +624,32 @@ int config_validate(const Config *c, char *err, size_t n)
             *(const unsigned char *)&p->camera_visible > 1) {
             return fail(err, n, "invalid preset storage");
         }
+        /* Projects and sealed handoffs do not pass through preset_assign().
+         * Enforce the same schema before any preset can reach the compositor. */
+        if (!p->name[0] || (p->mask & ~255u)) {
+            return fail(err, n, "invalid preset name or mask");
+        }
+        for (const unsigned char *name = (const unsigned char *)p->name; *name; ++name) {
+            if (!isalnum(*name) && *name != '_' && *name != '-') {
+                return fail(err, n, "invalid preset name");
+            }
+        }
+        for (int j = 0; j < i; ++j) {
+            if (!strcmp(p->name, c->presets[j].name)) {
+                return fail(err, n, "duplicate preset %s", p->name);
+            }
+        }
+        if (((p->mask & 1) && !choice(p->layout, "overlay,stage,split,screen,camera")) ||
+            ((p->mask & 2) && !choice(p->camera_shape, "rectangle,rounded,circle")) ||
+            ((p->mask & 64) && !choice(p->camera_anchor, ANCHORS)) ||
+            ((p->mask & 128) && !choice(p->camera_aspect, "native,16:9,4:3,1:1"))) {
+            return fail(err, n, "invalid preset.%s enum", p->name);
+        }
+        if (((p->mask & 4) && (!isfinite(p->camera_width_percent) || p->camera_width_percent < 1 || p->camera_width_percent > 100)) ||
+            ((p->mask & 8) && (!isfinite(p->split_ratio) || p->split_ratio < 5 || p->split_ratio > 95)) ||
+            ((p->mask & 32) && (!isfinite(p->zoom_factor) || p->zoom_factor < 1 || p->zoom_factor > 20))) {
+            return fail(err, n, "invalid preset.%s number", p->name);
+        }
     }
     /* Runtime commands and startup flags must pass the same schema as INI values. */
     for (size_t i = 0; i < NSET; i++) {

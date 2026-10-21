@@ -90,6 +90,11 @@ int main(void)
     rejected(path,"CAST_PROJECT 1\nT 3 0\nM 1 0 10 78\nC 2 1 -1 0 1 0 1 0\nEND\n",&loaded,&opened);
     rejected(path,"CAST_PROJECT 1\nT 3 0\nM 1 0 10 78\nC 2 1 0 0 1 0 nan 0\nEND\n",&loaded,&opened);
     rejected(path,"CAST_PROJECT 1\nT 1 0\nEND\nTRAILING\n",&loaded,&opened);
+    /* Preset records bypass INI parsing; final schema validation must reject
+     * invalid composition data atomically, before a preset can be applied. */
+    rejected(path,"CAST_PROJECT 1\nT 1 0\nS composition.preset_order -\nP 78 626164 - - - 0 0 0 0 1\nEND\n",&loaded,&opened);
+    rejected(path,"CAST_PROJECT 1\nT 1 0\nS composition.preset_order -\nP 78 - - - - 0 99 0 0 8\nEND\n",&loaded,&opened);
+    rejected(path,"CAST_PROJECT 1\nT 1 0\nS composition.preset_order -\nP 78 - - - - 0 0 0 0 256\nEND\n",&loaded,&opened);
     /* Oversized regular input is rejected before parsing or allocation growth. */
     int fd=open(path,O_WRONLY|O_TRUNC); assert(fd>=0); assert(!ftruncate(fd,CAST_PROJECT_LIMIT+1)); close(fd);
     assert(cast_project_load(path,&loaded,&opened,NULL,error,sizeof error));

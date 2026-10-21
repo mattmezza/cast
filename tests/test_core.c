@@ -1,5 +1,6 @@
 #include "cast.h"
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -229,6 +230,23 @@ int main(void)
     config_defaults(&c);
     char e[CAST_ERR];
     assert(!config_validate(&c, e, sizeof e));
+    /* Sealed/project presets must obey the same rules as INI assignments. */
+    Config bad_preset = c;
+    bad_preset.presets[0].mask |= 1;
+    strcpy(bad_preset.presets[0].layout, "not-a-layout");
+    assert(config_validate(&bad_preset, e, sizeof e));
+    bad_preset = c; bad_preset.presets[0].mask |= 4;
+    bad_preset.presets[0].camera_width_percent = NAN;
+    assert(config_validate(&bad_preset, e, sizeof e));
+    bad_preset = c; bad_preset.presets[0].mask |= 8;
+    bad_preset.presets[0].split_ratio = 99;
+    assert(config_validate(&bad_preset, e, sizeof e));
+    bad_preset = c; bad_preset.presets[0].mask |= 256;
+    assert(config_validate(&bad_preset, e, sizeof e));
+    bad_preset = c; strcpy(bad_preset.presets[0].name, "bad,name");
+    assert(config_validate(&bad_preset, e, sizeof e));
+    bad_preset = c; strcpy(bad_preset.presets[1].name, bad_preset.presets[0].name);
+    assert(config_validate(&bad_preset, e, sizeof e));
     /* A same-build app handoff must reject unsafe in-memory configuration fields. */
     Config invalid = c;
     memset(invalid.text_content, 'x', sizeof invalid.text_content);
