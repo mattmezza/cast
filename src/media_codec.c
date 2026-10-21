@@ -250,6 +250,11 @@ static int encoder_open(const Config *cfg, bool stream, bool header, const char 
             av_dict_set(&options, "x264-params", "nal-hrd=cbr:force-cfr=1:scenecut=0", 0);
         }
     } else if (!strcmp(name, "libopenh264")) {
+        /* FFmpeg's constrained-baseline default includes a constraint flag
+         * (578), which OpenH264's native profile enum cannot accept. Select
+         * the real High profile (100), supported by both layers, explicitly.
+         * This also enables CABAC without relying on native auto-correction. */
+        av_dict_set(&options, "profile", "high", 0);
         /* OpenH264 requires multiple slices to use encoder threads effectively.
          * Bound CPU parallelism while preserving a headless software baseline. */
         if ((int64_t)v->width * v->height >= 1280 * 720) {
@@ -257,6 +262,10 @@ static int encoder_open(const Config *cfg, bool stream, bool header, const char 
             v->slices = 4;
         }
         av_dict_set(&options, "rc_mode", "bitrate", 0);
+        /* A target, not a hard cap: OpenH264 can only enforce a bitrate by
+         * dropping frames. Preserve submitted frames, including recordings;
+         * do not replace bitrate mode with buffer mode (no bitrate control)
+         * merely to silence the native warning. */
         av_dict_set(&options, "allow_skip_frames", "0", 0);
     }
     int code = avcodec_open2(v, codec, &options);
