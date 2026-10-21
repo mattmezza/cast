@@ -71,6 +71,15 @@ static void hash_file(const char *p, char hex[65], uint64_t *size)
 }
 int main(void)
 {
+    char joined[6] = "keep", short_path[5] = "keep";
+    assert(!pathcat(joined, sizeof joined, "ab", "cd") && !strcmp(joined, "ab/cd"));
+    assert(pathcat(short_path, sizeof short_path, "ab", "cd") < 0);
+    assert(!strcmp(short_path, "keep"));
+    assert(pathcat(joined, 0, "ab", "cd") < 0 && !strcmp(joined, "ab/cd"));
+    char oversized[CAST_UPDATE_PATH_MAX];
+    memset(oversized, 'x', sizeof oversized);
+    assert(pathcat(joined, sizeof joined, oversized, "archive") < 0);
+    assert(!strcmp(joined, "ab/cd"));
     assert(sodium_init() >= 0);
     unsigned char seed[32], public[32];
     size_t used;

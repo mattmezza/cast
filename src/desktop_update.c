@@ -41,8 +41,17 @@ static int fail(char *e, size_t n, const char *fmt, ...)
 }
 static int pathcat(char *out, size_t n, const char *a, const char *b)
 {
-    int z = snprintf(out, n, "%s/%s", a, b);
-    return z < 0 || (size_t)z >= n ? -1 : 0;
+    if (!out || !a || !b || n < 2)
+        return -1;
+    size_t left = strnlen(a, n), right = strnlen(b, n);
+    if (left > n - 2 || right > n - left - 2)
+        return -1;
+    /* Validate the complete join before writing: no truncated path can escape
+     * through an error path or be mistaken for a different filesystem object. */
+    memcpy(out, a, left);
+    out[left] = '/';
+    memcpy(out + left + 1, b, right + 1);
+    return 0;
 }
 static int valid_context(const char *edition, const char *platform)
 {
@@ -536,8 +545,11 @@ int cast_update_stage(const CastDesktopUpdate *m, CastDesktopUpdateStage *s, cha
         return fail(err, en, "Cannot create update staging directory");
     }
     char file[CAST_UPDATE_PATH_MAX], extract[CAST_UPDATE_PATH_MAX];
-    pathcat(file, sizeof(file), s->directory, "archive");
-    pathcat(extract, sizeof(extract), s->directory, "unpacked");
+    if (pathcat(file, sizeof(file), s->directory, "archive") ||
+        pathcat(extract, sizeof(extract), s->directory, "unpacked")) {
+        cast_update_stage_cleanup(s);
+        return fail(err, en, "Staging path too long");
+    }
     FILE *f = fopen(file, "wb");
     if (!f) {
         cast_update_stage_cleanup(s);
@@ -583,7 +595,10 @@ int cast_update_stage(const CastDesktopUpdate *m, CastDesktopUpdateStage *s, cha
         return -1;
     }
     char manifest[CAST_UPDATE_PATH_MAX];
-    pathcat(manifest, sizeof(manifest), s->directory, "manifest");
+    if (pathcat(manifest, sizeof(manifest), s->directory, "manifest")) {
+        cast_update_stage_cleanup(s);
+        return fail(err, en, "Staging path too long");
+    }
     f = fopen(manifest, "wb");
     if (!f) {
         cast_update_stage_cleanup(s);
@@ -595,7 +610,10 @@ int cast_update_stage(const CastDesktopUpdate *m, CastDesktopUpdateStage *s, cha
         cast_update_stage_cleanup(s);
         return fail(err, en, "Cannot preserve update manifest");
     }
-    pathcat(s->payload, sizeof(s->payload), extract, "payload");
+    if (pathcat(s->payload, sizeof(s->payload), extract, "payload")) {
+        cast_update_stage_cleanup(s);
+        return fail(err, en, "Staging payload path too long");
+    }
     return 0;
 }
 static int copy_tree(const char *root, const char *src, const char *dst, char *err, size_t en)
@@ -796,6 +814,9 @@ int cast_update_stage_verify(CastDesktopUpdateStage *s, const char *edition, con
         remove_tree(verified);
         return -1;
     }
-    pathcat(s->payload, sizeof(s->payload), verified, "payload");
+    if (pathcat(s->payload, sizeof(s->payload), verified, "payload")) {
+        remove_tree(verified);
+        return fail(err, en, "Verified payload path too long");
+    }
     return 0;
 }

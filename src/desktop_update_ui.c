@@ -242,11 +242,25 @@ static int launch_helper(const Config *config, const CastDesktopUpdateStage *sta
         return problem(e, n, "Update installer handoff failed.");
     return 0;
 }
+static int instance_lock_path(const Config *config, char *path, size_t size, char *e, size_t n)
+{
+    size_t length = strnlen(config->socket_path, sizeof config->socket_path);
+    if (!length || length == sizeof config->socket_path || size < sizeof ".lock" ||
+        length > size - sizeof ".lock")
+        return problem(e, n, "Daemon instance lock path is empty or too long.");
+    memcpy(path, config->socket_path, length);
+    memcpy(path + length, ".lock", sizeof ".lock");
+    return 0;
+}
 static int install_update(const Config *config, const CastDesktopUpdate *update, char *e, size_t n)
 {
     if (eligible(config, update, e, n))
         return -1;
-    char binary[PATH_MAX], target[PATH_MAX];
+    char binary[PATH_MAX], target[PATH_MAX], lockpath[PATH_MAX];
+    /* Reject an unusable instance identity before download or daemon requests.
+     * A truncated lock name cannot prove the real producer is idle. */
+    if (instance_lock_path(config, lockpath, sizeof lockpath, e, n))
+        return -1;
     if (executable(binary, sizeof binary) || destination(binary, target, sizeof target, e, n))
         return -1;
     /* Network, verification and extraction complete before reserving the daemon.
@@ -258,9 +272,7 @@ static int install_update(const Config *config, const CastDesktopUpdate *update,
     if (!daemon) {
         /* A failed request must never be mistaken for an idle producer. Only an
          * uncontended, existing instance lock proves no daemon owns this session. */
-        char lockpath[PATH_MAX];
         struct stat st;
-        snprintf(lockpath, sizeof lockpath, "%s.lock", config->socket_path);
         int fd = open(lockpath, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
         bool idle = fd >= 0 && !fstat(fd, &st) && S_ISREG(st.st_mode) && st.st_uid == getuid() &&
                     !(st.st_mode & 0077) && !flock(fd, LOCK_EX | LOCK_NB);

@@ -237,6 +237,25 @@ static int lifecycle_case(bool rollback, bool migrate)
 }
 int main(void)
 {
+    /* An oversized identity must never silently select a different lock. */
+    Config path_config = {0};
+    char bounded_lock[PATH_MAX], path_error[CAST_ERR];
+    memset(path_config.socket_path, 'x', sizeof path_config.socket_path);
+    assert(instance_lock_path(&path_config, bounded_lock, sizeof bounded_lock,
+                              path_error, sizeof path_error) < 0);
+    path_config.socket_path[sizeof bounded_lock - sizeof ".lock"] = 0;
+    assert(!instance_lock_path(&path_config, bounded_lock, sizeof bounded_lock,
+                               path_error, sizeof path_error));
+    assert(strlen(bounded_lock) == sizeof bounded_lock - 1);
+    path_config.socket_path[sizeof bounded_lock - sizeof ".lock"] = 'x';
+    path_config.socket_path[sizeof bounded_lock - sizeof ".lock" + 1] = 0;
+    strcpy(bounded_lock, "unchanged");
+    assert(instance_lock_path(&path_config, bounded_lock, sizeof bounded_lock,
+                              path_error, sizeof path_error) < 0);
+    assert(!strcmp(bounded_lock, "unchanged"));
+    path_config.socket_path[0] = 0;
+    assert(instance_lock_path(&path_config, bounded_lock, sizeof bounded_lock,
+                              path_error, sizeof path_error) < 0);
     assert(engine_security_test_main() == 0);
     pro_eligibility_regressions();
     assert(!lifecycle_case(false, false));
