@@ -618,7 +618,17 @@ static void copy_config(AppLive *out, const PanelSnapshot *snapshot, const Daemo
     out->camera_visible = config->camera_visible;
     out->preset_count=config->preset_count>0?(unsigned)config->preset_count:0;
     if(out->preset_count>24)out->preset_count=24;
-    for(unsigned i=0;i<out->preset_count;++i)snprintf(out->preset_names[i],sizeof out->preset_names[i],"%s",config->presets[i].name);
+    for(unsigned i=0;i<out->preset_count;++i) {
+        const Preset *p=&config->presets[i];AppFramingPreset *view=&out->presets[i];
+        snprintf(out->preset_names[i],sizeof out->preset_names[i],"%s",p->name);
+        view->mask=p->mask;
+        snprintf(view->layout,sizeof view->layout,"%s",p->layout);
+        snprintf(view->camera_shape,sizeof view->camera_shape,"%s",p->camera_shape);
+        snprintf(view->camera_anchor,sizeof view->camera_anchor,"%s",p->camera_anchor);
+        snprintf(view->camera_aspect,sizeof view->camera_aspect,"%s",p->camera_aspect);
+        view->camera_width_percent=p->camera_width_percent;view->split_ratio=p->split_ratio;
+        view->zoom_factor=p->zoom_factor;view->camera_visible=p->camera_visible;
+    }
     snprintf(out->current_preset,sizeof out->current_preset,"%s",snapshot->current_preset);
     out->mirror = config->mirror;
     snprintf(out->camera_shape,sizeof out->camera_shape,"%s",config->shape);

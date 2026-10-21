@@ -7,6 +7,10 @@
 #include "../src/audio_monitor_controller.h"
 #include "../src/live_media_status.h"
 #include "../src/runtime_metrics.h"
+typedef struct {
+    unsigned mask;char layout[16],camera_shape[16],camera_anchor[24],camera_aspect[16];
+    double camera_width_percent,split_ratio,zoom_factor;bool camera_visible;
+} AppFramingPreset;
 typedef enum { APP_EDIT_NONE, APP_EDIT_LAYOUT, APP_EDIT_FIT, APP_EDIT_ANCHOR, APP_EDIT_SIZE,
     APP_EDIT_BACKGROUND_SOURCE, APP_EDIT_SCREEN_BACKGROUND, APP_EDIT_CAMERA_BACKGROUND,
     APP_EDIT_SCREEN_BACKGROUND_COLOR, APP_EDIT_CAMERA_BACKGROUND_COLOR,
@@ -47,6 +51,7 @@ typedef struct {
     char license_id[32];
     unsigned preset_count;
     char preset_names[24][64], current_preset[64];
+    AppFramingPreset presets[24];
     unsigned setting_count;
     AppSetting settings[APP_SETTING_MAX];
     cui_bitmap frame;

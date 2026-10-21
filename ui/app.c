@@ -717,7 +717,7 @@ static void source_content(cui_context *ui, AppState *s, const cui_theme *t) {
 }
 typedef struct {
     cui_edit *edit;cui_input_state input;char name[64],current[64];
-    uint64_t generation;unsigned confirm;bool connected;
+    uint64_t generation;unsigned confirm;bool connected,open;
 } PresetDraft;
 static void preset_draft_close(void *user){cui_edit_destroy(((PresetDraft *)user)->edit);}
 static bool preset_name_valid(const char *name) {
@@ -732,21 +732,58 @@ void app_presets_controls(cui_context *ui,AppState *a,const cui_theme *t) {
     bool blocked=!a->live.connected || composition_disabled(a) || a->extension_requested;
     if(!a->live.connected) {
         PresetDraft *old=cui_resource_find(ui,cui_id_from(ui,"preset-draft"),UINT64_C(0x7072657365746472));
-        if(old){old->connected=false;old->confirm=0;if(old->edit)cui_edit_set_content(old->edit,(cui_edit_content){.text=cui_string("")});}
+        if(old){old->connected=false;old->confirm=0;old->open=false;if(old->edit)cui_edit_set_content(old->edit,(cui_edit_content){.text=cui_string("")});}
         text(ui,t,"Connect the daemon to load presets.");return;
     }
     if(!a->live.preset_count)text(ui,t,"No framing presets configured.");
-    for(unsigned i=0;i<a->live.preset_count && i<24;++i) {
-        char id[48];snprintf(id,sizeof id,"framing-preset-%u",i);
-        if(button(ui,t,id,a->live.preset_names[i],"star",-1,30,
-            !strcmp(a->live.current_preset,a->live.preset_names[i]),blocked)) {
-            const char *args[]={"preset",a->live.preset_names[i]};app_request_command(a,2,args);
+    CastDesignTokens tokens=cast_design_tokens(t->dark);
+    cui_begin_box(ui,cui_id_from(ui,"preset-list"),(cui_box){.width=-1,.gap=2});
+    for(unsigned i=0;i<a->live.preset_count&&i<24;++i) {
+        char name[48],summary[256]="",part[64];snprintf(name,sizeof name,"framing-preset-%u",i);
+        const AppFramingPreset *p=&a->live.presets[i];
+        const char *values[]={p->layout,p->camera_anchor};unsigned masks[]={1,64};
+        for(unsigned n=0;n<2;++n)if(p->mask&masks[n]) {
+            if(summary[0])strncat(summary," · ",sizeof summary-strlen(summary)-1);
+            strncat(summary,values[n],sizeof summary-strlen(summary)-1);
         }
+        if(p->mask&4){snprintf(part,sizeof part,"%.0f%%",p->camera_width_percent);if(summary[0])strncat(summary," · ",sizeof summary-strlen(summary)-1);strncat(summary,part,sizeof summary-strlen(summary)-1);}
+        /* Partial presets only describe fields they actually contain. */
+        if(!summary[0]) {
+            if(p->mask&2)snprintf(summary,sizeof summary,"%s",p->camera_shape);
+            else if(p->mask&8)snprintf(summary,sizeof summary,"split %.0f%%",p->split_ratio*100);
+            else if(p->mask&16)snprintf(summary,sizeof summary,"camera %s",p->camera_visible?"on":"off");
+            else if(p->mask&32)snprintf(summary,sizeof summary,"zoom %.2f×",p->zoom_factor);
+            else if(p->mask&128)snprintf(summary,sizeof summary,"%s",p->camera_aspect);
+        }
+        cui_id id=cui_id_from(ui,name);bool active=!strcmp(a->live.current_preset,a->live.preset_names[i]);
+        cui_interaction row=cui_base_button(ui,id,cui_string(a->live.preset_names[i]),blocked);
+        cui_update_semantic(ui,id,active,0);
+        cui_begin_box(ui,id,(cui_box){.width=-1,.height=40,.fixed_height=true,.row=true,.gap=8,.align_y=CUI_ALIGN_CENTER,
+            .custom_padding=true,.padding_edges={.left=7,.right=7,.top=6,.bottom=6},
+            .background=active?tokens.selected:row.hovered?tokens.hover:(cui_color){0},
+            .border=active?tokens.selected_line:(cui_color){0},.border_width=1});
+        cui_theme glyph_theme=*t;glyph_theme.text=active?t->text:t->muted;
+        const char *icon=(p->mask&1)&&!strcmp(p->layout,"camera")?"cam":(p->mask&1)&&!strcmp(p->layout,"screen")?"monitor":"layers";
+        app_icon(ui,id^UINT64_C(0x7072657369636f6e),&glyph_theme,cui_string(icon),(cui_icon_options){.size=CUI_ICON_CUSTOM,.custom_size=14});
+        cui_begin_box(ui,id^UINT64_C(0x7072657374657874),(cui_box){.width=-1,.gap=0});
+        cui_text_ellipsis(ui,id^UINT64_C(0x707265736e616d65),cui_string(a->live.preset_names[i]),
+            (cui_text_ellipsis_options){.width=-1,.font_size=11.5f,.color=t->text,.text_style={.weight=CUI_TEXT_WEIGHT_MEDIUM}});
+        if(summary[0])cui_text_ellipsis(ui,id^UINT64_C(0x7072657373756d6d),cui_string(summary),
+            (cui_text_ellipsis_options){.width=-1,.font_size=9.5f,.color=t->muted,.text_style={.family=1,.monospace=true}});
+        cui_end_box(ui);
+        if(active) {
+            cui_begin_box(ui,id^UINT64_C(0x7072657361637469),(cui_box){.width=36,.fixed_width=true,.height=18,.align_x=CUI_ALIGN_CENTER,.align_y=CUI_ALIGN_CENTER,.border=tokens.selected_line,.border_width=1});
+            cui_text(ui,cui_string("active"),9,t->text);cui_end_box(ui);
+        }
+        cui_end_box(ui);
+        if(row.activated){const char *args[]={"preset",a->live.preset_names[i]};app_request_command(a,2,args);}
     }
+    cui_end_box(ui);
     PresetDraft *draft=cui_resource_get(ui,cui_id_from(ui,"preset-draft"),UINT64_C(0x7072657365746472),sizeof *draft,NULL,preset_draft_close);
     if(!draft)return;
     if(!draft->edit)draft->edit=cui_edit_create((cui_edit_config){.buffer=draft->name,.capacity=sizeof draft->name});
     if(!draft->edit)return;
+    if(draft->generation!=a->live.generation||draft->connected!=a->live.connected)draft->open=false;
     if(draft->generation!=a->live.generation||draft->connected!=a->live.connected||strcmp(draft->current,a->live.current_preset)) {
         draft->confirm=0;
         cui_edit_set_content(draft->edit,(cui_edit_content){.text=cui_string(a->live.current_preset)});
@@ -758,6 +795,21 @@ void app_presets_controls(cui_context *ui,AppState *a,const cui_theme *t) {
         if(!strcmp(draft->name,a->live.preset_names[i]))existing=true;
         if(!strcmp(a->live.current_preset,a->live.preset_names[i]))current=true;
     }
+    cui_begin_box(ui,0,(cui_box){.width=-1,.row=true,.gap=6});
+    cui_id save_id=cui_id_from(ui,"preset-open-save");
+    cui_interaction save_action=cui_base_button(ui,save_id,cui_string("Save current look…"),blocked);
+    cui_begin_box(ui,save_id,(cui_box){.width=-1,.height=30,.row=true,.gap=6,.align_y=CUI_ALIGN_CENTER,.padding=7,
+        .background=save_action.hovered?tokens.hover:t->secondary,.border=tokens.hair,.border_width=1});
+    app_icon(ui,save_id^1,t,cui_string("plus"),(cui_icon_options){.size=CUI_ICON_CUSTOM,.custom_size=14});
+    cui_text(ui,cui_string("Save current look…"),11.5f,t->text);cui_end_box(ui);
+    cui_id edit_id=cui_id_from(ui,"preset-open-edit");
+    cui_interaction edit_action=cui_base_button(ui,edit_id,cui_string("Rename or delete the active preset"),blocked||!current);
+    cui_begin_box(ui,edit_id,(cui_box){.width=30,.fixed_width=true,.height=30,.align_x=CUI_ALIGN_CENTER,.align_y=CUI_ALIGN_CENTER,.background=edit_action.hovered?tokens.hover:(cui_color){0}});
+    app_icon(ui,edit_id^1,t,cui_string("edit"),(cui_icon_options){.size=CUI_ICON_CUSTOM,.custom_size=14});cui_end_box(ui);
+    cui_end_box(ui);
+    if(save_action.activated){draft->open=true;draft->confirm=0;cui_edit_set_content(draft->edit,(cui_edit_content){.text=cui_string("")});}
+    if(edit_action.activated){draft->open=!draft->open;draft->confirm=0;cui_edit_set_content(draft->edit,(cui_edit_content){.text=cui_string(a->live.current_preset)});}
+    if(!draft->open)return;
     char previous_name[64];snprintf(previous_name,sizeof previous_name,"%s",draft->name);
     text(ui,t,"Preset name");
     cui_input_ex(ui,cui_id_from(ui,"preset-name"),t,cui_string("Preset name"),draft->edit,&draft->input,

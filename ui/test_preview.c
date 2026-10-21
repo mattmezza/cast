@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "app.h"
+#include "brand.h"
 #ifdef CAST_TEST_NATIVE_FONTS
 #include "cui/cui_text.h"
 #endif
@@ -922,11 +923,40 @@ static const cui_semantic *semantic_named(Preview *p,cui_role role,const char *n
 static void framing_presets(void) {
     Preview p=create(1360,1000);p.app.live.enabled=true;p.app.live.connected=true;p.app.live.generation=2;
     p.app.live.preset_count=1;strcpy(p.app.live.preset_names[0],"Interview");
+    p.app.live.presets[0]=(AppFramingPreset){.mask=1|4|64,.camera_width_percent=26};
+    strcpy(p.app.live.presets[0].layout,"screen");strcpy(p.app.live.presets[0].camera_anchor,"top-left");
     p.app.source_sections[0]=p.app.source_sections[1]=false;settle(&p);
-    click(&p,"section-presets");click(&p,"framing-preset-0");
+    click(&p,"section-presets");
+    cui_rect preset_row=bounds(&p,"framing-preset-0");assert(preset_row.h==40);
+    assert(!bounds(&p,"preset-name").w);
+    bool summary_seen=false,name_seen=false;
+    for(size_t i=0;i<p.draw.count;++i){const cui_draw_command *d=&p.draw.commands[i];
+        if(d->type!=CUI_DRAW_TEXT)continue;
+        if(d->text.length==strlen("screen · top-left · 26%")&&!memcmp(d->text.data,"screen · top-left · 26%",d->text.length)) {
+            summary_seen=true;assert(d->font_size==9.5f&&d->text_style.family==1&&d->bounds.x<preset_row.x+50);
+        }
+        if(d->text.length==9&&!memcmp(d->text.data,"Interview",9)) {name_seen=true;assert(d->font_size==11.5f&&d->bounds.x<preset_row.x+50);}
+    }
+    assert(summary_seen&&name_seen);
+    p.app.live.presets[0].mask=1;strcpy(p.app.live.presets[0].layout,"camera");settle(&p);
+    bool partial_seen=false;
+    for(size_t i=0;i<p.draw.count;++i){const cui_draw_command *d=&p.draw.commands[i];
+        if(d->type==CUI_DRAW_TEXT&&d->font_size==9.5f&&d->text.length==6&&!memcmp(d->text.data,"camera",6))partial_seen=true;
+    }
+    assert(partial_seen);p.app.live.presets[0].mask=1|4|64;strcpy(p.app.live.presets[0].layout,"screen");settle(&p);
+    click(&p,"preset-open-save");assert(bounds(&p,"preset-name").w>0&&!p.app.extension_requested);
+    ++p.app.live.generation;settle(&p);assert(!bounds(&p,"preset-name").w);
+    event(&p,(cui_event){.type=CUI_EVENT_POINTER_MOVE,.x=preset_row.x+10,.y=preset_row.y+20});settle(&p);
+    bool hover_seen=false;cui_color hover=cast_design_tokens(app_is_dark(&p.app)).hover;
+    for(size_t i=0;i<p.draw.count;++i){const cui_draw_command *d=&p.draw.commands[i];
+        if(d->type==CUI_DRAW_RECT&&fabsf(d->bounds.x-preset_row.x)<1&&fabsf(d->bounds.y-preset_row.y)<1&&
+            d->color.r==hover.r&&d->color.g==hover.g&&d->color.b==hover.b)hover_seen=true;
+    }
+    assert(hover_seen);click(&p,"framing-preset-0");
     assert(p.app.extension_requested && p.app.extension_argc==2 && !strcmp(p.app.extension_args[0],"preset") && !strcmp(p.app.extension_args[1],"Interview"));
     assert(!p.app.live.current_preset[0]);p.app.extension_requested=false;
     strcpy(p.app.live.current_preset,"Interview");settle(&p);
+    click(&p,"preset-open-edit");
     click(&p,"preset-name");key(&p,CUI_KEY_A,CUI_MOD_CTRL);
     event(&p,(cui_event){.type=CUI_EVENT_TEXT,.text="Closeup"});
     click(&p,"preset-rename");
