@@ -55,3 +55,43 @@ history is session-local; committed clip/media state, next ID and revision persi
 relative media paths, missing media, recovery, mode 0600, invalid-save preservation,
 symlink/directory rejection, oversized files, unsupported versions, forbidden and
 duplicate settings, invalid clip bounds/numbers and unchanged outputs on failures.
+
+## Daemon session integration
+
+`project_session.c` keeps the timeline/history on the daemon thread and uses one
+bounded worker slot for project save/open/recover and imported-media probing.
+Commands acknowledge queuing; `CastProjectSnapshot.busy`, `status` and `error`
+report the eventual result. Closing the session joins its worker before freeing
+storage. Snapshot publication and clip edits perform no filesystem I/O.
+
+Opening/recovering a project requires recording, countdown, finalization and
+streaming to be idle. Completion checks that outputs, configuration and project
+revision did not change during loading, then uses `app_apply_candidate`; stale
+results are discarded. Saving snapshots document/configuration for the worker.
+Edits can continue during saving, and a completion only clears dirty state when
+that exact revision/configuration remains current. This module does not currently
+schedule periodic autosaves; an explicit recovery file uses the same validated
+project container.
+
+`timeline import PATH [TRACK]` probes an already-opened local regular file through
+custom AVIO, with a ten-second interrupt deadline, bounded probing/analysis, file
+protocol only and a mov/matroska/webm/wav/mp3/flac/ogg/aac/png/jpeg format allowlist.
+Playlists, network inputs, special files and symlink inputs are rejected. The
+worker checks that the path still names the probed inode before committing a
+reference. No decoder/export pipeline or network fetch is started by importing.
+Video/audio need a known duration; still images receive a five-second initial
+clip. Imported clips append to their chosen track.
+
+Recording adds a single flattened composition take to the end of track 0. Its
+clip stays locked through finalization, grows with the recorder's active duration,
+and receives the final recording path when finalized. The rest of the timeline
+can be edited while recording; the future part of track 0 remains reserved so
+edits cannot obstruct the growing take. Undo/redo is unavailable while recording
+and never restores a history snapshot containing capture locks. Timeline seek
+currently moves the document playhead only; it does not claim media playback.
+
+`tests/test_project_session.c` exercises the real worker/codec and FFmpeg probe
+with isolated application/recording handoff stubs. It covers dirty-save revisions,
+stale and idle project open, WAV import, playlist/network rejection, captured-clip
+locking/finalization, concurrent editing on another track and undo/redo. These are
+not claims of end-to-end application command routing or separately captured tracks.
