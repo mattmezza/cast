@@ -488,6 +488,7 @@ static void copy_config(AppLive *out, const PanelSnapshot *snapshot, const Daemo
 {
     const Config *config = &snapshot->config;
     out->project=snapshot->project;
+    out->live_lane=snapshot->live_lane;
     const State *state = &snapshot->state;
     out->setting_count=config->extension_setting_count;
     if(out->setting_count>APP_SETTING_MAX)out->setting_count=APP_SETTING_MAX;

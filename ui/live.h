@@ -5,6 +5,7 @@
 #include "stream_controls.h"
 #include "../src/encoder_capabilities.h"
 #include "../src/audio_monitor_controller.h"
+#include "../src/live_media_status.h"
 #include "../src/runtime_metrics.h"
 typedef enum { APP_EDIT_NONE, APP_EDIT_LAYOUT, APP_EDIT_FIT, APP_EDIT_ANCHOR, APP_EDIT_SIZE,
     APP_EDIT_BACKGROUND_SOURCE, APP_EDIT_SCREEN_BACKGROUND, APP_EDIT_CAMERA_BACKGROUND,
@@ -35,6 +36,7 @@ typedef struct { char section[50], key[64], value[1024]; } AppSetting;
 typedef struct {
     bool enabled, connected, has_frame, pro, pending, snapshot_busy;
     CastProjectSnapshot project;
+    CastLiveMediaStatus live_lane;
     AppStreamSnapshot stream;
     CastEncoderCapabilities encoders;
     CastMonitorControllerStatus monitor;

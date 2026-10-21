@@ -72,9 +72,9 @@ static void timecode(char *out, size_t n, uint64_t ns)
     snprintf(out, n, "%02llu:%02llu.%03llu", (unsigned long long)(ms / 60000),
              (unsigned long long)(ms / 1000 % 60), (unsigned long long)(ms % 1000));
 }
-static const char *field(cui_context *ui, const cui_theme *t, const char *name,
+static const char *field_mode(cui_context *ui, const cui_theme *t, const char *name,
                          const char *label, const char *ack, float width, bool disabled,
-                         bool *submitted)
+                         bool *submitted, bool draft)
 {
     cui_id id = cui_id_from(ui, name);
     TimelineField *s = cui_resource_get(ui, id, UINT64_C(0x74696d656669656c), sizeof *s,
@@ -86,7 +86,7 @@ static const char *field(cui_context *ui, const cui_theme *t, const char *name,
         if (!s->edit) return "";
     }
     bool focused = cui_focused(ui) == id;
-    if ((strcmp(s->acknowledged, ack) && !focused) || (disabled && !s->disabled) || (s->focused && !focused))
+    if ((strcmp(s->acknowledged, ack) && !focused) || (disabled && !s->disabled) || (!draft && s->focused && !focused))
         cui_edit_set_content(s->edit, (cui_edit_content){.text = cui_string(ack)});
     snprintf(s->acknowledged, sizeof s->acknowledged, "%s", ack);
     s->disabled = disabled; s->focused = focused;
@@ -95,6 +95,9 @@ static const char *field(cui_context *ui, const cui_theme *t, const char *name,
     if (submitted) *submitted = result.submitted;
     return s->buffer;
 }
+static const char *field(cui_context *ui,const cui_theme *t,const char *name,
+    const char *label,const char *ack,float width,bool disabled,bool *submitted)
+{return field_mode(ui,t,name,label,ack,width,disabled,submitted,false);}
 static const CastTimelineClip *selected(const CastProjectSnapshot *, uint64_t);
 static bool seconds_value(const char *text,uint64_t *ns) {
     char *end;double value=strtod(text,&end);
@@ -108,8 +111,105 @@ static bool button(cui_context *ui, const cui_theme *t, const char *id, const ch
         (cui_button_options){.height = 28, .font_size = 11, .variant = CUI_BUTTON_GHOST,
             .icon = cui_string(icon), .disabled = disabled});
 }
+typedef struct {uint64_t selected; bool range; cui_scroll_state scroll;} MediaBinView;
+static MediaBinView *media_bin(cui_context *ui,const cui_theme *t,const CastProjectSnapshot *p,
+                               bool blocked,bool privacy,const CastLiveMediaStatus *live,AppTimelineSubmit submit,void *user)
+{
+    MediaBinView *view=cui_resource_get(ui,cui_id_from(ui,"media-bin-state"),
+        UINT64_C(0x6d6564696162696e),sizeof *view,NULL,NULL);
+    if(!view)return NULL;
+    const float bin_width=210;
+    bool present=false;
+    for(unsigned i=0;i<p->media_count;++i)if(p->media[i].id==view->selected)present=true;
+    if(!present)view->selected=0;
+    cui_begin_box(ui,cui_id_from(ui,"media-bin"),(cui_box){.width=-1,.gap=6,
+        .border=cast_design_tokens(t->dark).hair,.custom_border_edges=true,.border_edges={.top=1},
+        .custom_padding=true,.padding_edges={.top=10,.bottom=4}});
+    cui_begin_box(ui,0,(cui_box){.width=-1,.row=true,.align_y=CUI_ALIGN_CENTER,.gap=6});
+    cui_text_ex(ui,cui_string("MEDIA BIN"),10,t->muted,0,(cui_text_style){.weight=CUI_TEXT_WEIGHT_SEMIBOLD});
+    if(button(ui,t,"media-bin-import","Add source…","cast-folder",blocked||p->busy))
+        send(submit,user,"file","source",NULL,NULL);
+    cui_end_box(ui);
+    if(!p->media_count)cui_text(ui,cui_string("Add video or audio sources.\nSources stay outside edit clips."),11,t->muted);
+    else {
+        cui_id scroll_id=cui_id_from(ui,"media-bin-list");
+        cui_scroll_options options={.width=-1,.height=fminf(128,p->media_count*32.f),
+            .content_height=p->media_count*32.f,.vertical=true};
+        if(cui_scrollable_begin(ui,scroll_id,t,&view->scroll,options)) {
+            for(unsigned i=0;i<p->media_count&&i<CAST_TIMELINE_MEDIA_MAX;++i) {
+                const CastProjectMediaView *m=&p->media[i];
+                char name[48],time[32];snprintf(name,sizeof name,"media-bin-source-%llu",(unsigned long long)m->id);
+                timecode(time,sizeof time,m->duration_ns);
+                cui_id id=cui_id_from(ui,name);
+                cui_interaction item=cui_base_button(ui,id,cui_string(m->label),blocked||p->busy);
+                cui_update_semantic(ui,id,view->selected==m->id,0);
+                cui_begin_box(ui,id,(cui_box){.width=-1,.height=32,.fixed_height=true,.row=true,.gap=6,
+                    .custom_padding=true,.padding_edges={.left=6,.right=6},.align_y=CUI_ALIGN_CENTER,
+                    .background=view->selected==m->id?cast_design_tokens(t->dark).selected:
+                        item.hovered?cast_design_tokens(t->dark).hover:t->surface,
+                    .border=cast_design_tokens(t->dark).hair,.custom_border_edges=true,.border_edges={.bottom=1}});
+                cui_text(ui,cui_string(m->kind==CAST_TIMELINE_AUDIO?"A":m->kind==CAST_TIMELINE_IMAGE?"I":"V"),10,t->muted);
+                cui_text_ellipsis(ui,id^UINT64_C(0x6c6162656c),cui_string(m->label),
+                    (cui_text_ellipsis_options){.width=100,.font_size=11,.color=m->missing?t->danger:t->text});
+                cui_text_ex(ui,cui_string(m->missing?"Missing":time),9,t->muted,0,(cui_text_style){.family=1,.monospace=true});
+                cui_end_box(ui);
+                if(item.activated){view->selected=m->id;cui_invalidate(ui);}
+            }
+            cui_scrollable_end_ex(ui,scroll_id,t,&view->scroll,options);
+        }
+    }
+    const CastProjectMediaView *selected_source=NULL;
+    for(unsigned i=0;i<p->media_count;++i)if(p->media[i].id==view->selected)selected_source=&p->media[i];
+    bool starting=live->state==CAST_LIVE_STARTING;
+    bool active=starting||live->state==CAST_LIVE_PLAYING||live->state==CAST_LIVE_PAUSED;
+    bool valid_range=true;char range[80]={0};
+    if(selected_source) {
+        char scope[32];snprintf(scope,sizeof scope,"%llu",(unsigned long long)selected_source->id);cui_push_id(ui,scope);
+        cui_begin_box(ui,0,(cui_box){.width=-1,.row=true,.gap=8,.align_y=CUI_ALIGN_CENTER});
+        cui_text(ui,cui_string("Use source range"),11,t->muted);
+        cui_switch_ex(ui,cui_id_from(ui,"media-bin-range"),t,cui_string(""),&view->range,NULL,
+            (cui_switch_options){.size=CUI_CONTROL_SMALL,.width=28,.disabled=blocked||starting,
+                .accessibility_label=cui_string("Use source range")});
+        cui_end_box(ui);
+        if(view->range) {
+            char duration[64];snprintf(duration,sizeof duration,"%.3f",(double)selected_source->duration_ns/1e9);
+            bool submitted=false;
+            cui_text(ui,cui_string("In · seconds"),11,t->muted);
+            const char *in=field_mode(ui,t,"media-bin-source-in","Source in seconds","0.000",-1,blocked||starting,&submitted,true);
+            uint64_t in_ns=0,duration_ns=0;
+            valid_range=seconds_value(in,&in_ns);
+            cui_text(ui,cui_string("Duration · seconds"),11,t->muted);
+            const char *length=field_mode(ui,t,"media-bin-duration","Source duration seconds",duration,-1,blocked||starting,&submitted,true);
+            valid_range=seconds_value(length,&duration_ns)&&duration_ns>0&&valid_range&&
+                (!selected_source->duration_ns||(in_ns<=selected_source->duration_ns&&duration_ns<=selected_source->duration_ns-in_ns));
+            snprintf(range,sizeof range,"%llu,%llu",(unsigned long long)in_ns,(unsigned long long)duration_ns);
+            if(!valid_range)cui_text(ui,cui_string("Choose a positive range\ninside the source."),11,t->danger);
+        }
+        cui_pop_id(ui);
+    }
+    cui_begin_box(ui,0,(cui_box){.width=-1,.row=true,.gap=4});
+    if(button(ui,t,"media-bin-play","Play","",blocked||privacy||starting||!selected_source||selected_source->missing||!valid_range)) {
+        char id[32];snprintf(id,sizeof id,"%llu",(unsigned long long)selected_source->id);
+        send(submit,user,"media","play",id,view->range?range:NULL);
+    }
+    if(live->state==CAST_LIVE_PAUSED) {
+        if(button(ui,t,"media-bin-resume","Resume","",blocked||privacy))send(submit,user,"media","resume",NULL,NULL);
+    } else if(button(ui,t,"media-bin-pause","Pause","",blocked||live->state!=CAST_LIVE_PLAYING))send(submit,user,"media","pause",NULL,NULL);
+    if(button(ui,t,"media-bin-stop","Stop","",blocked||!active))send(submit,user,"media","stop",NULL,NULL);
+    cui_end_box(ui);
+    const char *state=live->state==CAST_LIVE_STARTING?"Starting":live->state==CAST_LIVE_PLAYING?"Playing":
+        live->state==CAST_LIVE_PAUSED?"Paused":live->state==CAST_LIVE_ENDED?"Ended":live->state==CAST_LIVE_FAILED?"Failed":"Off";
+    char position[32],duration[32],status[96];timecode(position,sizeof position,live->position_ns);timecode(duration,sizeof duration,live->duration_ns);
+    snprintf(status,sizeof status,"%s · %s / %s",state,position,duration);
+    cui_text(ui,cui_string(status),10,t->muted);
+    if(live->error[0])cui_text_ellipsis(ui,cui_id_from(ui,"media-bin-error"),cui_string(live->error),
+        (cui_text_ellipsis_options){.width=fmaxf(100,bin_width),.font_size=11,.color=t->danger});
+    if(privacy)cui_text(ui,cui_string("Global privacy blocks\nPlay and Resume."),11,t->muted);
+    cui_text(ui,cui_string("Video replaces the full stage.\nStop or End restores the stage.\nSource audio joins the mix.\nVirtual audio uses its own switch."),10,t->muted);
+    cui_end_box(ui);return view;
+}
 void app_project_controls(cui_context *ui, const cui_theme *t, const CastProjectSnapshot *p,
-                          bool blocked, AppTimelineSubmit submit, void *user)
+                          bool blocked, bool privacy, const CastLiveMediaStatus *live, AppTimelineSubmit submit, void *user)
 {
     cui_begin_box(ui, cui_id_from(ui, "project-controls"), (cui_box){.width = -1, .gap = 8});
     cui_text_ex(ui, cui_string(p->open ? p->name : "No project open"), 13, t->text, 0,
@@ -132,6 +232,7 @@ void app_project_controls(cui_context *ui, const cui_theme *t, const CastProject
     if(button(ui,t,"project-browse","Browse…","cast-folder",blocked || p->busy || p->recording))send(submit,user,"file","open",NULL,NULL);
     if(button(ui,t,"project-save-as","Save as…","cast-save",blocked || p->busy || !p->open))send(submit,user,"file","save",NULL,NULL);
     cui_end_box(ui);
+    media_bin(ui,t,p,blocked,privacy,live,submit,user);
     if(p->missing_count) {
         cui_text(ui,cui_string("Missing media"),12,t->danger);
         for(unsigned i=0;i<p->media_count && i<CAST_TIMELINE_MEDIA_MAX;++i)if(p->media[i].missing) {
@@ -500,10 +601,10 @@ void app_timeline_dock(cui_context *ui, const cui_theme *t, const CastProjectSna
     } else {
         bool submitted = false;
         const char *path = field(ui, t, "timeline-import-path", "Media file path", "", o.width > 600 ? 240 : 140, blocked, &submitted);
-        if (button(ui, t, "timeline-import", "Import", "cast-folder", blocked || !path[0]) || submitted)
+        if (button(ui, t, "timeline-import", o.width>700?"Insert clip":"Insert", "cast-folder", blocked || !path[0]) || submitted)
             send(submit, user, "timeline", "import", path, NULL);
     }
-    if(button(ui,t,"timeline-browse","Browse…","cast-folder",blocked))send(submit,user,"file","import",NULL,NULL);
+    if(button(ui,t,"timeline-browse",o.width>700?"Insert clip…":"Browse…","cast-folder",blocked))send(submit,user,"file","import",NULL,NULL);
     if (button(ui, t, "timeline-undo", "Undo", "undo", blocked || p->recording)) send(submit, user, "timeline", "undo", NULL, NULL);
     if (button(ui, t, "timeline-redo", "Redo", "redo", blocked || p->recording)) send(submit, user, "timeline", "redo", NULL, NULL);
     cui_end_box(ui);

@@ -642,7 +642,7 @@ static void source_content(cui_context *ui, AppState *s, const cui_theme *t) {
         rule(ui, t);
     }
     if (s->workspace == APP_RECORD) {
-        app_project_controls(ui,t,&s->live.project,composition_disabled(s)||s->extension_requested||!s->live.connected,app_timeline_submit,s);
+        app_project_controls(ui,t,&s->live.project,composition_disabled(s)||s->extension_requested||!s->live.connected,s->live.group_paused,&s->live.live_lane,app_timeline_submit,s);
         rule(ui, t);
     }
     if (section(ui, s, t, 0, "Composition")) {
@@ -1432,14 +1432,15 @@ bool app_timeline_submit(void *user,unsigned argc,const char *const *argv) {
         FileDialogRequest r={.argc=3,.path_index=2,.filter_count=1};
         const char *export_extension=!strcmp(a->live.record_container,"mp4")?"mp4":!strcmp(a->live.record_container,"mov")?"mov":!strcmp(a->live.record_container,"webm")?"webm":"mkv";
         char export_name[64];snprintf(export_name,sizeof export_name,"Montage.%s",export_extension);
-        bool media=!strcmp(argv[1],"import");
+        bool source=!strcmp(argv[1],"source");
+        bool media=source||!strcmp(argv[1],"import");
         bool exporting=!strcmp(argv[1],"export");
         bool save=exporting || !strcmp(argv[1],"save");
         if(!media && !save && strcmp(argv[1],"open"))return false;
         snprintf(r.args[0],sizeof r.args[0],"%s",media || exporting?"timeline":"project");
-        snprintf(r.args[1],sizeof r.args[1],"%s",media?"import":exporting?"export":save?"save":"open");
+        snprintf(r.args[1],sizeof r.args[1],"%s",source?"source":media?"import":exporting?"export":save?"save":"open");
         r.save=save;
-        snprintf(r.title,sizeof r.title,"%s",media?"Import media":exporting?"Export montage":save?"Save project":"Open project");
+        snprintf(r.title,sizeof r.title,"%s",source?"Add media source":media?"Insert edit clip":exporting?"Export montage":save?"Save project":"Open project");
         snprintf(r.filters[0].name,sizeof r.filters[0].name,"%s",media?"Video and audio":exporting?"Video export":"Cast project");
         snprintf(r.filters[0].extensions,sizeof r.filters[0].extensions,"%s",media?"mp4;mkv;mov;webm;wav;flac;mp3;ogg;m4a":exporting?export_extension:"cast");
         if(save)snprintf(r.default_path,sizeof r.default_path,"%s",exporting?export_name:a->live.project.path[0]?a->live.project.path:"Untitled.cast");

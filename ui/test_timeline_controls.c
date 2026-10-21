@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 typedef struct {
-    cui_context *ui;cui_theme theme;CastProjectSnapshot project;
+    cui_context *ui;cui_theme theme;CastProjectSnapshot project;CastLiveMediaStatus live;bool privacy;
     unsigned page,calls;float width;bool blocked;char verb[32],action[32],value[4096],parameter[128];
 } Fixture;
 static cui_size measure(void *user,cui_str text,float size)
@@ -22,7 +22,7 @@ static void frame(Fixture *f)
 {
     assert(cui_begin_frame(f->ui,f->width,700,.016f));
     cui_begin_box(f->ui,cui_id_from(f->ui,"root"),(cui_box){.width=-1,.height=-1});
-    if(f->page)app_project_controls(f->ui,&f->theme,&f->project,f->blocked,submit,f);
+    if(f->page)app_project_controls(f->ui,&f->theme,&f->project,f->blocked,f->privacy,&f->live,submit,f);
     else app_timeline_dock(f->ui,&f->theme,&f->project,
         (AppTimelineOptions){.connected=true,.blocked=f->blocked,.width=f->width,.height=262},submit,f);
     cui_end_box(f->ui);cui_draw_list draw=cui_end_frame(f->ui);
@@ -43,6 +43,21 @@ static void key(Fixture *f,cui_key value,unsigned mods)
 {
     event(f,(cui_event){.type=CUI_EVENT_KEY_DOWN,.key=value,.modifiers=mods});
     event(f,(cui_event){.type=CUI_EVENT_KEY_UP,.key=value,.modifiers=mods});settle(f);
+}
+static cui_id source_id(Fixture *f,const char *name)
+{uint64_t h=cui_id_from(f->ui,"1");h=(h^255)*UINT64_C(1099511628211);
+ for(const unsigned char *p=(const unsigned char *)name;*p;++p){h=(h^*p)*UINT64_C(1099511628211);}
+ return h?h:1;}
+static void source_click(Fixture *f,const char *name)
+{
+    cui_rect r=cui_bounds(f->ui,source_id(f,name));assert(r.w>0&&r.h>0);
+    event(f,(cui_event){.type=CUI_EVENT_POINTER_DOWN,.x=r.x+r.w/2,.y=r.y+r.h/2});
+    event(f,(cui_event){.type=CUI_EVENT_POINTER_UP,.x=r.x+r.w/2,.y=r.y+r.h/2});settle(f);
+}
+static void source_text(Fixture *f,const char *name,const char *text)
+{
+    source_click(f,name);key(f,CUI_KEY_A,CUI_MOD_CTRL);
+    cui_event e={.type=CUI_EVENT_TEXT};snprintf(e.text,sizeof e.text,"%s",text);event(f,e);
 }
 int main(void)
 {
@@ -66,8 +81,32 @@ int main(void)
     f.blocked=false;f.page=1;strcpy(f.project.path,"/tmp/talk.castproject");settle(&f);
     click(&f,"project-save");assert(f.calls==4&&!strcmp(f.verb,"project")&&!strcmp(f.action,"save"));
     f.project.busy=true;settle(&f);click(&f,"project-open");assert(f.calls==4);
-    f.project.busy=false;
-    for(unsigned width=260;width<=1040;width*=2){f.width=(float)width;for(f.page=0;f.page<2;++f.page)settle(&f);}
+    f.project.busy=false;settle(&f);
+    unsigned bin_before=f.calls;click(&f,"media-bin-source-1");assert(f.calls==bin_before&&f.project.clip_count==1);
+    click(&f,"media-bin-import");assert(f.calls==bin_before+1&&!strcmp(f.verb,"file")&&!strcmp(f.action,"source"));
+    assert(f.project.clip_count==1&&f.project.media_count==1);
+    unsigned playback_before=f.calls;
+    click(&f,"media-bin-play");
+    assert(f.calls==playback_before+1&&!strcmp(f.verb,"media")&&!strcmp(f.action,"play")&&!strcmp(f.value,"1")&&!f.parameter[0]);
+    assert(f.live.state==CAST_LIVE_IDLE&&f.project.clip_count==1);
+    f.privacy=true;settle(&f);click(&f,"media-bin-play");assert(f.calls==playback_before+1);
+    f.live.state=CAST_LIVE_PAUSED;settle(&f);click(&f,"media-bin-resume");assert(f.calls==playback_before+1);
+    click(&f,"media-bin-stop");assert(f.calls==playback_before+2&&!strcmp(f.action,"stop"));
+    f.privacy=false;settle(&f);click(&f,"media-bin-resume");assert(f.calls==playback_before+3&&!strcmp(f.action,"resume"));
+    f.live.state=CAST_LIVE_PLAYING;settle(&f);click(&f,"media-bin-pause");assert(f.calls==playback_before+4&&!strcmp(f.action,"pause"));
+    f.live.state=CAST_LIVE_STARTING;settle(&f);click(&f,"media-bin-play");click(&f,"media-bin-pause");assert(f.calls==playback_before+4);
+    f.live.state=CAST_LIVE_IDLE;f.project.media[0].missing=true;settle(&f);click(&f,"media-bin-play");assert(f.calls==playback_before+4);
+    f.project.media[0].missing=false;f.blocked=true;settle(&f);click(&f,"media-bin-play");assert(f.calls==playback_before+4);
+    f.blocked=false;f.project.media[0].duration_ns=UINT64_C(10000000000);settle(&f);
+    source_click(&f,"media-bin-range");
+    source_text(&f,"media-bin-source-in","2");
+    source_text(&f,"media-bin-duration","3");
+    click(&f,"media-bin-play");assert(f.calls==playback_before+5&&!strcmp(f.parameter,"2000000000,3000000000"));
+    assert(f.project.clip_count==1&&f.live.state==CAST_LIVE_IDLE);
+    source_text(&f,"media-bin-duration","12");click(&f,"media-bin-play");assert(f.calls==playback_before+5);
+    source_click(&f,"media-bin-range");
+    for(unsigned width=230;width<=920;width*=2){f.width=(float)width;for(f.page=0;f.page<2;++f.page)settle(&f);
+        cui_rect add=cui_bounds(f.ui,cui_id_from(f.ui,"media-bin-import"));assert(add.x>=0&&add.x+add.w<=f.width+1);}
     f.page=0;f.width=800;settle(&f);
     unsigned seek_before=f.calls;click(&f,"timeline-tick-1");
     assert(f.calls==seek_before+1&&!strcmp(f.action,"seek")&&f.project.playhead_ns==UINT64_C(5000000000));
