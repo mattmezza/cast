@@ -25,7 +25,8 @@ edits when recording is idle. Play/Pause controls provide silent video review. T
 Live returns to the current composition. Review decoding runs on an independent
 worker and never activates an output or opens an audio playback device.
 
-Export writes a new Matroska montage using the existing native FFmpeg libraries;
+Export writes a new montage using the current recording container and encoder
+settings through the existing native FFmpeg libraries;
 it reports progress and supports cancellation. Existing destinations are never
 overwritten. Preview and export include imported video audio and audio-only
 clips with their gain/mute settings. The timeline currently has coarse ruler
@@ -35,8 +36,12 @@ caches and live clip insertion/mixing during capture remain separate work.
 Streaming destination and encoding settings now use the existing backend,
 including lifecycle/connection statistics and reconnect options. Secret contents
 are not copied into UI snapshots. Microphone and desktop meters report measured
-post-gain input, including freshness and clipping; monitoring playback is not yet
-implemented.
+post-gain input, including freshness and clipping. Explicit microphone monitoring
+uses the default audio output: `monitor on`, `monitor off`, and `monitor status`.
+It starts off and requires an enabled microphone and resumed global privacy.
+Device startup and shutdown run on a separate worker; privacy and microphone
+route changes retire queued samples. Monitoring does not enable microphone or
+desktop capture. Use headphones to avoid acoustic feedback.
 
 Interactive workspace launches retain theme, panels, timeline visibility and
 window dimensions in a separate private workspace preference file. Automated

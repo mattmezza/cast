@@ -73,6 +73,13 @@ def main():
                 assert not initial["audio"]["mic"]["enabled"]
                 assert not initial["audio"]["desktop"]["enabled"]
                 assert not initial["audio"]["virtual"]["enabled"]
+                # Monitoring is inert until explicitly enabled; a disabled mic
+                # must be rejected before any output device worker is created.
+                assert "state=0 capture_ready=0" in command("monitor", "status")
+                command("monitor", "off")
+                command("monitor", "on", success=False)
+                assert "state=0 capture_ready=0" in command("monitor", "status")
+                assert not status()["audio"]["mic"]["enabled"]
                 command("project", "new")
                 take, project, movie = folder / "take.mkv", folder / "test.cast", folder / "export.mkv"
                 command("record", "start", str(take))

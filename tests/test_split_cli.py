@@ -327,6 +327,12 @@ class CompletionTests(unittest.TestCase):
                                  {'status', 'inspect', 'import', 'reload', 'remove'})
                 self.assertIn('--json', self.complete(shell, name, 'license', 'status', ''))
                 self.assertIn('--json', self.complete(shell, name, 'license', 'inspect', 'a.json', ''))
+                self.assertEqual(self.complete(shell, name, 'monitor', ''),
+                                 {'on', 'off', 'status'})
+                self.assertTrue({'new', 'open', 'save', 'recover', 'status'} <=
+                                self.complete(shell, name, 'project', ''))
+                self.assertTrue({'play', 'pause', 'live', 'relink', 'export'} <=
+                                self.complete(shell, name, 'timeline', ''))
                 self.assertIn('migrate', self.complete(shell, name, 'config', ''))
                 self.assertIn('--availability', self.complete(shell, name, 'config', 'check', '--'))
                 self.assertTrue({'--edition', '--write', '--backup'} <=

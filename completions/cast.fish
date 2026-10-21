@@ -70,7 +70,7 @@ function __cast_setting_value
 end
 
 complete -c cast -f
-complete -c cast -n __cast_at -a 'edition features license layout split camera screen logo text capture zoom cursor clicks keys annotations pause resume virtual stream record audio preset preview status doctor config settings panel reset quit completions setup update help'
+complete -c cast -n __cast_at -a 'edition features license layout split camera screen logo text capture zoom cursor clicks keys annotations pause resume virtual stream record monitor project timeline audio preset preview status doctor config settings panel reset quit completions setup update help'
 complete -c cast -l help -d 'Show command reference'
 complete -c cast -n __cast_at -l headless -d 'Run the daemon without opening the app'
 complete -c cast -n __cast_at -l version -d 'Print cast version'
@@ -126,6 +126,11 @@ complete -c cast -n '__cast_at virtual' -a 'start stop pause resume toggle freez
 complete -c cast -n '__cast_at record' -a 'start stop pause resume toggle freeze unfreeze blur unblur cut cancel title subtitle footer'
 complete -c cast -n '__cast_at virtual blur; or __cast_at record blur' -a 'on off toggle'
 complete -c cast -n '__cast_at record start' -F
+complete -c cast -n '__cast_at monitor' -a 'on off status'
+complete -c cast -n '__cast_at project' -a 'new open save recover status'
+complete -c cast -n '__cast_at project open; or __cast_at project save; or __cast_at project recover' -F
+complete -c cast -n '__cast_at timeline' -a 'import move trim split remove gain undo redo seek play pause live relink export'
+complete -c cast -n '__cast_at timeline import; or __cast_at timeline export' -F
 complete -c cast -n '__cast_at audio' -a 'list mic desktop virtual'
 complete -c cast -n '__cast_at audio mic; or __cast_at audio desktop' -a 'on off toggle source gain'
 complete -c cast -n '__cast_at audio virtual' -a 'on off toggle'
@@ -176,7 +181,7 @@ complete -c cast -n __cast_global_option -l stream-video-encoder -xa 'auto libx2
 
 # Both edition executables share this grammar.
 complete -c cast-pro -f
-complete -c cast-pro -n __cast_at -a 'edition features license layout split camera screen logo text capture zoom cursor clicks keys annotations pause resume virtual stream record audio preset preview status doctor config settings panel reset quit completions setup update help'
+complete -c cast-pro -n __cast_at -a 'edition features license layout split camera screen logo text capture zoom cursor clicks keys annotations pause resume virtual stream record monitor project timeline audio preset preview status doctor config settings panel reset quit completions setup update help'
 complete -c cast-pro -l help -d 'Show command reference'
 complete -c cast-pro -n __cast_at -l headless -d 'Run the daemon without opening the app'
 complete -c cast-pro -n __cast_at -l version -d 'Print cast version'
@@ -232,6 +237,11 @@ complete -c cast-pro -n '__cast_at virtual' -a 'start stop pause resume toggle f
 complete -c cast-pro -n '__cast_at record' -a 'start stop pause resume toggle freeze unfreeze blur unblur cut cancel title subtitle footer'
 complete -c cast-pro -n '__cast_at virtual blur; or __cast_at record blur' -a 'on off toggle'
 complete -c cast-pro -n '__cast_at record start' -F
+complete -c cast-pro -n '__cast_at monitor' -a 'on off status'
+complete -c cast-pro -n '__cast_at project' -a 'new open save recover status'
+complete -c cast-pro -n '__cast_at project open; or __cast_at project save; or __cast_at project recover' -F
+complete -c cast-pro -n '__cast_at timeline' -a 'import move trim split remove gain undo redo seek play pause live relink export'
+complete -c cast-pro -n '__cast_at timeline import; or __cast_at timeline export' -F
 complete -c cast-pro -n '__cast_at audio' -a 'list mic desktop virtual'
 complete -c cast-pro -n '__cast_at audio mic; or __cast_at audio desktop' -a 'on off toggle source gain'
 complete -c cast-pro -n '__cast_at audio virtual' -a 'on off toggle'

@@ -24,7 +24,7 @@ _cast_complete()
     done
     local cur=${words[current]} raw=${COMP_WORDS[COMP_CWORD]} offer='' mode=''
     local trim=$((${#cur} - ${#raw})) command_index=1 command='' argument=0
-    local commands='edition features license layout split camera screen logo text capture zoom cursor clicks keys annotations pause resume virtual stream record audio preset preview status doctor config settings panel reset quit completions setup update help'
+    local commands='edition features license layout split camera screen logo text capture zoom cursor clicks keys annotations pause resume virtual stream record monitor project timeline audio preset preview status doctor config settings panel reset quit completions setup update help'
     local pro=0
     if _cast_is_pro "${words[0]}"; then
         pro=1
@@ -146,6 +146,12 @@ _cast_complete()
                 if [[ $first == start ]]; then mode=file
                 elif [[ $first == blur ]]; then offer='on off toggle'
                 fi ;;
+            monitor:1) offer='on off status' ;;
+            project:1) offer='new open save recover status' ;;
+            project:2) case $first in open|save|recover) mode=file ;; esac ;;
+            timeline:1) offer='import move trim split remove gain undo redo seek play pause live relink export' ;;
+            timeline:2) case $first in import|export) mode=file ;; esac ;;
+            timeline:3) [[ $first == relink ]] && mode=file ;;
             audio:1) offer='list mic desktop virtual' ;;
             audio:2)
                 if [[ $first == virtual ]]; then offer='on off toggle'

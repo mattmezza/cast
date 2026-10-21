@@ -7,6 +7,7 @@
 #include "stream.h"
 typedef struct AppRuntime AppRuntime;
 typedef struct CastProjectSession CastProjectSession;
+typedef struct CastMonitorController CastMonitorController;
 
 /* Daemon session storage stays stable while asynchronous selection references it. */
 typedef struct {
@@ -30,6 +31,7 @@ typedef struct App {
     Platform *platform;
     Compositor *compositor;
     Media *media;
+    CastMonitorController *monitor;
     Frame screen, camera, virtual, record, neutral, frozen, record_frozen, virtual_raw, record_raw;
     Frame stream, stream_raw, stream_frozen, composition_preview;
     char composition_error[256];

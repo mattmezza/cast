@@ -8,6 +8,7 @@
 #include "panel_lifecycle.h"
 #include "update.h"
 #include "desktop_update_ui.h"
+#include "audio_monitor_controller.h"
 #ifdef WITH_PANEL
 #include "panel.h"
 #endif
@@ -88,6 +89,7 @@ static const char help[] =
     "  virtual message TEXT; virtual|record title|subtitle|footer TEXT\n"
     "  record start [PATH]; record stop|pause|resume|toggle|freeze|unfreeze|cut|cancel\n"
     "  record blur on|off|toggle; cut resume reuses the file with the configured countdown\n"
+    "  monitor on|off|status (microphone only; default audio output)\n"
     "  audio list; audio mic|desktop|virtual on|off|toggle\n"
     "  audio mic|desktop source NAME; audio mic|desktop gain PERCENT%\n"
     "  preset NAME|next|prev; preview on|off|toggle; preview target "
@@ -495,6 +497,28 @@ int app_shutdown_privacy(App *a, char *e, size_t n)
     }
     return result;
 }
+static void monitor_sync(App *a) {
+    if(!a->monitor)return;
+    AudioLevels levels;media_audio_levels(a->media,&levels);
+    audio_monitor_controller_update(a->monitor,(CastMonitorSessionState){
+        .mic_enabled=a->config.mic,.privacy=a->state.group_paused,.route_epoch=levels.mic.epoch});
+}
+static int monitor_command(App *a,int argc,char **argv,char *out,size_t size) {
+    if(argc!=2)return app_error(out,size,"monitor on|off|status");
+    if(!strcmp(argv[1],"status")) {
+        CastMonitorControllerStatus status;audio_monitor_controller_status(a->monitor,&status);
+        snprintf(out,size,"monitor state=%d capture_ready=%d%s%s",(int)status.state,status.session.capture_ready,
+            status.error[0]?" error=":"",status.error);return 0;
+    }
+    if(!strcmp(argv[1],"off")) {audio_monitor_controller_request_stop(a->monitor);snprintf(out,size,"monitor stop queued");return 0;}
+    if(strcmp(argv[1],"on"))return app_error(out,size,"monitor on|off|status");
+    if(!a->config.mic)return app_error(out,size,"enable and select a microphone before monitoring");
+    if(a->state.group_paused)return app_error(out,size,"resume global privacy before monitoring");
+    if(!a->monitor)a->monitor=audio_monitor_controller_create(a->media);
+    if(!a->monitor)return app_error(out,size,"cannot allocate microphone monitor");
+    monitor_sync(a);audio_monitor_controller_request_start(a->monitor);
+    snprintf(out,size,"microphone monitoring start queued on default audio output");return 0;
+}
 static void tick(App *a)
 {
     char e[CAST_ERR] = "";
@@ -527,6 +551,7 @@ static void tick(App *a)
         }
     }
     a->record_finalizing = finalizing;
+    monitor_sync(a);
     project_session_tick(a);
     app_runtime_sync(a);
     a->state.dropped_frames = dropped + a->loop_drops;
@@ -808,6 +833,8 @@ static void drain_peers(App *a, Peer *peers, int *count)
                     rc = safety;
                 } else if (!strcmp(argv[0], "project") || !strcmp(argv[0], "timeline")) {
                     rc = project_session_command(a, argc, argv, out, sizeof out);
+                } else if (!strcmp(argv[0],"monitor")) {
+                    rc=monitor_command(a,argc,argv,out,sizeof out);
                 } else if (!strcmp(argv[0], "--notes-window")) {
                     rc = app_runtime_notes_register(a, argc, argv, p->pid, out, sizeof out);
                 } else if (!strcmp(argv[0], "license") || !strcmp(argv[0], "edition") ||
@@ -825,6 +852,7 @@ static void drain_peers(App *a, Peer *peers, int *count)
                 if (rc) {
                     remember_error(a, out);
                 }
+                monitor_sync(a);
                 panel_transport_barrier(a->panel, a, false);
             }
         }
@@ -1127,6 +1155,7 @@ cleanup:
         app_runtime_stop(a);
         edition_service_close(a->edition);
         a->edition = NULL;
+        audio_monitor_controller_free(a->monitor);a->monitor=NULL;
         media_close(a->media);
     }
     if (a->edition) {

@@ -4,11 +4,13 @@
 #include "edition.h"
 #include "stream.h"
 #include "project_session.h"
+#include "audio_monitor_controller.h"
+#include "encoder_capabilities.h"
 #include "pro_runtime.h"
 #include <sys/types.h>
 
 /* Private protocol: both ends must come from the same build and struct layout. */
-#define PANEL_PROTOCOL_VERSION 7u
+#define PANEL_PROTOCOL_VERSION 8u
 #define PANEL_PREVIEW_COUNT 4
 /* Private composition is independent of the three outgoing privacy-gated lanes. */
 #define PANEL_PREVIEW_COMPOSITION 3
@@ -26,6 +28,8 @@ typedef struct {
     CastMotionSnapshot motion;
     CastProjectSnapshot project;
     AudioLevels audio_levels;
+    CastMonitorControllerStatus monitor;
+    CastEncoderCapabilities encoders;
     bool cinematic_active;
     Capabilities capabilities;
     bool connected, countdown, finalizing, command_failed;
