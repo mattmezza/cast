@@ -235,3 +235,17 @@ new/open and source replacement immediately invalidate old views. Active outputs
 cancel pending work and defer new decoding while retaining already decoded views
 for unchanged clips; idle resumes requests. Snapshot publication only copies
 bounded memory and never probes files or opens audio devices.
+
+`timeline source PATH` imports an independently usable source into the project's
+media bin through the same bounded asynchronous local-file probe. It adds no
+montage clip and is allowed during capture without changing the captured take or
+its track. Source references persist in the project, with duration and missing
+state in snapshots; the import is one undoable document edit.
+
+`project_session_live_source` creates a caller-owned immutable single-source
+timeline using memory only. It rejects unknown/missing sources and active capture
+media, and checks offset/duration against the probed source (maximum seven days).
+A zero duration selects the remaining audio/video source; still images start at
+zero and default to five seconds, with a five-second maximum. Failed calls leave
+the output unchanged. This API prepares a source document; it does not insert
+media into live capture or open playback/output devices.

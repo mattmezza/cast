@@ -149,8 +149,8 @@ _cast_complete()
             monitor:1) offer='on off status' ;;
             project:1) offer='new open save recover status' ;;
             project:2) case $first in open|save|recover) mode=file ;; esac ;;
-            timeline:1) offer='import move trim trim-left split remove gain undo redo seek play pause live relink export assets' ;;
-            timeline:2) case $first in import|export) mode=file ;; play) offer='silent' ;; assets) offer='focus' ;; esac ;;
+            timeline:1) offer='import source move trim trim-left split remove gain undo redo seek play pause live relink export assets' ;;
+            timeline:2) case $first in import|source|export) mode=file ;; play) offer='silent' ;; assets) offer='focus' ;; esac ;;
             timeline:3) [[ $first == relink ]] && mode=file ;;
             audio:1) offer='list mic desktop virtual' ;;
             audio:2)

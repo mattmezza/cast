@@ -5,7 +5,7 @@
 typedef struct CastProjectSession CastProjectSession;
 struct App;
 typedef struct {
-    uint64_t id;
+    uint64_t id, duration_ns;
     char label[96];
     CastTimelineKind kind;
     bool missing;
@@ -41,6 +41,11 @@ CastProjectSession *project_session_open(void);
 void project_session_close(CastProjectSession *);
 /* Bounded immediate PCM epoch barrier; resuming requires explicit play. */
 void project_session_silence(CastProjectSession *);
+/* Memory-only immutable single-source document. duration=0 selects remaining
+ * source, or five seconds for still images. Caller owns output storage. */
+int project_session_live_source(CastProjectSession *, uint64_t media_id,
+                                uint64_t source_in_ns, uint64_t duration_ns,
+                                CastTimeline *out, char *error, size_t error_size);
 /* Main-thread borrowed view; invalidated by tick/command/close. */
 struct CastFrame;
 const struct CastFrame *project_session_review_frame(CastProjectSession *);

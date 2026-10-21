@@ -58,12 +58,14 @@ static void seek_review(App *app)
     }
     assert(!"preview cancellation did not finish");
 }
-static CastProjectSnapshot snapshot(App *a)
+/* Avoid one large ABI return-value temporary per assertion under ASan. */
+static const CastProjectSnapshot *snapshot_view(App *a)
 {
-    CastProjectSnapshot s;
+    static CastProjectSnapshot s;
     project_session_snapshot(a->project, &s);
-    return s;
+    return &s;
 }
+#define snapshot(app) (*snapshot_view(app))
 static void wait_done(App *a)
 {
     for (unsigned i = 0; i < 5000; ++i) {
@@ -449,6 +451,67 @@ int main(void)
     assert(!command(a,4,image_import));wait_done(a);
     assert(snapshot(a).clip_count==1 && snapshot(a).media[0].kind==CAST_TIMELINE_IMAGE);
     assert(snapshot(a).clips[0].duration_ns==UINT64_C(5000000000));
+    /* Source-bin imports add no montage clip; the live document API is memory only. */
+    assert(!command(a, 2, new_project));
+    const char *source_import[] = {"timeline", "source", audio};
+    assert(!command(a, 3, source_import));
+    wait_done(a);
+    s = snapshot(a);
+    assert(s.media_count == 1 && !s.clip_count && s.dirty);
+    assert(s.media[0].duration_ns == UINT64_C(1000000000));
+    CastTimeline *source_doc = malloc(sizeof *source_doc), *source_before = malloc(sizeof *source_before);
+    assert(source_doc && source_before);
+    char source_error[256];
+    assert(!project_session_live_source(a->project, s.media[0].id, UINT64_C(250000000),
+                                      UINT64_C(500000000), source_doc, source_error, sizeof source_error));
+    assert(source_doc->media_count == 1 && source_doc->clip_count == 1);
+    assert(source_doc->clips[0].source_in_ns == UINT64_C(250000000));
+    assert(source_doc->clips[0].duration_ns == UINT64_C(500000000));
+    *source_before = *source_doc;
+    assert(project_session_live_source(a->project, s.media[0].id, UINT64_C(750000000),
+                                      UINT64_C(500000000), source_doc, source_error, sizeof source_error));
+    assert(project_session_live_source(a->project, UINT64_MAX, 0, 0, source_doc, source_error, sizeof source_error));
+    assert(!memcmp(source_before, source_doc, sizeof *source_doc));
+    assert(snapshot(a).revision == s.revision && !snapshot(a).clip_count);
+    assert(!command(a, 2, undo));
+    assert(!snapshot(a).media_count);
+    assert(!command(a, 2, redo));
+    assert(snapshot(a).media_count == 1 && !snapshot(a).clip_count);
+    assert(!command(a, 3, save)); wait_done(a);
+    assert(!command(a, 3, open)); wait_done(a);
+    assert(snapshot(a).media_count == 1 && !snapshot(a).clip_count);
+    assert(!rename(audio, moved));
+    assert(!command(a, 3, open)); wait_done(a);
+    assert(snapshot(a).missing_count == 1);
+    assert(project_session_live_source(a->project, snapshot(a).media[0].id, 0, 0,
+                                      source_doc, source_error, sizeof source_error));
+    assert(!memcmp(source_before, source_doc, sizeof *source_doc));
+    assert(!rename(moved, audio));
+    assert(!command(a, 3, open)); wait_done(a);
+    source_import[2] = bad;
+    assert(!command(a, 3, source_import)); wait_done(a);
+    s = snapshot(a);
+    assert(s.media_count == 2 && !s.clip_count && s.media[1].kind == CAST_TIMELINE_IMAGE);
+    assert(!project_session_live_source(a->project, s.media[1].id, 0, 0, source_doc, source_error, sizeof source_error));
+    assert(source_doc->clips[0].duration_ns == UINT64_C(5000000000));
+    *source_before = *source_doc;
+    assert(project_session_live_source(a->project, s.media[1].id, 1, 0, source_doc, source_error, sizeof source_error));
+    assert(project_session_live_source(a->project, s.media[1].id, 0, UINT64_C(6000000000), source_doc, source_error, sizeof source_error));
+    assert(!memcmp(source_before, source_doc, sizeof *source_doc));
+    a->state.recording = true;
+    a->state.record_started_ns = 200;
+    snprintf(a->state.record_path, sizeof a->state.record_path, "%s", audio);
+    duration = UINT64_C(100000000);
+    project_session_tick(a);
+    s = snapshot(a);
+    assert(s.clip_count == 1 && s.clips[0].capture_locked);
+    assert(project_session_live_source(a->project, s.clips[0].media_id, 0, 0, source_doc, source_error, sizeof source_error));
+    source_import[2] = audio;
+    assert(!command(a, 3, source_import)); wait_done(a);
+    assert(snapshot(a).media_count == 4 && snapshot(a).clip_count == 1);
+    a->state.recording = false;
+    project_session_tick(a);
+    free(source_before); free(source_doc);
     project_session_close(a->project);
     free(a);
     assert(!unlink(project));

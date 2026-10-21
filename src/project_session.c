@@ -28,6 +28,7 @@ typedef enum {
     JOB_AUTOSAVE,
     JOB_OPEN,
     JOB_IMPORT,
+    JOB_SOURCE,
     JOB_RELINK
 } JobKind;
 typedef struct {
@@ -255,6 +256,32 @@ static int fail(char *error, size_t size, const char *format, ...)
     va_end(args);
     return -1;
 }
+int project_session_live_source(CastProjectSession *s, uint64_t id, uint64_t in,
+                                uint64_t duration, CastTimeline *out, char *error, size_t size)
+{
+    if (!s || !out) return fail(error, size, "invalid source document arguments");
+    const CastTimelineMedia *media = timeline_media(&s->timeline, id);
+    if (!media || media->missing) return fail(error, size, "source media is unknown or missing");
+    for (unsigned i = 0; i < s->timeline.clip_count; ++i)
+        if (s->timeline.clips[i].media_id == id && s->timeline.clips[i].capture_locked)
+            return fail(error, size, "active capture media cannot be a live source");
+    uint64_t bound = media->kind == CAST_TIMELINE_IMAGE ? UINT64_C(5000000000) : media->duration_ns;
+    if (!bound || bound > CAST_TIMELINE_LIMIT_NS || in >= bound ||
+        (media->kind == CAST_TIMELINE_IMAGE && in))
+        return fail(error, size, "source offset or duration is unavailable");
+    if (!duration) duration = bound - in;
+    if (duration > bound - in) return fail(error, size, "source range exceeds media duration");
+    CastTimeline *candidate = calloc(1, sizeof *candidate);
+    if (!candidate) return fail(error, size, "out of memory creating source document");
+    timeline_init(candidate);
+    uint64_t new_id;
+    int result = timeline_add_media(candidate, media->path, media->kind, media->duration_ns,
+                                    &new_id, error, size);
+    if (!result) result = timeline_add_clip(candidate, new_id, 0, 0, in, duration, NULL, error, size);
+    if (!result) *out = *candidate;
+    free(candidate);
+    return result;
+}
 static uint64_t track_end(const CastTimeline *t, unsigned track)
 {
     uint64_t end = 0;
@@ -449,7 +476,7 @@ static void *worker(void *opaque)
         } else {
             job->result = probe(job);
         }
-        if (!job->result && job->kind != JOB_IMPORT) {
+        if (!job->result && job->kind != JOB_IMPORT && job->kind != JOB_SOURCE) {
             char *absolute = realpath(job->path, NULL);
             if (absolute && strlen(absolute) < sizeof job->path) {
                 strcpy(job->path, absolute);
@@ -562,6 +589,7 @@ static int queue(App *a, JobKind kind, const char *path, uint64_t reference, cha
              : kind == JOB_AUTOSAVE ? "Recovery autosave"
              : kind == JOB_OPEN     ? "Project open"
              : kind == JOB_RELINK   ? "Media relink"
+             : kind == JOB_SOURCE   ? "Source bin import"
                                     : "Media import");
     snprintf(out, size, "OK %s", s->status);
     return 0;
@@ -680,11 +708,12 @@ static void complete(App *a)
             *candidate = s->timeline;
             uint64_t media_id, clip_id;
             uint64_t duration = job->duration_ns ? job->duration_ns : UINT64_C(5000000000);
-            if ((s->capture_clip && !job->track) ||
+            bool source_only = job->kind == JOB_SOURCE;
+            if ((!source_only && s->capture_clip && !job->track) ||
                 timeline_add_media(candidate, job->path, job->media_kind, job->duration_ns,
                                    &media_id, job->error, sizeof job->error) ||
-                timeline_add_clip(candidate, media_id, job->track, track_end(candidate, job->track),
-                                  0, duration, &clip_id, job->error, sizeof job->error) ||
+                (!source_only && timeline_add_clip(candidate, media_id, job->track, track_end(candidate, job->track),
+                                  0, duration, &clip_id, job->error, sizeof job->error)) ||
                 timeline_checkpoint(s->history, &s->timeline, job->error, sizeof job->error)) {
                 snprintf(s->error, sizeof s->error, "%.255s",
                          *job->error ? job->error
@@ -692,7 +721,10 @@ static void complete(App *a)
             } else {
                 s->timeline = *candidate;
                 changed(s);
-                snprintf(s->status, sizeof s->status, "Imported media as clip %" PRIu64, clip_id);
+                if (source_only)
+                    snprintf(s->status, sizeof s->status, "Imported source media %" PRIu64, media_id);
+                else
+                    snprintf(s->status, sizeof s->status, "Imported media as clip %" PRIu64, clip_id);
             }
             free(candidate);
         }
@@ -936,6 +968,7 @@ void project_session_snapshot(CastProjectSession *s, CastProjectSnapshot *out)
         const CastTimelineMedia *m = &s->timeline.media[i];
         CastProjectMediaView *view = &out->media[i];
         view->id = m->id;
+        view->duration_ns = m->duration_ns;
         view->kind = m->kind;
         view->missing = m->missing;
         out->missing_count += m->missing;
@@ -1089,6 +1122,9 @@ int project_session_command(App *a, int argc, char **argv, char *out, size_t siz
             return fail(out, size, "unknown media identifier");
         }
         return queue(a, JOB_RELINK, argv[3], id, out, size);
+    }
+    if (!strcmp(argv[1], "source") && argc == 3) {
+        return queue(a, JOB_SOURCE, argv[2], 0, out, size);
     }
     if (!strcmp(argv[1], "import") && (argc == 3 || argc == 4)) {
         uint64_t track = 0;
