@@ -7,11 +7,12 @@
 #include "audio_monitor_controller.h"
 #include "encoder_capabilities.h"
 #include "runtime_metrics.h"
+#include "live_media.h"
 #include "pro_runtime.h"
 #include <sys/types.h>
 
 /* Private protocol: both ends must come from the same build and struct layout. */
-#define PANEL_PROTOCOL_VERSION 12u
+#define PANEL_PROTOCOL_VERSION 13u
 #define PANEL_PREVIEW_COUNT 4
 /* Private composition is independent of the three outgoing privacy-gated lanes. */
 #define PANEL_PREVIEW_COMPOSITION 3
@@ -32,6 +33,7 @@ typedef struct {
     CastMonitorControllerStatus monitor;
     CastEncoderCapabilities encoders;
     CastRuntimeMetricsView metrics;
+    CastLiveMediaStatus live_lane;
     bool cinematic_active;
     Capabilities capabilities;
     bool connected, countdown, finalizing, command_failed;

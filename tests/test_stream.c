@@ -124,6 +124,18 @@ static pid_t ingest_start(unsigned port, const char *output)
     assert(!"RTMP fixture did not start listening");
     return child;
 }
+/* Synthetic extra source: exercises actual encoder/privacy paths without devices. */
+static void extra_tone(void *user, uint64_t ns, float *pcm, unsigned frames)
+{
+    atomic_fetch_add((atomic_uint *)user, 1);
+    uint64_t first = (ns / UINT64_C(1000000000)) * 48000u +
+                     (ns % UINT64_C(1000000000)) * 48000u / UINT64_C(1000000000);
+    for (unsigned i = 0; i < frames; ++i) {
+        float sample = sinf((float)((first + i) % 48000u) * 6.2831853f * 440.f / 48000.f) * .25f;
+        pcm[i * 2] += sample;
+        pcm[i * 2 + 1] += sample;
+    }
+}
 struct Tone {
     CastAudio *audio;
     atomic_bool stop;
@@ -331,9 +343,9 @@ static void ingest_test(Config *config, CastAudio *audio, const char *directory)
     assert(stream_start(stream, config, error, sizeof(error)) < 0);
     Frame frame = {0};
     assert(frame_alloc(&frame, config->width, config->height) == 0);
-    struct Tone tone = {.audio = audio};
-    pthread_t thread;
-    assert(pthread_create(&thread, NULL, tone_main, &tone) == 0);
+    atomic_uint extra_calls = 0;
+    const CastAudioExtra extra = {.mix = extra_tone, .user = &extra_calls};
+    stream_set_extra_audio(stream, &extra);
     stream_privacy(stream, false);
     feed(stream, &frame, 0, false, 1100);
     wait_state(stream, STREAM_STREAMING, 2000);
@@ -379,8 +391,7 @@ static void ingest_test(Config *config, CastAudio *audio, const char *directory)
     double stop_ms = (cast_now_ns() - before) / 1e6;
     assert(stop_ms < 100);
     wait_state(stream, STREAM_STOPPED, 1000);
-    atomic_store(&tone.stop, true);
-    pthread_join(thread, NULL);
+    assert(atomic_load(&extra_calls) > 10);
     stream_close(stream);
     int child_status;
     uint64_t deadline = cast_now_ns() + 3000000000ULL;
@@ -749,6 +760,8 @@ int main(int argc, char **argv)
         stream_close(stream);
         frame_free(&frame);
         fprintf(stderr, "isolated fixture %s control %.3fms\n", argv[4], control_ms);
+    } else if (argc == 2 && !strcmp(argv[1], "--extra-audio")) {
+        ingest_test(&config, audio, directory);
     } else {
         ingest_test(&config, audio, directory);
         audio_independence_test(audio);

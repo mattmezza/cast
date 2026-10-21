@@ -1,6 +1,7 @@
 #ifndef CAST_STREAM_H
 #define CAST_STREAM_H
 #include "cast.h"
+#include "audio_extra.h"
 typedef enum {
     STREAM_STOPPED,
     STREAM_CONNECTING,
@@ -24,6 +25,7 @@ typedef struct CastStream CastStream;
 typedef struct CastAudio CastAudio;
 CastStream *stream_open(CastAudio *);
 void stream_close(CastStream *);
+void stream_set_extra_audio(CastStream *, const CastAudioExtra *);
 int stream_start(CastStream *, const Config *, char *, size_t);
 int stream_stop(CastStream *, char *, size_t);
 int stream_frame(CastStream *, const Frame *, bool, char *, size_t);

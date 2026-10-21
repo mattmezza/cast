@@ -57,6 +57,18 @@ static void feed(Media *m, Frame *f, int color, int count)
         delay_ms(33);
     }
 }
+/* Synthetic extra source: exercises actual encoder/privacy paths without devices. */
+static void extra_tone(void *user, uint64_t ns, float *pcm, unsigned frames)
+{
+    atomic_fetch_add((atomic_uint *)user, 1);
+    uint64_t first = (ns / UINT64_C(1000000000)) * 48000u +
+                     (ns % UINT64_C(1000000000)) * 48000u / UINT64_C(1000000000);
+    for (unsigned i = 0; i < frames; ++i) {
+        float sample = sinf((float)((first + i) % 48000u) * 6.2831853f * 440.f / 48000.f) * .25f;
+        pcm[i * 2] += sample;
+        pcm[i * 2 + 1] += sample;
+    }
+}
 struct Tone {
     Media *media;
     atomic_bool stop;
@@ -98,19 +110,27 @@ static void decoded_frame(struct Inspection *out, AVFrame *frame, AVStream *stre
         out->audio_frames++;
         out->audio_last = pts + (double)frame->nb_samples / frame->sample_rate;
         out->audio_samples += frame->nb_samples;
-        if (frame->format == AV_SAMPLE_FMT_FLTP) {
-            const float *p = (const float *)frame->data[0];
-            for (int i = 0; i < frame->nb_samples; ++i) {
-                out->audio_power += p[i] * p[i];
-                double time = pts + (double)i / frame->sample_rate;
-                if (time >= out->window_begin && time < out->window_end) {
-                    out->window_power += p[i] * p[i];
-                    out->window_samples++;
-                }
-                if (fabsf(p[i]) > out->audio_peak) {
-                    out->audio_peak = fabsf(p[i]);
-                }
+        int channels = frame->ch_layout.nb_channels;
+        bool planar = av_sample_fmt_is_planar((enum AVSampleFormat)frame->format);
+        enum AVSampleFormat packed = av_get_packed_sample_fmt((enum AVSampleFormat)frame->format);
+        assert(channels > 0);
+        for (int i = 0; i < frame->nb_samples; ++i) {
+            int index = planar ? i : i * channels;
+            double sample;
+            if (packed == AV_SAMPLE_FMT_FLT)
+                sample = ((const float *)frame->data[0])[index];
+            else if (packed == AV_SAMPLE_FMT_S16)
+                sample = ((const int16_t *)frame->data[0])[index] / 32768.;
+            else if (packed == AV_SAMPLE_FMT_S32)
+                sample = ((const int32_t *)frame->data[0])[index] / 2147483648.;
+            else { assert(!"unsupported inspection PCM format"); sample = 0; }
+            out->audio_power += sample * sample;
+            double time = pts + (double)i / frame->sample_rate;
+            if (time >= out->window_begin && time < out->window_end) {
+                out->window_power += sample * sample;
+                out->window_samples++;
             }
+            if (fabs(sample) > out->audio_peak) out->audio_peak = fabs(sample);
         }
         return;
     }
@@ -340,9 +360,9 @@ static void solid_and_cut_test(const char *directory)
     char path[PATH_MAX], error[CAST_ERR];
     snprintf(path, sizeof path, "%s/solid-and-cut.mkv", directory);
     assert(media_record_start(m, &cfg, path, error, sizeof error) == 0);
-    struct Tone tone = {.media = m};
-    pthread_t audio_worker;
-    assert(pthread_create(&audio_worker, NULL, tone_thread, &tone) == 0);
+    atomic_uint extra_calls = 0;
+    const CastAudioExtra extra = {.mix = extra_tone, .user = &extra_calls};
+    recorder_set_extra_audio(media_test_recorder(m), &extra);
     uint64_t wall_start = cast_now_ns();
     feed(m, &frame, 0, 12);
     double silent_begin = media_record_duration(m) / 1e9;
@@ -373,8 +393,7 @@ static void solid_and_cut_test(const char *directory)
     assert(!media_record_finalizing(m));
     media_record_error(m, error, sizeof error);
     assert(!error[0]);
-    atomic_store(&tone.stop, true);
-    pthread_join(audio_worker, NULL);
+    assert(atomic_load(&extra_calls) > 10);
     struct Inspection result = inspect_between(path, silent_begin + 0.1, silent_end - 0.1);
     assert(result.green >= 14 && result.blue >= 9 && result.red >= 9);
     assert(result.video_frames <= 42 && result.max_video_gap < 0.1);
@@ -385,6 +404,58 @@ static void solid_and_cut_test(const char *directory)
     media_close(m);
     printf("solid pause writes video + decoded silence; cut removes %.3fs; same-file AV %.3fs\n",
            wall_seconds - active_seconds, result.audio_last);
+}
+static void extra_record_test(const char *directory)
+{
+    Config cfg;
+    config_defaults(&cfg);
+    cfg.width = 160; cfg.height = 90; cfg.fps = 30;
+    cfg.mic = cfg.desktop = cfg.virtual_audio = false;
+    strcpy(cfg.record_container, "matroska");
+    strcpy(cfg.video_codec, "ffv1"); strcpy(cfg.audio_codec, "flac");
+    CastAudio *audio = audio_test_open(&cfg);
+    assert(audio);
+    CastRecorder *recorder = recorder_open(audio);
+    assert(recorder);
+    atomic_uint calls = 0;
+    const CastAudioExtra extra = {.mix = extra_tone, .user = &calls};
+    recorder_set_extra_audio(recorder, &extra);
+    char output[PATH_MAX], error[CAST_ERR];
+    snprintf(output, sizeof output, "%s/extra.mkv", directory);
+    assert(!recorder_start(recorder, &cfg, output, error, sizeof error));
+    Frame frame = {0};
+    assert(!frame_alloc(&frame, cfg.width, cfg.height));
+    double silent_begin = 0, silent_end = 0;
+    for (unsigned phase = 0; phase < 3; ++phase) {
+        if (phase == 1) {
+            silent_begin = recorder_duration(recorder) / 1e9;
+            assert(!recorder_silence(recorder, true, error, sizeof error));
+        } else if (phase == 2) {
+            silent_end = recorder_duration(recorder) / 1e9;
+            assert(!recorder_pause(recorder, true, error, sizeof error));
+            uint64_t stopped = recorder_duration(recorder);
+            delay_ms(100);
+            assert(recorder_duration(recorder) == stopped);
+            assert(!recorder_pause(recorder, false, error, sizeof error));
+            assert(!recorder_silence(recorder, false, error, sizeof error));
+        }
+        paint(&frame, (int)phase);
+        for (unsigned i = 0; i < 10; ++i) {
+            frame.ts_ns = cast_now_ns();
+            assert(!recorder_frame(recorder, &frame, error, sizeof error));
+            delay_ms(34);
+        }
+    }
+    assert(!recorder_stop(recorder, error, sizeof error));
+    uint64_t deadline = cast_now_ns() + UINT64_C(5000000000);
+    while (recorder_finalizing(recorder) && cast_now_ns() < deadline) delay_ms(1);
+    assert(!recorder_finalizing(recorder) && atomic_load(&calls) > 10);
+    recorder_close(recorder); audio_close(audio); frame_free(&frame);
+    struct Inspection decoded = inspect_between(output, silent_begin + .08, silent_end - .08);
+    assert(decoded.audio_samples > 30000 && decoded.audio_power / decoded.audio_samples > .001);
+    assert(decoded.window_samples > 2000 && decoded.window_power / decoded.window_samples < 1e-7);
+    assert(!unlink(output));
+    puts("extra audio: actual lossless recording, mute/cut barriers and fake virtual acceptance windows passed");
 }
 static void failure_test(const char *directory)
 {
@@ -532,6 +603,41 @@ static void speech_audio_wait_test(void)
                                  error, sizeof error));
     media_close(m);
     puts("speech audio: pending capture is retried; real silence remains a successful read");
+}
+static void extra_constant(void *user, uint64_t ns, float *pcm, unsigned frames)
+{
+    (void)ns;
+    atomic_fetch_add((atomic_uint *)user, 1);
+    for (unsigned i = 0; i < frames * 2; ++i) pcm[i] += .25f;
+}
+static void extra_audio_window_test(void)
+{
+    Config cfg;
+    config_defaults(&cfg);
+    cfg.mic = cfg.desktop = cfg.virtual_audio = false;
+    CastAudio *audio = audio_test_open(&cfg);
+    assert(audio);
+    atomic_uint calls = 0;
+    const CastAudioExtra extra = {.mix = extra_constant, .user = &calls};
+    audio_set_extra_audio(audio, &extra);
+    float pcm[960] = {0};
+    uint64_t now = cast_now_ns();
+    audio_test_virtual_read(audio, now, pcm, 480);
+    assert(!atomic_load(&calls)); /* existing virtual-silent gate is authoritative */
+    audio_virtual_privacy(audio, false);
+    audio_test_virtual_read(audio, now - UINT64_C(1000000000), pcm, 480);
+    assert(!atomic_load(&calls)); /* overdue pre-resume chunks never reach callback */
+    audio_test_virtual_read(audio, cast_now_ns() + UINT64_C(100000000), pcm, 480);
+    assert(atomic_load(&calls) == 1 && pcm[0] == .25f);
+    audio_virtual_privacy(audio, true);
+    audio_test_virtual_read(audio, cast_now_ns() + UINT64_C(100000000), pcm, 480);
+    assert(atomic_load(&calls) == 1 && pcm[0] == 0);
+    memset(pcm, 0, sizeof pcm);
+    cast_audio_extra_mix(&extra, now, now + UINT64_C(5000000), pcm, 480);
+    for (unsigned i = 0; i < 480; ++i) assert(pcm[i] == 0);
+    for (unsigned i = 480; i < 960; ++i) assert(pcm[i] == .25f);
+    audio_set_extra_audio(audio, NULL);
+    audio_close(audio);
 }
 static void audio_lanes_test(void)
 {
@@ -1393,6 +1499,15 @@ int main(int argc, char **argv)
         audio_lanes_test();
         return 0;
     }
+    if (argc == 2 && !strcmp(argv[1], "--extra-audio")) {
+        extra_audio_window_test();
+        char directory[] = "/tmp/cast-extra-audio-XXXXXX";
+        assert(mkdtemp(directory));
+        extra_record_test(directory);
+        assert(!rmdir(directory));
+        return 0;
+    }
+    extra_audio_window_test();
     codec_selection_test();
     video_conversion_test();
     char directory[] = "/tmp/cast-media-test-XXXXXX";

@@ -7,6 +7,7 @@
 #include <libswresample/swresample.h>
 #include <libavutil/channel_layout.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <math.h>
 #include <mach/mach_time.h>
 #include <stdlib.h>
@@ -22,6 +23,7 @@
 @property(nonatomic, assign) CastAudio *owner;
 @end
 struct CastAudio {
+    _Atomic(const CastAudioExtra *) extra_audio;
     SCStream *desktop;
     CastDesktopAudioSink *desktop_sink;
     dispatch_queue_t desktop_queue;
@@ -234,11 +236,14 @@ static int start(CastAudio *a, char *error, size_t size)
     if (![a->engine startAndReturnError:&err]) { snprintf(error, size, "Microphone start failed: %s", err.localizedDescription.UTF8String); stop(a); return -1; }
     return 0;
 }
+void audio_set_extra_audio(CastAudio *a, const CastAudioExtra *extra)
+{ if (a) atomic_store(&a->extra_audio, extra); }
 CastAudio *audio_open(const Config *cfg, char *error, size_t size)
 {
     if (audio_validate(NULL, cfg, error, size) < 0) return NULL;
     CastAudio *a = calloc(1, sizeof(*a));
     if (!a) { snprintf(error, size, "Audio allocation failed"); return NULL; }
+    atomic_init(&a->extra_audio, NULL);
     pthread_mutex_init(&a->lock, NULL); a->cfg = *cfg;
     if (start(a, error, size) < 0) { audio_close(a); return NULL; }
     return a;
@@ -353,7 +358,7 @@ void audio_error(CastAudio *a, char *out, size_t size)
 CastAudio *audio_test_open(const Config *cfg)
 {
     CastAudio *a = calloc(1, sizeof *a);
-    if (a) { pthread_mutex_init(&a->lock, NULL); a->cfg = *cfg; }
+    if (a) { atomic_init(&a->extra_audio, NULL); pthread_mutex_init(&a->lock, NULL); a->cfg = *cfg; }
     return a;
 }
 void audio_test_push(CastAudio *a, int source, uint64_t ns, const float *samples, int count)

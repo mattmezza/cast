@@ -156,6 +156,7 @@ static void snapshot_fill(PanelSnapshot *s, App *a, PanelTransport *t)
     audio_monitor_controller_status(a->monitor,&s->monitor);
     encoder_capabilities_snapshot(&s->encoders);
     s->metrics = a->metrics.view;
+    live_media_status(media_live(a->media, false), cast_now_ns(), &s->live_lane);
     project_session_snapshot(a->project, &s->project);
     edition_service_snapshot(a->edition, &s->edition);
     const CastRuntimeHooks *hooks = cast_runtime_hooks();

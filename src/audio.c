@@ -8,6 +8,7 @@
 #include <pipewire/extensions/metadata.h>
 #include <pipewire/pipewire.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <spa/param/audio/format-utils.h>
 #include <spa/utils/json.h>
 #include <stdlib.h>
@@ -42,6 +43,7 @@ struct CastAudio {
     int count, seq;
     uint64_t accept_after, virtual_accept_after, record_accept_after, stream_accept_after;
     uint64_t virtual_epoch_after, record_epoch_after, stream_epoch_after;
+    _Atomic(const CastAudioExtra *) extra_audio;
     bool done, server_dead, started, virtual_silent;
     char default_mic[256], error[CAST_ERR];
     Config cfg;
@@ -342,6 +344,9 @@ static void read_virtual_locked(CastAudio *a, uint64_t ns, float *dst, int count
         if (stale > (uint64_t)count) {
             stale = (uint64_t)count;
         }
+        uint64_t accepted_ns = (a->virtual_accept_after / 48000u) * UINT64_C(1000000000) +
+            ((a->virtual_accept_after % 48000u) * UINT64_C(1000000000) + 47999u) / 48000u;
+        cast_audio_extra_mix(atomic_load(&a->extra_audio), ns, accepted_ns, dst, (unsigned)count);
         memset(dst, 0, (size_t)stale * 2 * sizeof(float));
     }
 }
@@ -520,6 +525,10 @@ static int connect_lane(struct AudioLane *l, struct AudioNode *node, bool virt, 
     }
     return 0;
 }
+void audio_set_extra_audio(CastAudio *a, const CastAudioExtra *extra)
+{
+    if (a) atomic_store(&a->extra_audio, extra);
+}
 CastAudio *audio_open(const Config *cfg, char *e, size_t n)
 {
     pthread_once(&pw_once, initialize_pw);
@@ -528,6 +537,7 @@ CastAudio *audio_open(const Config *cfg, char *e, size_t n)
         snprintf(e, n, "audio allocation failed");
         return NULL;
     }
+    atomic_init(&a->extra_audio, NULL);
     a->cfg = *cfg;
     a->virtual_silent = true;
     for (int i = 0; i < 2; i++) {
@@ -968,6 +978,7 @@ CastAudio *audio_test_open(const Config *config)
         return NULL;
     }
     audio->cfg = *config;
+    atomic_init(&audio->extra_audio, NULL);
     audio->virtual_silent = true;
     audio->virtual_lane.owner = audio;
     for (int lane = 0; lane < 2; lane++) {

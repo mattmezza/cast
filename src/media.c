@@ -4,6 +4,8 @@
 #include "media_internal.h"
 #include "media_codec.h"
 #include "stream.h"
+#include "live_media.h"
+#include "audio_extra.h"
 #include <errno.h>
 #include <libavcodec/avcodec.h>
 #include <math.h>
@@ -18,10 +20,30 @@ struct Media {
     CastAudio *audio;
     CastRecorder *recorder;
     CastStream *stream;
+    CastLiveMedia *live;
+    CastAudioExtra live_audio;
     bool virtual_silent, record_silent, record_cut;
     uint64_t virtual_drops;
     char camera_error[CAST_ERR], virtual_error[CAST_ERR];
 };
+static void live_mix(void *user, uint64_t ns, float *samples, unsigned frames)
+{
+    live_media_audio_mix(user, ns, samples, frames);
+}
+CastLiveMedia *media_live(Media *m, bool create)
+{
+    if (!m) return NULL;
+    if (!m->live && create) {
+        m->live = live_media_open();
+        if (m->live) {
+            m->live_audio = (CastAudioExtra){.mix=live_mix, .user=m->live};
+            recorder_set_extra_audio(m->recorder, &m->live_audio);
+            stream_set_extra_audio(m->stream, &m->live_audio);
+            audio_set_extra_audio(m->audio, &m->live_audio);
+        }
+    }
+    return m->live;
+}
 Media *media_open(const Config *cfg, char *e, size_t n)
 {
 #ifdef CAST_EDITION_PRO
@@ -70,6 +92,7 @@ void media_close(Media *m)
     stream_close(m->stream);
     recorder_close(m->recorder);
     audio_close(m->audio);
+    live_media_close(m->live);
     camera_close(m->camera);
     output_close(m->output);
     free(m);

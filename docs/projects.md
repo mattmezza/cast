@@ -249,3 +249,27 @@ A zero duration selects the remaining audio/video source; still images start at
 zero and default to five seconds, with a five-second maximum. Failed calls leave
 the output unchanged. This API prepares a source document; it does not insert
 media into live capture or open playback/output devices.
+
+### Playing source media during a take
+
+Use **Add source…** in the Media Bin to import a video, audio file or still image
+without inserting a montage clip. Select a source and press Play; optional source
+in/duration fields select a range. Pause holds the video frame and silences that
+source; Resume continues it, and Stop restores the normal composition. Video
+replaces the full stage while playing. Source audio adds to the existing mix and
+is retained in the recorded take. This does not open a speaker or enable a
+microphone automatically. Global privacy stops playback; resuming privacy never
+restarts the source.
+
+The corresponding daemon commands are `timeline source PATH`,
+`media play MEDIA_ID [IN_NS,DURATION_NS]`, `media pause`, `media resume`,
+`media stop` and `media status`. Source IDs are stable project media IDs.
+`timeline import PATH` still inserts a montage clip, and `timeline live` still
+returns from montage review to the live composition. Keeping bin-only sources
+out of the montage prevents adding their audio a second time when exporting a
+captured take.
+
+File decoding and prebuffering run on a dedicated worker; composition and audio
+consumers use bounded reads. Playback starts after preparation so file startup
+does not discard the opening frames or syllables. There is no automatic source
+replay after privacy, project replacement or source completion.

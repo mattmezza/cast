@@ -1,6 +1,7 @@
 #ifndef MEDIA_INTERNAL_H
 #define MEDIA_INTERNAL_H
 #include "cast.h"
+#include "audio_extra.h"
 #include <stdio.h>
 typedef struct CastCamera CastCamera;
 typedef struct CastOutput CastOutput;
@@ -18,6 +19,7 @@ int output_frame(CastOutput *, const Frame *, char *, size_t);
 void camera_doctor(const Config *, char *, size_t);
 CastAudio *audio_open(const Config *, char *, size_t);
 void audio_close(CastAudio *);
+void audio_set_extra_audio(CastAudio *, const CastAudioExtra *);
 int audio_validate(CastAudio *, const Config *, char *, size_t);
 int audio_configure(CastAudio *, const Config *, char *, size_t);
 void audio_barrier(CastAudio *, bool);
@@ -37,6 +39,7 @@ void audio_status(CastAudio *, char *, size_t);
 void audio_error(CastAudio *, char *, size_t);
 CastRecorder *recorder_open(CastAudio *);
 void recorder_close(CastRecorder *);
+void recorder_set_extra_audio(CastRecorder *, const CastAudioExtra *);
 int recorder_start(CastRecorder *, const Config *, const char *, char *, size_t);
 int recorder_stop(CastRecorder *, char *, size_t);
 bool recorder_finalizing(CastRecorder *);

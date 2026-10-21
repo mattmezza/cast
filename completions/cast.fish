@@ -70,7 +70,7 @@ function __cast_setting_value
 end
 
 complete -c cast -f
-complete -c cast -n __cast_at -a 'edition features license layout split camera screen logo text capture zoom cursor clicks keys annotations pause resume virtual stream record monitor project timeline audio preset preview status doctor config settings panel reset quit completions setup update help'
+complete -c cast -n __cast_at -a 'edition features license layout split camera screen logo text capture zoom cursor clicks keys annotations pause resume virtual stream record monitor media project timeline audio preset preview status doctor config settings panel reset quit completions setup update help'
 complete -c cast -l help -d 'Show command reference'
 complete -c cast -n __cast_at -l headless -d 'Run the daemon without opening the app'
 complete -c cast -n __cast_at -l version -d 'Print cast version'
@@ -181,7 +181,7 @@ complete -c cast -n __cast_global_option -l stream-video-encoder -xa 'auto libx2
 
 # Both edition executables share this grammar.
 complete -c cast-pro -f
-complete -c cast-pro -n __cast_at -a 'edition features license layout split camera screen logo text capture zoom cursor clicks keys annotations pause resume virtual stream record monitor project timeline audio preset preview status doctor config settings panel reset quit completions setup update help'
+complete -c cast-pro -n __cast_at -a 'edition features license layout split camera screen logo text capture zoom cursor clicks keys annotations pause resume virtual stream record monitor media project timeline audio preset preview status doctor config settings panel reset quit completions setup update help'
 complete -c cast-pro -l help -d 'Show command reference'
 complete -c cast-pro -n __cast_at -l headless -d 'Run the daemon without opening the app'
 complete -c cast-pro -n __cast_at -l version -d 'Print cast version'
@@ -355,3 +355,6 @@ complete -c cast-pro -n "__cast_at timeline play" -a silent
 
 complete -c cast -n "__cast_at timeline assets" -a focus
 complete -c cast-pro -n "__cast_at timeline assets" -a focus
+
+complete -c cast -n '__cast_at media' -a 'play pause resume stop status'
+complete -c cast-pro -n '__cast_at media' -a 'play pause resume stop status'

@@ -33,6 +33,8 @@ struct CastRecorder {
     atomic_bool active, paused, finalizing, silent;
     atomic_uint_fast64_t drops;
     CastAudio *audio;
+    _Atomic(const CastAudioExtra *) extra_audio;
+    atomic_uint_fast64_t extra_after_ns;
     Config cfg;
     char path[PATH_MAX], file_path[PATH_MAX], error[CAST_ERR], codec_error[CAST_ERR];
     char encoder_info[CAST_ERR];
@@ -310,6 +312,9 @@ static int fill_audio(CastRecorder *r, int64_t goal, uint64_t segment_ns, uint64
                 continue;
             }
             audio_read(r->audio, ns, mix, n);
+            cast_audio_extra_mix(atomic_load(&r->extra_audio), ns,
+                                 atomic_load(&r->extra_after_ns), mix, (unsigned)n);
+            if (atomic_load(&r->silent)) memset(mix, 0, (size_t)n * 2 * sizeof(float));
         }
         uint8_t **converted = NULL;
         int line = 0;
@@ -712,6 +717,10 @@ static void *worker(void *data)
         pthread_mutex_unlock(&r->mutex);
     }
 }
+void recorder_set_extra_audio(CastRecorder *r, const CastAudioExtra *extra)
+{
+    if (r) atomic_store(&r->extra_audio, extra);
+}
 CastRecorder *recorder_open(CastAudio *audio)
 {
     CastRecorder *r = calloc(1, sizeof(*r));
@@ -719,6 +728,8 @@ CastRecorder *recorder_open(CastAudio *audio)
         return NULL;
     }
     r->audio = audio;
+    atomic_init(&r->extra_audio, NULL);
+    atomic_init(&r->extra_after_ns, 0);
     r->fd = -1;
     r->last_video_pts = -1;
 #ifdef CAST_TEST
@@ -907,6 +918,7 @@ int recorder_start(CastRecorder *r, const Config *cfg, const char *path, char *r
     r->audio_segment_sample = 0;
     r->generation++;
     r->segment_ns = r->accept_after_ns = cast_now_ns();
+    atomic_store(&r->extra_after_ns, r->accept_after_ns);
     atomic_store(&r->paused, false);
     atomic_store(&r->active, true);
     atomic_store(&r->silent, false);
@@ -1022,6 +1034,7 @@ int recorder_pause(CastRecorder *r, bool paused, char *reply, size_t n)
         snprintf(r->error, sizeof(r->error), "%s", r->codec_error);
     } else if (!paused && atomic_load(&r->active)) {
         r->segment_ns = r->accept_after_ns = cast_now_ns();
+        atomic_store(&r->extra_after_ns, r->accept_after_ns);
         r->audio_segment_sample = ns_to_samples(r->elapsed_ns);
         r->generation++;
         atomic_store(&r->paused, false);
@@ -1092,6 +1105,7 @@ void recorder_barrier(CastRecorder *r)
     }
     r->generation++;
     r->accept_after_ns = cast_now_ns();
+    atomic_store(&r->extra_after_ns, r->accept_after_ns);
     clear_queue(r);
     pthread_mutex_unlock(&r->mutex);
     if (lock_active_encoder(r)) {

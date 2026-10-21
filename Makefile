@@ -80,7 +80,7 @@ override LDFLAGS += -Wl,-rpath,$(LGPL_ROOT)/prefix/lib
 endif
 endif
 CPPFLAGS += -DCAST_APPLICATION_NAME='"$(BINARY)"' -DCAST_MEDIA_PROFILE='"$(MEDIA_PROFILE)"' -DCAST_PLATFORM='"linux-$(shell uname -m)"' -DCAST_CORE_REVISION='"$(CORE_REVISION)"' -DCAST_PRIVATE_REVISION='"$(PRIVATE_REVISION)"' -DCAST_RELEASE_TIMESTAMP=$(RELEASE_TIMESTAMP) -DCAST_OFFICIAL_RELEASE=$(OFFICIAL_RELEASE)
-SOURCES = src/os_compat.c src/main.c src/commands.c src/config.c src/config_migrate.c src/state.c src/compositor.c src/composition_assets.c src/presentation_text.c src/platform.c src/media.c src/webcam.c src/audio.c src/record.c src/stream.c src/panel_transport.c src/panel_lifecycle.c src/help_commands.c src/update.c src/desktop_update.c src/desktop_update_ui.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/edition_service.c src/media_codec.c src/app_runtime.c vendor/inih/ini.c src/timeline.c src/project.c src/project_session.c src/timeline_assets.c src/timeline_render.c src/local_image_input.c src/timeline_preview.c src/timeline_audio.c src/timeline_audio_native.c src/runtime_metrics.c src/encoder_capabilities.c src/audio_monitor.c src/audio_monitor_session.c src/audio_monitor_session_media.c src/audio_monitor_controller.c src/audio_monitor_controller_media.c src/audio_monitor_pipewire.c
+SOURCES = src/os_compat.c src/main.c src/commands.c src/config.c src/config_migrate.c src/state.c src/compositor.c src/composition_assets.c src/presentation_text.c src/platform.c src/media.c src/webcam.c src/audio.c src/record.c src/stream.c src/panel_transport.c src/panel_lifecycle.c src/help_commands.c src/update.c src/desktop_update.c src/desktop_update_ui.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c src/edition_service.c src/media_codec.c src/app_runtime.c vendor/inih/ini.c src/timeline.c src/project.c src/project_session.c src/timeline_assets.c src/timeline_render.c src/local_image_input.c src/timeline_preview.c src/timeline_audio.c src/timeline_audio_native.c src/live_media.c src/runtime_metrics.c src/encoder_capabilities.c src/audio_monitor.c src/audio_monitor_session.c src/audio_monitor_session_media.c src/audio_monitor_controller.c src/audio_monitor_controller_media.c src/audio_monitor_pipewire.c
 INI_FLAGS = -DINI_HANDLER_LINENO=1 -DINI_CALL_HANDLER_ON_NEW_SECTION=1 -DINI_ALLOW_MULTILINE=0 -DINI_ALLOW_INLINE_COMMENTS=0 -DINI_STOP_ON_FIRST_ERROR=1 -DINI_MAX_LINE=8192
 CPPFLAGS += $(if $(filter 1,$(STATIC_PANEL_X11)),-DCAST_PANEL_STATIC_X11=1)
 CPPFLAGS += -Isrc -Ivendor/inih $(INI_FLAGS) -D_GNU_SOURCE
@@ -151,7 +151,7 @@ LDLIBS += $(PANEL_LIBS)
 
 endif
 CORE_SOURCES = src/os_compat.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c $(PRO_SOURCES) src/compositor.c src/composition_assets.c src/presentation_text.c src/config.c src/state.c vendor/inih/ini.c
-MEDIA_SOURCES = src/os_compat.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c $(PRO_SOURCES) src/media.c src/webcam.c src/audio.c src/record.c src/stream.c src/compositor.c src/composition_assets.c src/presentation_text.c src/media_codec.c
+MEDIA_SOURCES = src/os_compat.c src/edition.c src/license_store.c src/edition_extensions.c src/workflow_schema.c $(PRO_SOURCES) src/media.c src/webcam.c src/audio.c src/record.c src/stream.c src/compositor.c src/composition_assets.c src/presentation_text.c src/media_codec.c src/live_media.c src/timeline.c src/timeline_render.c src/local_image_input.c
 
 ifeq ($(EDITION):$(STT),pro:1)
 CPPFLAGS += $(if $(findstring -DCAST_GGML_BUNDLED_VULKAN=1,$(STT_CFLAGS)),-DCAST_WITH_SPEECH_VULKAN=1)
@@ -624,6 +624,16 @@ $(BUILD)/test_local_image_input: tests/test_local_image_input.c src/timeline_ass
 .PHONY: check-local-image-input
 check-local-image-input: $(BUILD)/test_local_image_input
 	$(BUILD)/test_local_image_input
+
+
+$(BUILD)/test_live_media: tests/test_live_media.c src/live_media.c $(PROJECT_TEST_SOURCES) $(PROJECT_RENDER_TEST_SOURCES)
+	@mkdir -p $(BUILD)
+	$(CC) $(PROJECT_TEST_FLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -ffunction-sections -fdata-sections -o $@ $^ $(LDFLAGS) -Wl,--gc-sections $(PKG_LIBS) -lpthread -lm
+.PHONY: check-live-media check-workspace-live
+check-live-media: $(BUILD)/test_live_media
+	$(BUILD)/test_live_media
+check-workspace-live: $(BINARY)
+	CAST_TEST_BINARY='$(abspath $(BINARY))' python3 tests/test_workspace_live.py
 
 endif # Darwin uses Makefile.macos
 

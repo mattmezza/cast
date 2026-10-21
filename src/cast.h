@@ -137,6 +137,7 @@ typedef struct {
 typedef struct Platform Platform;
 typedef struct Compositor Compositor;
 typedef struct Media Media;
+typedef struct CastLiveMedia CastLiveMedia;
 uint64_t cast_now_ns(void);
 int frame_alloc(Frame *, int, int);
 void frame_free(Frame *);
@@ -203,6 +204,8 @@ int compositor_geometry(const Config *, int, int, int *, int *, int *, int *, ch
 /* Media owns bounded recording/audio workers; barriers synchronously flush pending samples. */
 Media *media_open(const Config *, char *, size_t);
 void media_close(Media *);
+/* Lazily creates an inert live-file worker; never enables a device/output. */
+CastLiveMedia *media_live(Media *, bool create);
 void media_camera_list(char *, size_t);
 int media_camera(Media *, Frame *, char *, size_t);
 int media_virtual_enabled(Media *, const Config *, bool, char *, size_t);

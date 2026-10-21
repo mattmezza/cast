@@ -33,6 +33,8 @@ typedef struct App {
     Media *media;
     CastMonitorController *monitor;
     CastRuntimeMetrics metrics;
+    uint64_t live_generation, live_frame_generation;
+    Frame live_frame;
     Frame screen, camera, virtual, record, neutral, frozen, record_frozen, virtual_raw, record_raw;
     Frame stream, stream_raw, stream_frozen, composition_preview;
     char composition_error[256];

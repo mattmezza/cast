@@ -33,8 +33,12 @@ it reports progress and supports cancellation. Existing destinations are never
 overwritten. Preview and export include imported video audio and audio-only
 clips with their gain/mute settings. The timeline supports ruler seeking, Fit/± zoom, horizontal navigation and
 clip move/edge-trim gestures, with numeric editing also available. Each gesture
-submits one validated edit on release and has one undo step. Waveform/thumbnail
-caches and live clip insertion/mixing during capture remain separate work.
+submits one validated edit on release and has one undo step. Real thumbnails and waveform envelopes are decoded on a bounded background
+worker and cached in memory. The Media Bin imports sources separately from
+montage clips: explicit Play replaces stage video and adds source audio to the
+live mix during capture. Pause holds the frame and silences that source; Stop
+restores the composition. Global privacy stops source playback without replay
+on resume. Source-bin entries are not added to the montage automatically.
 
 Streaming destination and encoding settings now use the existing backend,
 including lifecycle/connection statistics and reconnect options. Secret contents

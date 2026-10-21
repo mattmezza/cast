@@ -89,6 +89,8 @@ static const char help[] =
     "  virtual message TEXT; virtual|record title|subtitle|footer TEXT\n"
     "  record start [PATH]; record stop|pause|resume|toggle|freeze|unfreeze|cut|cancel\n"
     "  record blur on|off|toggle; cut resume reuses the file with the configured countdown\n"
+    "  media play MEDIA_ID [IN_NS,DURATION_NS]; media pause|resume|stop|status\n"
+    "  timeline source PATH (media bin only; never inserts an edit clip)\n"
     "  monitor on|off|status (microphone only; default audio output)\n"
     "  project new|open PATH|save [PATH]|recover PATH|status\n"
     "  timeline import PATH [TRACK]; timeline seek NS; timeline play|pause|live\n"
@@ -503,8 +505,83 @@ int app_shutdown_privacy(App *a, char *e, size_t n)
     }
     return result;
 }
+static void live_stop(App *a)
+{
+    CastLiveMedia *live = media_live(a->media, false);
+    CastLiveMediaStatus status;
+    live_media_status(live, cast_now_ns(), &status);
+    if (live && status.state != CAST_LIVE_IDLE)
+        live_media_stop(live, ++a->live_generation);
+}
+static int live_number(const char *text, uint64_t *value)
+{
+    if (!text || *text < '0' || *text > '9') return -1;
+    errno = 0;
+    char *end;
+    unsigned long long parsed = strtoull(text, &end, 10);
+    if (errno || *end) return -1;
+    *value = (uint64_t)parsed;
+    return 0;
+}
+static int live_command(App *a, int argc, char **argv, char *out, size_t size)
+{
+    if (argc < 2) return app_error(out,size,"media play MEDIA_ID [IN_NS,DURATION_NS]|pause|resume|stop|status");
+    CastLiveMedia *live = media_live(a->media, false);
+    if (argc == 2 && !strcmp(argv[1], "status")) {
+        CastLiveMediaStatus status;
+        live_media_status(live, cast_now_ns(), &status);
+        snprintf(out,size,"live state=%d media=%llu position_ns=%llu duration_ns=%llu%s%s",
+            status.state,(unsigned long long)status.media_id,(unsigned long long)status.position_ns,
+            (unsigned long long)status.duration_ns,status.error[0]?" error=":"",status.error);
+        return 0;
+    }
+    if (argc == 2 && !strcmp(argv[1], "stop")) {
+        live_stop(a);snprintf(out,size,"live media stopped");return 0;
+    }
+    if (argc == 2 && !strcmp(argv[1], "pause")) {
+        if (!live || live_media_pause(live,cast_now_ns(),++a->live_generation))
+            return app_error(out,size,"no live media is playing");
+        snprintf(out,size,"live media paused");return 0;
+    }
+    if (a->state.group_paused) return app_error(out,size,"resume global privacy before playing live media");
+    if (argc == 2 && !strcmp(argv[1], "resume")) {
+        if (!live || live_media_resume(live,cast_now_ns(),++a->live_generation))
+            return app_error(out,size,"no live media is paused");
+        snprintf(out,size,"live media resume queued");return 0;
+    }
+    if (strcmp(argv[1],"play") || (argc != 3 && argc != 4))
+        return app_error(out,size,"media play MEDIA_ID [IN_NS,DURATION_NS]|pause|resume|stop|status");
+    uint64_t id, source_in=0, duration=0;
+    if (live_number(argv[2],&id)) return app_error(out,size,"invalid live media ID");
+    if (argc == 4) {
+        char range[64];
+        if (strlen(argv[3]) >= sizeof range) return app_error(out,size,"invalid live source range");
+        strcpy(range,argv[3]);
+        char *comma=strchr(range,',');
+        if (!comma) return app_error(out,size,"live range requires IN_NS,DURATION_NS");
+        *comma++=0;
+        if (live_number(range,&source_in) || live_number(comma,&duration))
+            return app_error(out,size,"invalid live source range");
+    }
+    CastTimeline *document=malloc(sizeof *document);
+    if (!document) return app_error(out,size,"cannot allocate live source request");
+    int result=project_session_live_source(a->project,id,source_in,duration,document,out,size);
+    if (!result) {
+        live=media_live(a->media,true);
+        if (!live) result=app_error(out,size,"cannot create live media worker");
+        else if (live_media_play(live,&document->media[0],&a->config,
+            document->clips[0].source_in_ns,document->clips[0].duration_ns,
+            cast_now_ns(),++a->live_generation)) result=app_error(out,size,"live media request refused");
+        else snprintf(out,size,"live media play queued");
+    }
+    free(document);
+    return result;
+}
 static void audio_sync(App *a) {
-    if (a->state.group_paused) project_session_silence(a->project);
+    if (a->state.group_paused) {
+        project_session_silence(a->project);
+        live_stop(a);
+    }
     if(!a->monitor)return;
     AudioLevels levels;media_audio_levels(a->media,&levels);
     audio_monitor_controller_update(a->monitor,(CastMonitorSessionState){
@@ -696,6 +773,42 @@ static void tick(App *a)
     } else {
         frame_free(&a->composition_preview);
     }
+    CastLiveMedia *live = media_live(a->media, false);
+    CastLiveMediaStatus live_status;
+    live_media_status(live, now, &live_status);
+    bool live_visual = false;
+    if (live_status.has_video && (live_status.state == CAST_LIVE_PLAYING ||
+                                  live_status.state == CAST_LIVE_PAUSED)) {
+        if (!frame_alloc(&a->live_frame,a->config.width,a->config.height)) {
+            if (!live_media_video(live,now,&a->live_frame))
+                a->live_frame_generation = live_status.generation;
+            /* Hold the current source on a late decoder/contended copy. A new
+             * playback generation can never reuse the preceding source. */
+            live_visual = a->live_frame_generation == live_status.generation;
+        } else remember_error(a,"cannot allocate live media composition");
+        if (live_visual) {
+            a->live_frame.ts_ns = now;
+            bool failed = false;
+            if (need_virtual && frame_copy(&a->virtual_raw,&a->live_frame)) {
+                frame_free(&a->virtual_raw); failed=true;
+            }
+            if (need_record && frame_copy(&a->record_raw,&a->live_frame)) {
+                frame_free(&a->record_raw); failed=true;
+            }
+            if (need_stream && frame_copy(&a->stream_raw,&a->live_frame)) {
+                frame_free(&a->stream_raw); failed=true;
+            }
+            if (frame_copy(&a->composition_preview,&a->live_frame)) {
+                frame_free(&a->composition_preview); failed=true;
+            }
+            a->composition_preview.ts_ns = now;
+            if (failed) remember_error(a,"cannot copy live media composition");
+            else { composition_ok = true; a->composition_error[0] = 0; }
+        }
+    } else {
+        frame_free(&a->live_frame);
+        a->live_frame_generation = 0;
+    }
     if (app_output_frames(a, e, sizeof e)) {
         remember_error(a, e);
     }
@@ -735,7 +848,9 @@ static void tick(App *a)
          * group privacy pause and capture failure still produce neutral pixels. */
         if (!strcmp(a->config.preview_target, "composition")) {
             target = &a->neutral;
-            if (a->config.preview && !a->state.group_paused && composition_ok &&
+            if (a->config.preview && !a->state.group_paused && live_visual)
+                target = &a->live_frame;
+            else if (a->config.preview && !a->state.group_paused && composition_ok &&
                 !compositor_render(a->compositor, &a->config, &a->screen,
                     camera_ok ? &a->camera : NULL, &a->cursor, true, &local_preview, e, sizeof e))
                 target = &local_preview;
@@ -840,6 +955,10 @@ static void drain_peers(App *a, Peer *peers, int *count)
                     rc = safety;
                 } else if (!strcmp(argv[0], "project") || !strcmp(argv[0], "timeline")) {
                     rc = project_session_command(a, argc, argv, out, sizeof out);
+                    if (!rc && argc >= 2 && !strcmp(argv[0], "project") &&
+                        (!strcmp(argv[1], "new") || !strcmp(argv[1], "open") || !strcmp(argv[1], "recover"))) live_stop(a);
+                } else if (!strcmp(argv[0], "media")) {
+                    rc = live_command(a,argc,argv,out,sizeof out);
                 } else if (!strcmp(argv[0],"monitor")) {
                     rc=monitor_command(a,argc,argv,out,sizeof out);
                 } else if (!strcmp(argv[0], "--notes-window")) {
@@ -1183,6 +1302,7 @@ cleanup:
     project_session_close(a->project);
     app_runtime_close(a);
     frame_free(&a->composition_preview);
+    frame_free(&a->live_frame);
     frame_free(&a->screen);
     frame_free(&a->camera);
     frame_free(&a->virtual);

@@ -84,6 +84,8 @@ struct CastStream {
     int fd;
     pid_t child;
     CastAudio *audio;
+    _Atomic(const CastAudioExtra *) extra_audio;
+    atomic_uint_fast64_t extra_after_ns;
     struct StreamShared *shared;
     size_t shared_size;
     Config cfg;
@@ -905,6 +907,8 @@ static void publish_audio(struct CastStream *stream, uint64_t now)
         /* No reader consumes the ring: recording, virtual microphone, and this
          * lane read by timestamps with independent privacy acceptance windows. */
         audio_stream_read(stream->audio, stream->audio_next_ns, mix, STREAM_AUDIO_CHUNK);
+        cast_audio_extra_mix(atomic_load(&stream->extra_audio), stream->audio_next_ns,
+                             atomic_load(&stream->extra_after_ns), mix, STREAM_AUDIO_CHUNK);
         lock_media(shared);
         if (epoch == atomic_load(&shared->epoch) && !shared->silent) {
             if (!shared->audio_end || start > shared->audio_end) {
@@ -1052,6 +1056,10 @@ static void *supervise(void *opaque)
     pthread_mutex_unlock(&stream->mutex);
     return NULL;
 }
+void stream_set_extra_audio(CastStream *stream, const CastAudioExtra *extra)
+{
+    if (stream) atomic_store(&stream->extra_audio, extra);
+}
 CastStream *stream_open(CastAudio *audio)
 {
     struct CastStream *stream = calloc(1, sizeof(*stream));
@@ -1060,6 +1068,8 @@ CastStream *stream_open(CastAudio *audio)
     }
     stream->fd = -1;
     stream->audio = audio;
+    atomic_init(&stream->extra_audio, NULL);
+    atomic_init(&stream->extra_after_ns, 0);
     pthread_mutex_init(&stream->mutex, NULL);
     cast_cond_monotonic(&stream->changed);
     if (pthread_create(&stream->supervisor, NULL, supervise, stream)) {
@@ -1259,6 +1269,7 @@ int stream_frame(CastStream *stream, const Frame *frame, bool silent, char *erro
     }
     lock_media(shared);
     if (silent != shared->silent) {
+        atomic_store(&stream->extra_after_ns, cast_now_ns());
         atomic_fetch_add(&shared->epoch, 1);
         clear_media_locked(shared);
     }
@@ -1287,6 +1298,7 @@ int stream_frame(CastStream *stream, const Frame *frame, bool silent, char *erro
 void stream_privacy(CastStream *stream, bool silent)
 {
     pthread_mutex_lock(&stream->mutex);
+    atomic_store(&stream->extra_after_ns, cast_now_ns());
     if (stream->shared) {
         lock_media(stream->shared);
         stream->shared->silent = silent;
@@ -1300,6 +1312,7 @@ void stream_privacy(CastStream *stream, bool silent)
 void stream_barrier(CastStream *stream)
 {
     pthread_mutex_lock(&stream->mutex);
+    atomic_store(&stream->extra_after_ns, cast_now_ns());
     if (stream->shared) {
         lock_media(stream->shared);
         atomic_fetch_add(&stream->shared->epoch, 1);
