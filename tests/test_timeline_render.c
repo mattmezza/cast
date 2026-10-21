@@ -1,5 +1,6 @@
 #include "timeline_render.h"
 #include <assert.h>
+#include <libavcodec/avcodec.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -137,6 +138,58 @@ int main(void)
     char marker[5] = {0};
     assert(fread(marker, 1, 4, sentinel) == 4 && !strcmp(marker, "keep"));
     fclose(sentinel);
+
+    /* WebM rejects incompatible H.264/FLAC without publishing anything. A
+     * registered VP9/Opus pair exercises real muxing and subsequent decoding. */
+    char webm[4096];
+    snprintf(webm, sizeof webm, "%s/movie.webm", dir);
+    strcpy(cfg.record_container, "webm");
+    job = timeline_export_start_filtered(&t, &cfg, webm, paint, NULL, error, sizeof error);
+    assert(job);
+    for (unsigned i = 0; i < 10000; ++i) {
+        timeline_export_snapshot(job, &state);
+        if (state.state >= CAST_TIMELINE_EXPORT_COMPLETE) break;
+        usleep(1000);
+    }
+    assert(state.state == CAST_TIMELINE_EXPORT_FAILED && strstr(state.error, "does not support"));
+    timeline_export_close(job);
+    assert(access(webm, F_OK));
+    if (avcodec_find_encoder_by_name("libvpx-vp9") && avcodec_find_encoder_by_name("libopus")) {
+        strcpy(cfg.video_codec, "libvpx-vp9");
+        strcpy(cfg.audio_codec, "libopus");
+        job = timeline_export_start_filtered(&t, &cfg, webm, paint, NULL, error, sizeof error);
+        assert(job);
+        for (unsigned i = 0; i < 10000; ++i) {
+            timeline_export_snapshot(job, &state);
+            if (state.state >= CAST_TIMELINE_EXPORT_COMPLETE) break;
+            usleep(1000);
+        }
+        if (state.state != CAST_TIMELINE_EXPORT_COMPLETE) fprintf(stderr, "WebM: %s\n", state.error);
+        assert(state.state == CAST_TIMELINE_EXPORT_COMPLETE);
+        timeline_export_close(job);
+        CastTimeline webm_timeline;
+        timeline_init(&webm_timeline);
+        assert(!timeline_add_media(&webm_timeline, webm, CAST_TIMELINE_VIDEO, 1000000000,
+                                   &media, error, sizeof error));
+        assert(!timeline_add_clip(&webm_timeline, media, 0, 0, 0, 1000000000, &clip,
+                                  error, sizeof error));
+        r = timeline_renderer_open(&webm_timeline, &cfg, NULL, NULL, error, sizeof error);
+        assert(r);
+        assert(!timeline_renderer_frame(r, 200000000, &frame, error, sizeof error));
+        assert(frame.data[0] > 220 && frame.data[2] < 30);
+        assert(!timeline_renderer_frame(r, 800000000, &frame, error, sizeof error));
+        assert(frame.data[2] > 220 && frame.data[0] < 30);
+        assert(!timeline_renderer_audio(r, 4000, 1024, pcm, error, sizeof error));
+        double energy = 0;
+        for (unsigned i = 0; i < 2048; ++i) energy += pcm[i] * pcm[i];
+        assert(energy > .01);
+        frame_free(&frame);
+        timeline_renderer_close(r);
+        unlink(webm);
+        puts("WebM VP9/Opus export decoded video and audio passed");
+    } else {
+        puts("WebM VP9/Opus positive export skipped: native encoders unavailable");
+    }
 
     assert(!unlink(input));
     r = timeline_renderer_open(&t, &cfg, NULL, NULL, error, sizeof error);

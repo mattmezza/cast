@@ -612,6 +612,29 @@ moving-source sustained throughput failure; a nominal bitrate is not proof of
 actual bitrate or subjective desktop quality. Small logs remain under
 `build/community-roadmap-validation`; test movies were removed after inspection.
 
+### Encoder availability and WebM export (2026-10-21)
+
+`encoder_capabilities` reports registered video/audio encoders separately from
+profile-permitted choices, including the actual OpenH264 H.264 implementation.
+Its deterministic registry tests cover absent encoders, LGPL exclusion of
+x264/x265, automatic H.264 selection and native muxer compatibility. Against the
+assembly-enabled LGPL SDK, video availability/permission masks were `0x3`
+(auto/OpenH264) and audio masks `0xd` (AAC/PCM/FLAC). Against the system SDK they
+were `0x3d` and `0xf`; the test also verified an available VP9/Opus WebM pair.
+These are registration checks, not promises that arbitrary rate-control or
+resolution settings initialize successfully.
+
+Timeline export now accepts WebM with compatible codecs and checks the actual
+opened video codec ID and selected audio codec ID against the muxer before
+writing its header. The native renderer test exported VP9/Opus to WebM against
+the system SDK, decoded the expected red/blue frames and nonzero audio, and
+retained the existing FFV1/FLAC Matroska and cancellation tests. An incompatible
+FFV1/FLAC WebM attempt failed without publishing a destination. The same test
+run with `LD_LIBRARY_PATH` explicitly selecting the isolated LGPL SDK passed
+the Matroska and incompatible-WebM checks; its positive WebM case explicitly
+skipped because VP9/Opus encoders are absent. There is no automatic codec
+substitution or implied LGPL WebM encoding support.
+
 ## v0.7 panel drill-in refinement
 
 The second UI round changes only the native panel. Private Xvfb workflows verify

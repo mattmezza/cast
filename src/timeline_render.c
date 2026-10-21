@@ -844,7 +844,8 @@ static void *export_worker(void *opaque)
     }
     output.fd = fd;
     const char *container = job->config.record_container;
-    if (strcmp(container, "matroska") && strcmp(container, "mp4") && strcmp(container, "mov")) {
+    if (strcmp(container, "matroska") && strcmp(container, "mp4") && strcmp(container, "mov") &&
+        strcmp(container, "webm")) {
         fail(error, sizeof error, "unsupported timeline export container");
         goto done;
     }
@@ -871,6 +872,11 @@ static void *export_worker(void *opaque)
     const AVCodec *encoder = avcodec_find_encoder_by_name(job->config.audio_codec);
     if (!encoder) {
         fail(error, sizeof error, "audio encoder unavailable: %s", job->config.audio_codec);
+        goto done;
+    }
+    if (avformat_query_codec(format->oformat, video->codec_id, FF_COMPLIANCE_NORMAL) <= 0 ||
+        avformat_query_codec(format->oformat, encoder->id, FF_COMPLIANCE_NORMAL) <= 0) {
+        fail(error, sizeof error, "container '%s' does not support selected video/audio encoders", container);
         goto done;
     }
     audio = avcodec_alloc_context3(encoder);
