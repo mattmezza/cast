@@ -12,7 +12,7 @@ typedef struct {
 } CastProjectMediaView;
 typedef struct {
     bool open, busy, dirty, recording;
-    bool exporting, reviewing, preview_busy;
+    bool exporting, reviewing, preview_busy, playing;
     char preview_error[1024];
     CastTimelineExportSnapshot export;
     uint64_t revision, duration_ns, playhead_ns;

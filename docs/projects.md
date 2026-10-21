@@ -147,3 +147,15 @@ finished workers are reaped on later ticks. A replacement seek may need to retry
 while the previous worker finishes cancellation. `check-timeline-preview` tests
 real generated video, generation coalescing, color/position, capture-lock refusal,
 missing media and shutdown. Session tests cover review/live and privacy barriers.
+
+`timeline play` starts silent video review from the document playhead (or restarts
+at zero after the end); `timeline pause` retains its current frame and playhead.
+There is no audio playback or monitoring device in this transport. The controller
+uses monotonic elapsed time and requests at most the configured frame rate capped
+at 30 fps. It waits for each decoder generation to complete before requesting the
+latest clock position, skipping late frames instead of creating a decode backlog
+or continually cancelling slow decoders. At the end it stops at the duration and
+renders the final valid instant. Seek pauses transport; live, edits, project/config
+replacement and active outputs invalidate its clocks and cached review. Snapshot
+`playing` describes transport separately from `reviewing` and `preview_busy`.
+A test-only injected clock verifies advancement, pause, resume and end behavior.

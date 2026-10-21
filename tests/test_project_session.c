@@ -13,6 +13,7 @@ static bool finalizing;
 static unsigned applied;
 #ifdef CAST_TEST
 void project_session_test_autosave_due(CastProjectSession *);
+void project_session_test_clock(CastProjectSession *, uint64_t);
 #endif
 uint64_t media_record_duration(Media *m)
 {
@@ -168,6 +169,33 @@ int main(void)
         usleep(1000);
     }
     assert(project_session_review_frame(a->project));
+#ifdef CAST_TEST
+    const char *play[] = {"timeline", "play"}, *pause[] = {"timeline", "pause"};
+    project_session_test_clock(a->project, UINT64_C(1000000000));
+    assert(!command(a, 2, play));
+    assert(snapshot(a).playing);
+    project_session_test_clock(a->project, UINT64_C(1250000000));
+    project_session_tick(a);
+    assert(snapshot(a).playhead_ns == UINT64_C(350000000));
+    assert(!command(a, 2, pause));
+    assert(!snapshot(a).playing && snapshot(a).reviewing);
+    project_session_test_clock(a->project, UINT64_C(2000000000));
+    project_session_tick(a);
+    assert(snapshot(a).playhead_ns == UINT64_C(350000000));
+    assert(!command(a, 2, play));
+    project_session_test_clock(a->project, UINT64_C(4000000000));
+    project_session_tick(a);
+    assert(!snapshot(a).playing && snapshot(a).playhead_ns == UINT64_C(1000000000));
+    for (unsigned i = 0; i < 5000; ++i) {
+        project_session_tick(a);
+        const Frame *last = project_session_review_frame(a->project);
+        if (!snapshot(a).preview_busy && last && last->ts_ns == UINT64_C(999999999)) {
+            break;
+        }
+        usleep(1000);
+    }
+    assert(project_session_review_frame(a->project)->ts_ns == UINT64_C(999999999));
+#endif
     const Frame *acknowledged = project_session_review_frame(a->project);
     seek_review(a);
     assert(project_session_review_frame(a->project) == acknowledged);

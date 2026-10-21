@@ -40,7 +40,12 @@ typedef struct {
 struct CastProjectSession {
     CastTimelinePreview *preview, *retired_preview;
     Frame review_frame;
-    bool reviewing, preview_busy;
+    bool reviewing, preview_busy, playing, transport_pending;
+    uint64_t play_started_ns, play_started_position, next_video_ns;
+#ifdef CAST_TEST
+    uint64_t test_clock;
+    bool test_clock_set;
+#endif
     uint64_t seek_generation, copied_generation;
     char preview_error[1024];
     CastTimelineExport *export;
@@ -57,9 +62,29 @@ struct CastProjectSession {
     uint64_t revision, playhead_ns, capture_clip, capture_start, next_autosave_ns;
     char path[PATH_MAX], cwd[PATH_MAX], status[256], error[256];
 };
+static uint64_t transport_now(CastProjectSession *s)
+{
+#ifdef CAST_TEST
+    if (s->test_clock_set) {
+        return s->test_clock;
+    }
+#else
+    (void)s;
+#endif
+    return cast_now_ns();
+}
+#ifdef CAST_TEST
+void project_session_test_clock(CastProjectSession *, uint64_t);
+void project_session_test_clock(CastProjectSession *s, uint64_t now)
+{
+    s->test_clock = now;
+    s->test_clock_set = true;
+}
+#endif
 static void review_clear(CastProjectSession *s)
 {
-    s->reviewing = s->preview_busy = false;
+    s->reviewing = s->preview_busy = s->playing = s->transport_pending = false;
+    s->play_started_ns = s->play_started_position = s->next_video_ns = 0;
     s->preview_error[0] = 0;
     frame_free(&s->review_frame);
     if (s->preview) {
@@ -593,6 +618,16 @@ void project_session_tick(App *a)
     complete(a);
     recording(a);
     if (s->reviewing && s->preview) {
+        uint64_t clock = transport_now(s), duration = timeline_duration(&s->timeline);
+        if (s->playing) {
+            uint64_t elapsed = clock >= s->play_started_ns ? clock - s->play_started_ns : 0;
+            uint64_t remaining = duration - s->play_started_position;
+            s->playhead_ns = elapsed >= remaining ? duration : s->play_started_position + elapsed;
+            s->transport_pending = true;
+            if (s->playhead_ns == duration) {
+                s->playing = false;
+            }
+        }
         CastTimelinePreviewSnapshot view;
         timeline_preview_snapshot(s->preview, &view);
         s->preview_busy = view.busy;
@@ -605,6 +640,24 @@ void project_session_tick(App *a)
             } else {
                 snprintf(s->preview_error, sizeof s->preview_error,
                          "Cannot copy timeline review frame");
+            }
+        }
+        if (*view.error) {
+            s->playing = s->transport_pending = false;
+        }
+        if (s->transport_pending && !view.busy && (clock >= s->next_video_ns || !s->playing)) {
+            uint64_t target = s->playhead_ns;
+            if (target == duration && target) {
+                --target;
+            }
+            if (!timeline_preview_request(s->preview, target, ++s->seek_generation)) {
+                s->preview_busy = true;
+                s->transport_pending = false;
+                unsigned fps = a->config.fps > 30 ? 30 : (unsigned)a->config.fps;
+                s->next_video_ns = clock + UINT64_C(1000000000) / fps;
+            } else {
+                s->playing = s->transport_pending = false;
+                snprintf(s->preview_error, sizeof s->preview_error, "Cannot queue playback frame");
             }
         }
     }
@@ -634,6 +687,7 @@ void project_session_snapshot(CastProjectSession *s, CastProjectSnapshot *out)
     }
     out->export = s->export_snapshot;
     out->exporting = s->export && s->export_snapshot.state < CAST_TIMELINE_EXPORT_COMPLETE;
+    out->playing = s->playing;
     out->reviewing = s->reviewing;
     out->preview_busy = s->preview_busy;
     snprintf(out->preview_error, sizeof out->preview_error, "%s", s->preview_error);
@@ -795,6 +849,36 @@ int project_session_command(App *a, int argc, char **argv, char *out, size_t siz
         }
         return queue(a, JOB_IMPORT, argv[2], (unsigned)track, out, size);
     }
+    if (!strcmp(argv[1], "pause") && argc == 2) {
+        s->playing = false;
+        snprintf(out, size, "OK silent review paused");
+        return 0;
+    }
+    if (!strcmp(argv[1], "play") && argc == 2) {
+        if (!idle(a) || s->capture_clip) {
+            return fail(out, size, "timeline playback requires idle outputs");
+        }
+        uint64_t duration = timeline_duration(&s->timeline);
+        if (!duration) {
+            return fail(out, size, "timeline is empty");
+        }
+        uint64_t position = s->playhead_ns >= duration ? 0 : s->playhead_ns;
+        if (!s->reviewing || !s->preview || position != s->playhead_ns) {
+            char text[32];
+            snprintf(text, sizeof text, "%" PRIu64, position);
+            char *seek[] = {"timeline", "seek", text};
+            if (project_session_command(a, 3, seek, out, size)) {
+                return -1;
+            }
+        }
+        s->playing = true;
+        s->transport_pending = true;
+        s->play_started_ns = transport_now(s);
+        s->play_started_position = position;
+        s->next_video_ns = s->play_started_ns;
+        snprintf(out, size, "OK silent video review playing");
+        return 0;
+    }
     if (!strcmp(argv[1], "live") && argc == 2) {
         review_clear(s);
         snprintf(out, size, "OK live composition");
@@ -843,6 +927,7 @@ int project_session_command(App *a, int argc, char **argv, char *out, size_t siz
         s->reviewing = true;
         s->preview_busy = true;
         s->preview_error[0] = 0;
+        s->playing = s->transport_pending = false;
         s->playhead_ns = position;
         snprintf(out, size, "OK playhead=%" PRIu64, position);
         return 0;
