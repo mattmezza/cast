@@ -159,3 +159,16 @@ renders the final valid instant. Seek pauses transport; live, edits, project/con
 replacement and active outputs invalidate its clocks and cached review. Snapshot
 `playing` describes transport separately from `reviewing` and `preview_busy`.
 A test-only injected clock verifies advancement, pause, resume and end behavior.
+
+`timeline relink MEDIA_ID PATH` repairs a moved/missing media reference using the
+same bounded local-file probe as import. It requires idle recording/streaming and
+no active captured take. The probe runs asynchronously; applying it rechecks the
+document revision, configuration and output state. Replacement media must have
+the same audio/video/image kind, and its known duration must cover every existing
+clip's source offset plus duration. Failed, short, incompatible or stale probes
+leave the document unchanged. Success retains the media ID, clip IDs and all clip
+edits, clears the missing flag, checkpoints undo history and marks the project
+dirty. Undo/redo restores the previous reference and missing state. Snapshots
+continue to expose only media IDs, basename labels and missing flags, without
+full paths. Session tests cover missing references after a file move, short-file
+rejection, stale-generation rejection, successful relink and undo/redo.

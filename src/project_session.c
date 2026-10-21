@@ -24,7 +24,8 @@ typedef enum {
     JOB_SAVE,
     JOB_AUTOSAVE,
     JOB_OPEN,
-    JOB_IMPORT
+    JOB_IMPORT,
+    JOB_RELINK
 } JobKind;
 typedef struct {
     JobKind kind;
@@ -32,7 +33,7 @@ typedef struct {
     Config config, original_config;
     CastTimeline timeline;
     CastProjectReport report;
-    uint64_t source_revision, duration_ns;
+    uint64_t source_revision, duration_ns, media_id;
     CastTimelineKind media_kind;
     unsigned track;
     int result;
@@ -369,7 +370,7 @@ void project_session_close(CastProjectSession *s)
     timeline_history_close(s->history);
     free(s);
 }
-static int queue(App *a, JobKind kind, const char *path, unsigned track, char *out, size_t size)
+static int queue(App *a, JobKind kind, const char *path, uint64_t reference, char *out, size_t size)
 {
     CastProjectSession *s = a->project;
     if (s->busy) {
@@ -395,7 +396,8 @@ static int queue(App *a, JobKind kind, const char *path, unsigned track, char *o
     }
     s->job.timeline = s->timeline;
     s->job.source_revision = s->revision;
-    s->job.track = track;
+    s->job.track = kind == JOB_IMPORT ? (unsigned)reference : 0;
+    s->job.media_id = kind == JOB_RELINK ? reference : 0;
     s->busy = true;
     s->done = false;
     s->pending = true;
@@ -406,6 +408,7 @@ static int queue(App *a, JobKind kind, const char *path, unsigned track, char *o
              kind == JOB_SAVE       ? "Project save"
              : kind == JOB_AUTOSAVE ? "Recovery autosave"
              : kind == JOB_OPEN     ? "Project open"
+             : kind == JOB_RELINK   ? "Media relink"
                                     : "Media import");
     snprintf(out, size, "OK %s", s->status);
     return 0;
@@ -467,6 +470,51 @@ static void complete(App *a)
             snprintf(s->status, sizeof s->status,
                      "Project opened; %u media and %u logo assets missing",
                      job->report.missing_media_count, job->report.missing_asset_count);
+        }
+    } else if (job->kind == JOB_RELINK) {
+        if (!idle(a) || s->capture_clip || s->revision != job->source_revision ||
+            memcmp(&a->config, &job->original_config, sizeof a->config)) {
+            snprintf(s->error, sizeof s->error,
+                     "Relink cancelled: document, outputs or settings changed");
+        } else {
+            CastTimeline *candidate = malloc(sizeof *candidate);
+            if (!candidate) {
+                snprintf(s->error, sizeof s->error, "Out of memory relinking media");
+            } else {
+                *candidate = s->timeline;
+                CastTimelineMedia *media =
+                    (CastTimelineMedia *)timeline_media(candidate, job->media_id);
+                bool invalid = !media || media->kind != job->media_kind;
+                for (unsigned i = 0; i < candidate->clip_count; ++i) {
+                    const CastTimelineClip *clip = &candidate->clips[i];
+                    if (clip->media_id == job->media_id &&
+                        (clip->capture_locked ||
+                         (job->media_kind != CAST_TIMELINE_IMAGE &&
+                          clip->source_in_ns + clip->duration_ns > job->duration_ns))) {
+                        invalid = true;
+                    }
+                }
+                if (invalid) {
+                    snprintf(s->error, sizeof s->error,
+                             "Replacement kind/duration does not cover existing clips");
+                } else {
+                    snprintf(media->path, sizeof media->path, "%s", job->path);
+                    media->duration_ns = job->duration_ns;
+                    media->missing = false;
+                    ++candidate->revision;
+                    if (timeline_validate(candidate, job->error, sizeof job->error) ||
+                        timeline_checkpoint(s->history, &s->timeline, job->error,
+                                            sizeof job->error)) {
+                        snprintf(s->error, sizeof s->error, "%.255s", job->error);
+                    } else {
+                        s->timeline = *candidate;
+                        changed(s);
+                        snprintf(s->status, sizeof s->status, "Relinked media %" PRIu64,
+                                 job->media_id);
+                    }
+                }
+                free(candidate);
+            }
         }
     } else {
         CastTimeline *candidate = malloc(sizeof *candidate);
@@ -837,7 +885,17 @@ int project_session_command(App *a, int argc, char **argv, char *out, size_t siz
         return 0;
     }
     if (s->busy && s->job.kind != JOB_SAVE && s->job.kind != JOB_AUTOSAVE) {
-        return fail(out, size, "timeline changes wait for project open/import completion");
+        return fail(out, size, "timeline changes wait for project open/import/relink completion");
+    }
+    if (!strcmp(argv[1], "relink") && argc == 4) {
+        uint64_t id;
+        if (!idle(a) || s->capture_clip) {
+            return fail(out, size, "media relink requires idle outputs");
+        }
+        if (unsigned_number(argv[2], &id) || !timeline_media(&s->timeline, id)) {
+            return fail(out, size, "unknown media identifier");
+        }
+        return queue(a, JOB_RELINK, argv[3], id, out, size);
     }
     if (!strcmp(argv[1], "import") && (argc == 3 || argc == 4)) {
         uint64_t track = 0;
