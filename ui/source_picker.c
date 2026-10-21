@@ -28,9 +28,26 @@ void app_source_picker_close(cui_context *ui, AppState *app) {
     if (app->source_picker.initialized)
         cui_overlay_close(ui, &app->source_picker.popup.overlay);
 }
+static const char *kind_name(AppDeviceKind kind) {
+    switch (kind) {
+    case APP_DEVICE_CAMERA: return "camera";
+    case APP_DEVICE_MIC: return "mic";
+    case APP_DEVICE_DESKTOP: return "desktop";
+    default: return "screen";
+    }
+}
+static const char *trigger_name(AppDeviceKind kind) {
+    switch (kind) {
+    case APP_DEVICE_CAMERA: return "camera-choose";
+    case APP_DEVICE_MIC: return "audio-mic-source";
+    case APP_DEVICE_DESKTOP: return "audio-desktop-source";
+    default: return "source-choose";
+    }
+}
 static bool available(const AppLive *live, AppDeviceKind kind) {
     return live->enabled && live->connected &&
-        (kind == APP_DEVICE_CAMERA ? live->can_select_camera :
+        (kind == APP_DEVICE_MIC || kind == APP_DEVICE_DESKTOP ? live->can_select_audio :
+         kind == APP_DEVICE_CAMERA ? live->can_select_camera :
          live->can_select_monitor || live->can_reselect_portal);
 }
 static void request(AppState *app, AppDeviceKind kind) {
@@ -45,7 +62,7 @@ static void choose(AppState *app, AppDeviceKind kind, const char *value) {
 static cui_id option_id(cui_context *ui, AppDeviceKind kind, unsigned index) {
     char text[64];
     snprintf(text, sizeof text, "source-picker-%s-item-%u",
-             kind == APP_DEVICE_CAMERA ? "camera" : "screen", index);
+             kind_name(kind), index);
     return cui_id_from(ui, text);
 }
 void app_source_picker(cui_context *ui, AppState *app, const cui_theme *t,
@@ -60,22 +77,27 @@ void app_source_picker(cui_context *ui, AppState *app, const cui_theme *t,
         app_source_picker_close(ui, app);
     cui_id trigger = cui_id_from(ui, name);
     if (picker->popup.overlay.open && picker->kind == kind) {
-        const char *other_name = kind == APP_DEVICE_SCREEN ? "camera-choose" : "source-choose";
-        cui_rect other = cui_bounds(ui, cui_id_from(ui, other_name));
+        cui_rect other = {0};
         size_t n = 0;
         const cui_event *queued = cui_frame_events(ui, &n);
-        for (size_t i = 0; i < n; ++i)
-            if (!cui_event_consumed(ui, i) && queued[i].type == CUI_EVENT_POINTER_DOWN &&
-                queued[i].pointer_button == CUI_POINTER_PRIMARY &&
-                cui_event_target(ui, i) == picker->popup.overlay.id && other.w > 0 &&
-                queued[i].x >= other.x && queued[i].x < other.x + other.w &&
-                queued[i].y >= other.y && queued[i].y < other.y + other.h) {
-                AppDeviceKind next = kind == APP_DEVICE_SCREEN ? APP_DEVICE_CAMERA : APP_DEVICE_SCREEN;
-                if (available(&app->live, next) && !app->live.pending && !app->live.snapshot_busy) {
+        for (size_t i = 0; i < n; ++i) {
+            if (cui_event_consumed(ui, i) || queued[i].type != CUI_EVENT_POINTER_DOWN ||
+                queued[i].pointer_button != CUI_POINTER_PRIMARY ||
+                cui_event_target(ui, i) != picker->popup.overlay.id) continue;
+            const AppDeviceKind kinds[] = {APP_DEVICE_SCREEN, APP_DEVICE_CAMERA, APP_DEVICE_MIC, APP_DEVICE_DESKTOP};
+            for (unsigned k = 0; k < sizeof kinds / sizeof *kinds; ++k) {
+                AppDeviceKind next = kinds[k];
+                if (next == kind) continue;
+                other = cui_bounds(ui, cui_id_from(ui, trigger_name(next)));
+                if (other.w > 0 && queued[i].x >= other.x && queued[i].x < other.x + other.w &&
+                    queued[i].y >= other.y && queued[i].y < other.y + other.h &&
+                    available(&app->live, next) && !app->live.pending && !app->live.snapshot_busy) {
                     cui_overlay_close(ui, &picker->popup.overlay);
                     picker->switch_kind = next;
+                    break;
                 }
             }
+        }
     }
     bool own = !picker->popup.overlay.open || picker->kind == kind;
     bool disabled = !available(&app->live, kind) || app->edit_requested ||
@@ -115,14 +137,18 @@ void app_source_picker(cui_context *ui, AppState *app, const cui_theme *t,
             items[count] = (cui_choice_item){option_id(ui, kind, i), cui_string(choice->label),
                                             app->live.pending || app->live.snapshot_busy};
             values[count] = choice->id;
-            const char *current = kind == APP_DEVICE_CAMERA ? app->live.camera_id : app->live.screen_id;
+            const char *current = kind == APP_DEVICE_CAMERA ? app->live.camera_id :
+                kind == APP_DEVICE_MIC ? app->live.mic_id :
+                kind == APP_DEVICE_DESKTOP ? app->live.desktop_id : app->live.screen_id;
             if ((kind != APP_DEVICE_CAMERA || app->live.camera_enabled) && !strcmp(current, choice->id))
                 selected = items[count].id;
             ++count;
         }
         if (!total)
             items[count++] = (cui_choice_item){cui_id_from(ui, "source-picker-status"),
-                cui_string(kind == APP_DEVICE_CAMERA ? "No cameras found" : "No displays found"), true};
+                cui_string(kind == APP_DEVICE_CAMERA ? "No cameras found" :
+                    kind == APP_DEVICE_MIC ? "No microphones found" :
+                    kind == APP_DEVICE_DESKTOP ? "No desktop sources found" : "No displays found"), true};
     }
     bool was_open = picker->popup.overlay.open;
     bool switched = picker->switch_kind == kind;
@@ -210,7 +236,8 @@ void app_source_picker(cui_context *ui, AppState *app, const cui_theme *t,
         cui_focus(ui, picker->popup.list.active);
         picker->items_revision = revision;
     }
-    cui_interact(ui, list, CUI_ROLE_LISTBOX, cui_string(kind == APP_DEVICE_CAMERA ? "Cameras" : "Displays"),
+    cui_interact(ui, list, CUI_ROLE_LISTBOX, cui_string(kind == APP_DEVICE_CAMERA ? "Cameras" :
+        kind == APP_DEVICE_MIC ? "Microphones" : kind == APP_DEVICE_DESKTOP ? "Desktop audio sources" : "Displays"),
                  false, false, 0);
     cui_set_semantic_details(ui, list, (cui_semantic_details){
         .orientation = CUI_ORIENTATION_VERTICAL, .scrollable = count > visible,

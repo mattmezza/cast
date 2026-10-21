@@ -7,11 +7,12 @@ typedef struct DaemonBridge DaemonBridge;
 DaemonBridge *bridge_open(const Config *, uint64_t window, char *error, size_t);
 /* Nonblocking. target: 0 virtual, 1 record, 2 stream. */
 void bridge_poll(DaemonBridge *, int target, AppLive *out);
-/* Queue one allowlisted composition edit. Returns 0 queued, -1 refused.
+/* Queue one allowlisted composition, recording or audio edit. Returns 0 queued, -1 refused.
  * No replay after disconnection or generation changes. */
 int bridge_edit(DaemonBridge *, AppEdit, const char *value, char *error, size_t);
 int bridge_devices(DaemonBridge *, AppDeviceKind, char *error, size_t);
-/* Empty camera ID disables it; empty portal screen ID opens desktop consent. */
+/* Empty camera ID disables it; empty portal screen ID opens desktop consent.
+ * Audio source IDs must come from a current acknowledged discovery list. */
 int bridge_source(DaemonBridge *, AppDeviceKind, const char *id, char *error, size_t);
 void bridge_close(DaemonBridge *);
 #endif

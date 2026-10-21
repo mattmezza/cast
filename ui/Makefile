@@ -75,3 +75,11 @@ check-bridge: build/test_bridge
 	./build/test_bridge
 check: check-bridge
 .PHONY: check-bridge
+
+# Native integration geometry uses the same shaping and fonts as the SDL host.
+build/test_native_layout.o: test_preview.c app.h live.h
+	@mkdir -p build
+	$(CC) $(CPPFLAGS) $(NATIVE_CFLAGS) $(CFLAGS) -DCAST_TEST_NATIVE_FONTS -MMD -MP -c $< -o $@
+build/test_native_layout: build/test_native_layout.o build/app.o build/menus.o build/cast_theme.o build/brand.o build/settings.o build/source_picker.o build/vendor/libcui_text.a build/vendor/libcui_bidi.a build/vendor/libcui.a
+	$(CC) $(LDFLAGS) $^ $(LDLIBS) -o $@
+-include build/test_native_layout.d

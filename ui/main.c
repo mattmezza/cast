@@ -258,6 +258,7 @@ int main(int argc, char **argv) {
     char *mono_paths[3] = {font_path("IBMPlexMono-Regular.ttf"),
         font_path("IBMPlexMono-Medium.ttf"), font_path("IBMPlexMono-SemiBold.ttf")};
 #endif
+    cui_font *symbol_face = NULL;
     int result = 2;
     cui_sdl3 *host = NULL;
     cui_context *ui = NULL;
@@ -304,6 +305,20 @@ int main(int argc, char **argv) {
         !cui_font_register_style(font, (cui_text_style){.weight = CUI_TEXT_WEIGHT_SEMIBOLD}, semibold_path)) {
 #endif
         fprintf(stderr, "Cannot load bundled medium/semibold fonts.\n");
+        goto cleanup;
+    }
+    /* Named mono faces omit symbols such as infinity. Supply explicit glyph
+     * fallback so missing mono coverage cannot abort the whole native frame. */
+#ifdef CAST_CUI_EMBEDDED
+    symbol_face = cui_font_open_memory(cast_ui_regular_start,
+        (size_t)(cast_ui_regular_end - cast_ui_regular_start));
+#else
+    char *symbol_path = font_path("Inter-Regular.otf");
+    symbol_face = symbol_path ? cui_font_open(symbol_path) : NULL;
+    free(symbol_path);
+#endif
+    if (!symbol_face || !cui_font_set_fallbacks(font, &symbol_face, 1)) {
+        fprintf(stderr, "Cannot load bundled symbol fallback font.\n");
         goto cleanup;
     }
     const cui_text_weight mono_weights[] = {CUI_TEXT_WEIGHT_NORMAL,
@@ -537,6 +552,22 @@ cleanup:
                app.live.can_zoom_follow ? "true" : "false", app.live.pending ? "true" : "false");
         debug_json_string(app.live.edit_error);
         printf(",");
+        printf("\"record_cut\":%s,\"record_paused\":%s,\"record_countdown_active\":%s,"
+               "\"record_finalizing\":%s,\"record_duration_ns\":%llu,\"record_countdown_remaining_ns\":%llu,"
+               "\"record_countdown\":%d,\"mic\":%s,\"desktop\":%s,\"mic_gain\":%.3f,\"desktop_gain\":%.3f,",
+               app.live.record_cut ? "true" : "false", app.live.record_paused ? "true" : "false",
+               app.live.record_countdown_active ? "true" : "false", app.live.record_finalizing ? "true" : "false",
+               (unsigned long long)app.live.record_duration_ns, (unsigned long long)app.live.record_countdown_remaining_ns,
+               app.live.record_countdown, app.live.mic ? "true" : "false", app.live.desktop ? "true" : "false",
+               app.live.mic_gain, app.live.desktop_gain);
+        printf("\"record_crf\":%d,\"record_audio_codec\":",app.live.record_crf); debug_json_string(app.live.record_audio_codec);
+        printf(",\"record_path\":"); debug_json_string(app.live.record_path);
+        printf(",\"record_directory\":"); debug_json_string(app.live.record_directory);
+        printf(",\"record_container\":"); debug_json_string(app.live.record_container);
+        printf(",\"record_codec\":"); debug_json_string(app.live.record_codec);
+        printf(",\"mic_id\":"); debug_json_string(app.live.mic_id);
+        printf(",\"desktop_id\":"); debug_json_string(app.live.desktop_id);
+        printf(",");
         printf("\"screen_id\":"); debug_json_string(app.live.screen_id);
         printf(",\"camera_id\":"); debug_json_string(app.live.camera_id);
         printf(",\"camera_enabled\":%s,\"devices_kind\":%u,\"devices_count\":%u,"
@@ -556,6 +587,7 @@ cleanup:
     bridge_close(bridge);
 #endif
     cui_font_close(font);
+    cui_font_close(symbol_face);
 #ifdef CAST_CUI_EMBEDDED
     cui_font_close(bold_face);
     cui_font_close(medium_face);

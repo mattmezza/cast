@@ -39,8 +39,8 @@ static const MenuDef composition_menu[] = {
     {"Stage", "", "layout-4", true}, {0}, {"Save as preset…", "", "save-preset", false},
     {"Presets…", "", "presets", true}};
 static const MenuDef output_menu[] = {
-    {"Virtual camera on/off", "", "camera", false}, {"Recording on/off", "R", "record", false},
-    {"Cut at playhead", "C", "cut", false}, {"Streaming on/off", "", "stream", false}, {0},
+    {"Virtual camera on/off", "", "camera", false}, {"Recording on/off", "R", "record", true},
+    {"Cut at playhead", "C", "cut", true}, {"Streaming on/off", "", "stream", false}, {0},
     {"Pause all", "", "pause", false}};
 static const MenuDef help_menu[] = {
     {"Keyboard shortcuts", "?", "keys", true}, {"Documentation", "", "docs", true}, {0},
@@ -65,6 +65,11 @@ static void dispatch(cui_context *ui, AppState *app, const MenuDef *def, cui_id 
         unsigned index = (unsigned)(def->action[7] - '0');
         if (index < APP_LAYOUT_COUNT) app_request_edit(app, APP_EDIT_LAYOUT, layouts[index]);
     }
+    else if (!strcmp(def->action, "record"))
+        app_request_edit(app, APP_EDIT_RECORD_ACTION,
+            app->live.recording || app->live.record_countdown_active ? "stop" : "start");
+    else if (!strcmp(def->action, "cut"))
+        app_request_edit(app, APP_EDIT_RECORD_ACTION, "cut");
     else if (!strcmp(def->action, "quit")) app->quit_requested = true;
     else {
         app->settings_category = !strcmp(def->action, "presets") ? 5 : 9;
@@ -95,6 +100,11 @@ void app_menu_bar(cui_context *ui, AppState *app, const cui_theme *t, float widt
             char id[64]; snprintf(id, sizeof id, "%s-item-%zu", ids[m], i);
             bool disabled = !def->available || (m == 3 && i < 5 && (app->edit_requested || app->live.pending || (app->live.enabled && !app->live.connected))) ||
                 (m == 2 && ((i == 0 && width < 1000) || (i == 1 && width < 800)));
+            if (m == 4 && (i == 1 || i == 2)) {
+                disabled = !app->live.enabled || !app->live.connected || app->live.pending ||
+                    app->live.snapshot_busy || app->edit_requested || app->live.record_finalizing ||
+                    (i == 2 && (!app->live.recording || app->live.record_cut || app->live.record_countdown_active));
+            }
             rows[i] = (MenuRow){t, def, disabled};
             entries[i] = (cui_menu_entry){.id = cui_id_from(ui, id),
                 .label = cui_string(def->label ? def->label : ""), .disabled = disabled,

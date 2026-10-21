@@ -13,13 +13,13 @@ not every CUI renderer or a newer upstream release.
 | --- | --- | --- |
 | Square orange/ink controls, custom icon-and-text tab bodies | `cui_components.h` exposes button `content`, `leading_content`, `trailing_content`, explicit dimensions, custom colors and corners. `cui_choice.h` exposes `cui_tabs_options.render`, per-item parts and base tabs. `app.c` uses `workspace_tab_body` with branded SVG icons. | Application styling; CUI does not require stock tab/button artwork. |
 | Brand marks and thin SVG icons | `cui_icon.h` and theme icon loaders accept application SVG. `brand.c` supplies the artwork and `app.c` retains `cui_icon_state`. | Application asset/render sizing responsibility; no requirement to substitute Unicode symbols. |
-| Settings category rail and overlay | `cui_surface.h` supplies dialog/sheet state, bounds, close decisions and focus restoration. `settings.c` uses `cui_base_surface_begin`, custom portals and scroll regions for a 1020×720 desktop dialog, 38px header and 214px rail, with all ten reference categories. | Supported in-window composition. Appearance works locally; backend forms are disabled and remain functionally incomplete. Safe acknowledged values (backend, container, codec, frame rate and stream service) appear when connected; unavailable data is labelled accordingly. |
-| File/Edit/View/Composition/Output/Help menus | `cui_choice.h` contains menu-tree state/options, anchored menu controls and base reducers; `menus.c` uses `cui_base_menu_tree` and `cui_menu_popup_paint` for all six menus with custom row content. | Implemented in-window menus support local panel/layout changes, Settings links and workspace Quit. Output/capture and unimplemented actions stay disabled. These menus remain in-window on macOS pending a native global-menu adapter. |
+| Settings category rail and overlay | `cui_surface.h` supplies dialog/sheet state, bounds, close decisions and focus restoration. `settings.c` uses `cui_base_surface_begin`, custom portals and scroll regions for a 1020×720 desktop dialog, 38px header and 214px rail, with all ten reference categories. | Supported in-window composition. Appearance works locally; recording settings submit acknowledged edits, while other backend forms remain incomplete. Safe acknowledged values (backend, container, codec, frame rate and stream service) appear when connected; unavailable data is labelled accordingly. |
+| File/Edit/View/Composition/Output/Help menus | `cui_choice.h` contains menu-tree state/options, anchored menu controls and base reducers; `menus.c` uses `cui_base_menu_tree` and `cui_menu_popup_paint` for all six menus with custom row content. | Implemented in-window menus support local panel/layout changes, Settings links and workspace Quit. Recording on/off and Cut are enabled with acknowledged state guards; remaining output/capture and unimplemented actions stay disabled. These menus remain in-window on macOS pending a native global-menu adapter. |
 | Native title bar, detached Settings, macOS system menu | `cui_sdl3.h` provides `cui_sdl3_window_interface` and `cui_sdl3_set_decorated`. Its contract explicitly excludes native move/system-menu dispatch. `cui_sdl3.c` creates an ordinary resizable, high-density SDL window. `main.c` creates one host. | Host integration gap: the current in-content title bar does not replace OS decorations. Detached Settings and the macOS global application menu require additional native host integration. This is not a claim that additional SDL windows are impossible. |
 | Inter plus IBM Plex Mono, medium/semibold weights and tracked uppercase labels | `cui_text.h` supports named family IDs, weights, style registration and shaping/measurement; `cui.h` also exposes `cui_text_style.letter_spacing`. `main.c` registers actual Inter regular/medium/semibold/bold and IBM Plex Mono regular/medium/semibold (family 1, monospace flag). Reference CSS specifies variable Inter, IBM Plex Mono, tabular numerals and `.085em` tracking for caps. | Font weights and the mono family are available in both standalone and embedded builds; application text styles select them. Font selection alone does not establish exact browser line wrapping or spacing. Different browser and FreeType/HarfBuzz rasterization also precludes assuming identical glyph pixels. |
 | Blurred backdrop behind overlays | `cui.h` lists rectangle, border, text, clip, image, mesh, drop-shadow and inset-shadow draw commands; it exposes shadow blur sigma but no backdrop-filter command. `cui_sdl3.c` prepares shadow masks and composites their textures. | This pinned public draw list/SDL renderer has no backdrop-blur operation. A translucent overlay and blurred shadow do not blur already-rendered content behind a dialog. Matching browser `backdrop-filter` would require a host/renderer extension or an application-managed filtered image. |
 | Composition preview, source cards, inspector and status | CUI boxes, images, custom drawing and independent scroll regions support the overall composition; the app already uses these for its stage/panels. | Remaining card content and visual detail are application scope. Live preview depends on the daemon bridge, not a widget limitation. |
-| Recording/projects, streaming, prompter, presets and other dialogs | The HTML/JS contain more working demonstration controls and dialogs than the native workspace. The attached native mode reads acknowledged state and supports layout, fit, eight camera anchors and camera width edits; monitor/camera selectors discover and select real devices; other configuration and output actions remain disabled. | Functional implementation gaps; do not describe the current workspace as complete feature parity. |
+| Recording/projects, streaming, prompter, presets and other dialogs | The HTML/JS contain more working demonstration controls and dialogs than the native workspace. The attached native mode reads acknowledged state and supports layout, fit, eight camera anchors and camera width edits; monitor/camera/audio selectors discover and select real devices. Look, basic zoom, recording lifecycle/settings and supported audio controls are connected. Streaming controls, editable projects, prompter and presets remain unfinished. | Functional implementation gaps; do not describe the current workspace as complete feature parity. |
 
 The HTML reference has a desktop minimum width of 1020px and a desktop-window
 wrapper with an outer shadow. The native app additionally supports narrow drawers.
@@ -99,3 +99,35 @@ The reference's two-stop gradient must not erase an existing third stop; an extr
 middle-stop control preserves that backend feature. Basic zoom remains free while
 cinematic status follows the daemon's actual capability. These are application
 integrations using pinned CUI APIs, without a toolkit patch.
+
+
+## Recording and audio controls
+
+Recording now uses real acknowledged start, countdown cancellation, pause, cut,
+resume and stop commands. The inspector retains the reference card padding,
+spacing, SVG headers, action rows and mono format values. Recording settings use
+the same modal rail and bordered groups; numeric sliders use explicit track widths
+inside the value column. Directory edits submit on Enter and reset across daemon
+sessions. Menu recording actions use the same intent validation as buttons.
+
+The reference mixer includes demonstration Music/Master channels and animated
+meters. The daemon currently exposes microphone/desktop routing, on/off, gain and
+readiness, with no peak telemetry or extra mixer buses. Native controls expose
+those actual capabilities and do not fabricate live levels. On macOS the backend
+supports only system-selected default audio sources and no virtual microphone.
+These differences are application/backend capabilities, not CUI limitations.
+
+Editable projects, autosaved cut lists, persistent defaults and hardware encoder
+discovery remain unfinished. Frame rate changes require daemon restart. The
+reference's encoders and formats are replaced with real backend configuration
+values; incompatible or unavailable encoders report daemon errors.
+
+
+The bundled IBM Plex Mono subset lacks U+221E (infinity). Its zero-gain `−∞ dB`
+label initially made native rendering fail. The host now registers bundled Inter
+as an explicit fallback through `cui_font_set_fallbacks`, which CUI already
+supports. This was missing application font setup, not a Unicode limitation.
+Toolkit diagnostic feedback: `CUI_TEXT_LAYOUT_MISSING_GLYPH` from the text layout
+path becomes a generic false return from SDL rendering; the app then displayed a
+stale SDL error, “That operation is not supported”. Surfacing the text-layout
+status/codepoint would make this failure substantially easier to diagnose.

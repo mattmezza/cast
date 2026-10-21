@@ -15,7 +15,7 @@ struct DaemonBridge {
     uint64_t edit_generation, edit_ack;
     char edit_error[256];
     AppDeviceKind discovery;
-    AppDevices devices, screens, cameras;
+    AppDevices devices, screens, cameras, microphones, desktops;
     uint64_t devices_generation;
     bool metadata_valid;
     unsigned char metadata[offsetof(AppLive, devices)];
@@ -98,7 +98,7 @@ int bridge_edit(DaemonBridge *bridge, AppEdit edit, const char *value, char *err
     static const char *const backgrounds[] = {"blurred", "gradient", "solid"};
     const char *key = NULL;
     bool valid = false;
-    if (!bridge || !value || strlen(value) > 31)
+    if (!bridge || !value || strlen(value) > (edit == APP_EDIT_RECORD_DIRECTORY ? sizeof(((Config *)0)->record_dir)-1 : 31))
         return refuse_edit(bridge, error, size, "Invalid composition edit");
     if (bridge->pending)
         return refuse_edit(bridge, error, size, "Wait for the pending composition edit");
@@ -136,6 +136,22 @@ int bridge_edit(DaemonBridge *bridge, AppEdit edit, const char *value, char *err
     case APP_EDIT_ZOOM_MAX: key = "zoom.max"; valid = decimal_range(value, 1, 20); break;
     case APP_EDIT_ZOOM_FOLLOW:
         key = "zoom.follow"; valid = !strcmp(value, "true") || !strcmp(value, "false"); break;
+    case APP_EDIT_RECORD_ACTION:
+        key = "record"; valid = !strcmp(value,"start") || !strcmp(value,"stop") || !strcmp(value,"pause") || !strcmp(value,"resume") || !strcmp(value,"cut") || !strcmp(value,"cancel"); break;
+    case APP_EDIT_RECORD_CONTAINER: key="record.container"; valid=!strcmp(value,"matroska") || !strcmp(value,"mp4") || !strcmp(value,"mov") || !strcmp(value,"webm"); break;
+    case APP_EDIT_RECORD_VIDEO_CODEC: key="record.video_codec"; valid=!strcmp(value,"auto") || !strcmp(value,"libx264") || !strcmp(value,"libx265") || !strcmp(value,"libvpx-vp9") || !strcmp(value,"libaom-av1"); break;
+    case APP_EDIT_RECORD_AUDIO_CODEC: key="record.audio_codec"; valid=!strcmp(value,"aac") || !strcmp(value,"libopus") || !strcmp(value,"pcm_s16le") || !strcmp(value,"flac"); break;
+    case APP_EDIT_RECORD_CRF: key="record.crf"; valid=decimal_range(value,0,51) && !strchr(value,'.'); break;
+    case APP_EDIT_RECORD_DIRECTORY:
+        key="record.directory"; valid=*value!=0;
+        for(const char *p=value;*p;++p) if((unsigned char)*p<32 || (unsigned char)*p==127)valid=false;
+        break;
+    case APP_EDIT_RECORD_COUNTDOWN: key="record.countdown"; valid=decimal_range(value,0,60) && !strchr(value,'.'); break;
+    case APP_EDIT_AUDIO_MIC: case APP_EDIT_AUDIO_DESKTOP: case APP_EDIT_AUDIO_VIRTUAL:
+        key=edit==APP_EDIT_AUDIO_MIC ? "mic" : edit==APP_EDIT_AUDIO_DESKTOP ? "desktop" : "virtual";
+        valid=!strcmp(value,"true") || !strcmp(value,"false"); break;
+    case APP_EDIT_AUDIO_MIC_GAIN: case APP_EDIT_AUDIO_DESKTOP_GAIN:
+        key=edit==APP_EDIT_AUDIO_MIC_GAIN ? "mic" : "desktop"; valid=decimal_range(value,0,400); break;
     default: break;
     }
     if (!valid) return refuse_edit(bridge, error, size, "Unsupported composition value");
@@ -154,12 +170,32 @@ int bridge_edit(DaemonBridge *bridge, AppEdit edit, const char *value, char *err
         return refuse_edit(bridge, error, size, "Zoom factor must remain between minimum and maximum");
     if (edit == APP_EDIT_ZOOM_FOLLOW && !strcmp(value, "true") && !snapshot.capabilities.cursor_metadata)
         return refuse_edit(bridge, error, size, "Cursor follow requires cursor metadata from the capture backend");
+    if (edit == APP_EDIT_RECORD_ACTION) {
+        bool start = !strcmp(value,"start"), stop = !strcmp(value,"stop"), cancel = !strcmp(value,"cancel");
+        if ((start && (snapshot.state.recording || snapshot.countdown || snapshot.finalizing)) ||
+            (stop && !snapshot.state.recording && !snapshot.countdown) ||
+            (cancel && !snapshot.countdown) || (!start && !stop && !cancel && (!snapshot.state.recording || snapshot.countdown || snapshot.finalizing)))
+            return refuse_edit(bridge,error,size,"Recording action is unavailable in the current state");
+    }
+    if (((edit >= APP_EDIT_RECORD_CONTAINER && edit <= APP_EDIT_RECORD_CRF) || edit == APP_EDIT_RECORD_DIRECTORY) &&
+        (snapshot.state.recording || snapshot.countdown || snapshot.finalizing))
+        return refuse_edit(bridge,error,size,"Stop the recording before changing recording settings");
+    if (edit == APP_EDIT_AUDIO_VIRTUAL && !strcmp(value,"true") && !strcmp(config->backend,"macos"))
+        return refuse_edit(bridge,error,size,"Virtual microphone is unavailable on macOS");
     char transport_error[CAST_ERR];
     int result;
     if (edit == APP_EDIT_ZOOM_FOLLOW || edit == APP_EDIT_ZOOM_FACTOR) {
         const char *args[] = {"zoom", edit == APP_EDIT_ZOOM_FACTOR ? "set" : "follow",
             edit == APP_EDIT_ZOOM_FACTOR ? value : !strcmp(value, "true") ? "on" : "off"};
         result = panel_client_command(bridge->client, 3, args, transport_error, sizeof transport_error);
+    } else if (edit == APP_EDIT_RECORD_ACTION) {
+        const char *args[]={"record",value};
+        result=panel_client_command(bridge->client,2,args,transport_error,sizeof transport_error);
+    } else if (edit >= APP_EDIT_AUDIO_MIC && edit <= APP_EDIT_AUDIO_DESKTOP_GAIN) {
+        bool gain=edit==APP_EDIT_AUDIO_MIC_GAIN || edit==APP_EDIT_AUDIO_DESKTOP_GAIN;
+        char percent[40];snprintf(percent,sizeof percent,"%s%%",value);
+        const char *args[]={"audio",key,gain ? "gain" : !strcmp(value,"true") ? "on" : "off",percent};
+        result=panel_client_command(bridge->client,gain ? 4 : 3,args,transport_error,sizeof transport_error);
     } else result = panel_client_setting(bridge->client, key, value, transport_error, sizeof transport_error);
     if (result)
         return refuse_edit(bridge, error, size, "Composition edit could not be queued");
@@ -197,21 +233,27 @@ static void source_queued(DaemonBridge *bridge, const PanelSnapshot *snapshot)
     bridge->edit_error[0] = 0;
 }
 
+static AppDevices *device_cache(DaemonBridge *bridge, AppDeviceKind kind)
+{
+    return kind == APP_DEVICE_SCREEN ? &bridge->screens : kind == APP_DEVICE_CAMERA ? &bridge->cameras :
+        kind == APP_DEVICE_MIC ? &bridge->microphones : &bridge->desktops;
+}
+
 int bridge_devices(DaemonBridge *bridge, AppDeviceKind kind, char *error, size_t size)
 {
-    if (kind != APP_DEVICE_SCREEN && kind != APP_DEVICE_CAMERA)
+    if (kind < APP_DEVICE_SCREEN || kind > APP_DEVICE_DESKTOP)
         return refuse_edit(bridge, error, size, "Unsupported device kind");
     PanelSnapshot snapshot;
     if (source_snapshot(bridge, &snapshot, error, size)) return -1;
     if (kind == APP_DEVICE_SCREEN && !monitor_backend(&snapshot.config))
         return refuse_edit(bridge, error, size, "This capture backend uses desktop consent instead of a display list");
-    const char *args[] = {kind == APP_DEVICE_SCREEN ? "screen" : "camera", "list"};
+    const char *args[] = {kind == APP_DEVICE_SCREEN ? "screen" : kind == APP_DEVICE_CAMERA ? "camera" : "audio", "list"};
     char detail[CAST_ERR];
     if (panel_client_command(bridge->client, 2, args, detail, sizeof detail))
         return refuse_edit(bridge, error, size, "Device discovery could not be queued");
     source_queued(bridge, &snapshot);
     bridge->discovery = kind;
-    bridge->devices = kind == APP_DEVICE_SCREEN ? bridge->screens : bridge->cameras;
+    bridge->devices = *device_cache(bridge, kind);
     bridge->devices.kind = kind;
     bridge->devices.generation = snapshot.daemon_generation;
     bridge->devices.loading = true;
@@ -222,20 +264,31 @@ int bridge_devices(DaemonBridge *bridge, AppDeviceKind kind, char *error, size_t
 
 int bridge_source(DaemonBridge *bridge, AppDeviceKind kind, const char *id, char *error, size_t size)
 {
-    if (!id || (kind != APP_DEVICE_SCREEN && kind != APP_DEVICE_CAMERA))
+    if (!id || (kind < APP_DEVICE_SCREEN || kind > APP_DEVICE_DESKTOP))
         return refuse_edit(bridge, error, size, "Invalid source selection");
     PanelSnapshot snapshot;
     if (source_snapshot(bridge, &snapshot, error, size)) return -1;
-    const AppDevices *cache = kind == APP_DEVICE_SCREEN ? &bridge->screens : &bridge->cameras;
+    const AppDevices *cache = device_cache(bridge, kind);
     bool found = false;
     for (unsigned i = 0; i < cache->count; ++i)
         if (!strcmp(id, cache->choices[i].id)) found = true;
-    size_t capacity = kind == APP_DEVICE_SCREEN ? sizeof snapshot.config.monitor : sizeof snapshot.config.camera_device;
+    size_t capacity = kind == APP_DEVICE_SCREEN ? sizeof snapshot.config.monitor : kind == APP_DEVICE_CAMERA ? sizeof snapshot.config.camera_device : sizeof snapshot.config.mic_source;
     if (*id && (!found || cache->generation != snapshot.daemon_generation || strlen(id) >= capacity))
         return refuse_edit(bridge, error, size, "Choose a device from the current discovered list");
     if (kind == APP_DEVICE_SCREEN && ((*id && !monitor_backend(&snapshot.config)) ||
         (!*id && strcmp(snapshot.config.backend, "wayland"))))
         return refuse_edit(bridge, error, size, "This display selection is unavailable for the capture backend");
+    if (kind == APP_DEVICE_MIC || kind == APP_DEVICE_DESKTOP) {
+        if (!*id || (!strcmp(snapshot.config.backend,"macos") && strcmp(id,"default")))
+            return refuse_edit(bridge,error,size,"Choose a supported audio source");
+        const char *audio_args[]={"audio",kind==APP_DEVICE_MIC ? "mic" : "desktop","source",id};
+        char detail[CAST_ERR];
+        if (panel_client_command(bridge->client,4,audio_args,detail,sizeof detail))
+            return refuse_edit(bridge,error,size,"Audio source selection could not be queued");
+        source_queued(bridge,&snapshot);
+        if (error && size) error[0]=0;
+        return 0;
+    }
     const char *args[] = {kind == APP_DEVICE_SCREEN ? "screen" : "camera", "select", id};
     int count = 3;
     if (kind == APP_DEVICE_CAMERA) args[1] = "device";
@@ -250,8 +303,50 @@ int bridge_source(DaemonBridge *bridge, AppDeviceKind kind, const char *id, char
     return 0;
 }
 
+static bool parse_audio_devices(AppDevices *devices, const PanelSnapshot *snapshot, AppDeviceKind kind)
+{
+    const char *reply=snapshot->device_reply;
+    const char *end=memchr(reply,0,sizeof snapshot->device_reply);
+    if (!end || (end!=reply && end[-1]!='\n')) return false;
+    bool mac=!strcmp(snapshot->config.backend,"macos");
+    devices->kind=kind; devices->generation=snapshot->daemon_generation;
+    for (const char *line=reply; line<end;) {
+        const char *next=memchr(line,'\n',(size_t)(end-line));
+        if (!next) return false;
+        for (const char *p=line;p<next;++p) if ((unsigned char)*p<32 || (unsigned char)*p==127) return false;
+        const char *split=strstr(line,mac ? " [" : " [id=");
+        if (!split || split>=next || split==line || split-line>=256) return false;
+        const char *suffix=memchr(split,']',(size_t)(next-split));
+        if (!suffix || suffix+1>=next || suffix[1]!=' ') return false;
+        bool include;
+        if (mac) include=kind==APP_DEVICE_MIC ? !strncmp(split," [microphone] ",14) : !strncmp(split," [desktop] ",11);
+        else {
+            const char *cl=strstr(split," class=");
+            if (!cl || cl>=suffix) return false;
+            bool source=(size_t)(suffix-cl)>=19 && !strncmp(cl," class=Audio/Source",19);
+            include=kind==APP_DEVICE_MIC ? source : source ||
+                !strncmp(cl," class=Audio/Sink]",18) || !strncmp(cl," class=Stream/Output/Audio]",26);
+            size_t id_length=(size_t)(split-line);
+            if ((id_length==strlen(snapshot->config.virtual_name) && !memcmp(line,snapshot->config.virtual_name,id_length)) ||
+                (id_length>=13 && !strncmp(line,"cast.capture.",13))) include=false;
+        }
+        if (include) {
+            if (devices->count==APP_DEVICE_MAX) return false;
+            AppDeviceChoice *choice=&devices->choices[devices->count];
+            size_t len=(size_t)(split-line); memcpy(choice->id,line,len);choice->id[len]=0;
+            for(unsigned i=0;i<devices->count;++i) if(!strcmp(choice->id,devices->choices[i].id)) return false;
+            size_t label=(size_t)(next-(suffix+2));
+            if (!label || label>=sizeof choice->label) return false;
+            memcpy(choice->label,suffix+2,label);choice->label[label]=0;++devices->count;
+        }
+        line=next+1;
+    }
+    return true;
+}
+
 static bool parse_devices(AppDevices *devices, const PanelSnapshot *snapshot, AppDeviceKind kind)
 {
+    if (kind == APP_DEVICE_MIC || kind == APP_DEVICE_DESKTOP) return parse_audio_devices(devices,snapshot,kind);
     const char *reply = snapshot->device_reply;
     const char *end = memchr(reply, 0, sizeof snapshot->device_reply);
     devices->kind = kind;
@@ -331,6 +426,8 @@ static void edit_snapshot(DaemonBridge *bridge, const PanelSnapshot *snapshot, A
         memset(&bridge->devices, 0, sizeof bridge->devices);
         memset(&bridge->screens, 0, sizeof bridge->screens);
         memset(&bridge->cameras, 0, sizeof bridge->cameras);
+        memset(&bridge->microphones, 0, sizeof bridge->microphones);
+        memset(&bridge->desktops, 0, sizeof bridge->desktops);
     }
     if (snapshot && snapshot->connected) bridge->devices_generation = snapshot->daemon_generation;
     if (snapshot && bridge->pending) {
@@ -346,11 +443,9 @@ static void edit_snapshot(DaemonBridge *bridge, const PanelSnapshot *snapshot, A
                     !snapshot->device_reply_failed && parse_devices(parsed, snapshot, bridge->discovery);
                 if (valid) {
                     bridge->devices = *parsed;
-                    if (bridge->discovery == APP_DEVICE_SCREEN) bridge->screens = *parsed;
-                    else bridge->cameras = *parsed;
+                    *device_cache(bridge,bridge->discovery) = *parsed;
                 } else {
-                    if (bridge->discovery == APP_DEVICE_SCREEN) memset(&bridge->screens, 0, sizeof bridge->screens);
-                    else memset(&bridge->cameras, 0, sizeof bridge->cameras);
+                    memset(device_cache(bridge,bridge->discovery),0,sizeof(AppDevices));
                     bridge->devices.count = 0;
                     snprintf(bridge->devices.error, sizeof bridge->devices.error, "Device discovery failed or returned an incomplete list. Try again.");
                 }
@@ -436,6 +531,30 @@ static void copy_config(AppLive *out, const PanelSnapshot *snapshot, const Daemo
     out->stream_paused = state->stream_paused;
     out->stream_frozen = state->stream_frozen;
     out->stream_blurred = state->stream_blurred;
+    out->record_cut = state->record_cut;
+    out->record_countdown_active = snapshot->countdown;
+    out->record_finalizing = snapshot->finalizing;
+    out->record_duration_ns = snapshot->duration_ns;
+    out->record_countdown_remaining_ns = snapshot->countdown_remaining_ns;
+    source_label(out->record_path,sizeof out->record_path,state->record_path);
+    source_label(out->record_directory,sizeof out->record_directory,config->record_dir);
+    source_label(out->record_audio_codec,sizeof out->record_audio_codec,config->audio_codec);
+    source_label(out->record_encoder,sizeof out->record_encoder,snapshot->record_encoder);
+    out->record_crf=config->record_crf;out->record_countdown=config->record_countdown;
+    out->mic_gain=(float)(config->mic_gain*100);out->desktop_gain=(float)(config->desktop_gain*100);
+    out->virtual_audio=config->virtual_audio;out->can_virtual_audio=!strcmp(config->backend,"xorg") || !strcmp(config->backend,"x11") || !strcmp(config->backend,"wayland");
+    out->can_select_audio=!strcmp(config->backend,"macos") || !strcmp(config->backend,"xorg") ||
+        !strcmp(config->backend,"x11") || !strcmp(config->backend,"wayland");
+    source_label(out->mic_source,sizeof out->mic_source,config->mic_source);
+    source_label(out->desktop_source,sizeof out->desktop_source,config->desktop_source);
+    snprintf(out->mic_id,sizeof out->mic_id,"%s",out->mic_source);
+    snprintf(out->desktop_id,sizeof out->desktop_id,"%s",out->desktop_source);
+    source_label(out->audio_status,sizeof out->audio_status,snapshot->audio_status);
+    out->audio_available=strstr(out->audio_status,"\"available\":true")!=NULL;
+    out->mic_ready=strstr(out->audio_status,"\"mic_ready\":true")!=NULL;
+    out->desktop_ready=strstr(out->audio_status,"\"desktop_ready\":true")!=NULL;
+    out->virtual_ready=strstr(out->audio_status,"\"virtual_ready\":true")!=NULL;
+    out->virtual_silent=strstr(out->audio_status,"\"virtual_silent\":true")!=NULL;
     out->mic = config->mic;
     out->desktop = config->desktop;
     out->camera_enabled = config->camera_enabled;

@@ -128,8 +128,8 @@ macOS display lists can be selected; Wayland offers the desktop consent picker.
 Synthetic capture has no display selector. Camera choices include No camera.
 Selections change only after daemon acknowledgment; unavailable, failed and empty
 lists remain explicit, with Retry on discovery failure. Linux V4L2 paths and macOS
-camera identifiers are parsed separately. Remaining configuration forms and output
-actions are still unavailable.
+camera identifiers are parsed separately. Audio pickers use actual microphone and desktop
+routes; macOS exposes the system-selected default routes.
 
 The Look section edits the actual screen backdrop: Blur, Gradient or Solid.
 Solid fill and gradient stop colours accept `#RRGGBB` on Enter; the swatch shows
@@ -153,13 +153,49 @@ inside the executable. The existing panel remains the default application UI.
 
 Settings opens as an in-window modal. File/Edit/View/Composition/Output/Help
 menus support local panel visibility and layout choices, Settings navigation and
-workspace Quit. Capture/output commands and other unavailable actions remain
-disabled. macOS retains these in-window menus until a native global-menu adapter
-exists. Detached Settings, OS title-bar integration and acknowledged backend
-settings editing and output commands remain later milestones. The pinned SDL adapter excludes
+workspace Quit. Recording on/off and Cut are enabled when the acknowledged
+recording state allows them; R and C use the same validated actions. Other unavailable
+actions remain disabled. macOS retains these in-window menus until a native global-menu adapter
+exists. Detached Settings, OS title-bar integration and the remaining backend
+settings and output commands remain later milestones. The pinned SDL adapter excludes
 native move/system-menu dispatch; its renderer also has no backdrop-blur command.
 See [the fidelity audit](../docs/ui-fidelity.md) for the API evidence and remaining
 differences from the browser reference.
+
+## Recording and audio
+
+The Record workspace starts a take, cancels a countdown, pauses, cuts, resumes and
+stops through the daemon's acknowledged queue. Pause records the neutral privacy
+screen with silent audio; Cut omits media time. Resume continues the same file.
+Elapsed time, countdown, finalisation, destination and errors come from the daemon.
+Recording remains available in Community. Starting a take does not reveal virtual
+camera or streaming output.
+
+The mixer selects discovered microphone and desktop routes and controls channel
+on/off and gain. This is the shared mix used by recording and streaming. Linux uses
+PipeWire sources/monitors; macOS uses the system-selected microphone and
+ScreenCaptureKit desktop audio. Virtual microphone is unavailable on macOS. Live
+peak meters, Music and Master channels are not supplied by the current backend;
+the workspace does not simulate levels.
+
+Recording settings apply to the running daemon session: destination folder,
+container, software encoder, audio codec, quality and countdown. Stop the take
+before changing these settings. Frame rate requires restarting the daemon. Encoder
+availability and valid container/codec combinations are checked by the backend;
+errors remain visible. Persistent preferences, editable projects/cut lists and
+hardware encoder discovery remain future work.
+
+The isolated native recording regression is:
+
+```sh
+mkdir -p ui/build/tmp
+make -C ui build/test_native_layout
+PYTHONDONTWRITEBYTECODE=1 python3 ui/test_recording.py ./cast
+```
+
+It uses a private Xvfb, private daemon and disabled audio routes, verifies real
+recording interactions and decodes the generated file. It does not verify physical
+audio devices or macOS runtime behavior. Temporary recordings are removed.
 
 ## Build and verification
 

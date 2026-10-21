@@ -4,6 +4,7 @@
 #include "cui/cui_styled_slider_events.h"
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 /* Reference: cast-app .swin: 1020x720, 38px chrome, 214px rail.
  * Backend forms are deliberately disabled until an acknowledged snapshot exists. */
@@ -137,6 +138,114 @@ static void segments(cui_context *ui,const cui_theme *t,const char *label,const 
     }
     cui_end_box(ui); row_end(ui);
 }
+static bool record_settings_disabled(const AppState *a) {
+    return !a->live.connected||!a->live.enabled||a->edit_requested||a->live.pending||a->live.snapshot_busy||
+        a->live.recording||a->live.record_countdown_active||a->live.record_finalizing;
+}
+static void record_select(cui_context *ui,AppState *a,const cui_theme *t,const char *idname,const char *label,
+                          const char *note,const char *current,const char *const *labels,const char *const *values,
+                          unsigned count,AppEdit edit,bool narrow) {
+    cui_id id=cui_id_from(ui,idname);
+    unsigned index=edit==APP_EDIT_RECORD_CONTAINER?0:edit==APP_EDIT_RECORD_VIDEO_CODEC?1:2;
+    cui_choice_popup *popup=&a->recording_selects[index];
+    if(!a->recording_select_initialized[index]) {
+        cui_choice_popup_init(popup,id^UINT64_C(0x706f707570));a->recording_select_initialized[index]=true;
+    }
+    row_begin(ui,t,label,note,narrow);
+    cui_choice_item items[8];cui_id selected=0;
+    for(unsigned i=0;i<count;++i) {
+        items[i]=(cui_choice_item){id^(UINT64_C(0x6f7074696f6e)+i),cui_string(labels[i]),false};
+        if(!strcmp(values[i],current))selected=items[i].id;
+    }
+    cui_rect viewport=cui_bounds(ui,cui_id_from(ui,"root"));
+    /* Root ID is outside this row's identity scope. The settings overlay bounds
+     * supplies the same host viewport when nested IDs cannot resolve it. */
+    if(viewport.w<=0)viewport=a->settings.overlay.bounds;
+    bool disabled=record_settings_disabled(a),was_open=popup->overlay.open;
+    cui_base_choice_popup_trigger(ui,id,cui_string(label),disabled,items,count,selected,popup);
+    bool open=popup->overlay.open;
+    CastDesignTokens tokens=cast_design_tokens(t->dark);
+    cui_color foreground=disabled?t->muted:t->text;
+    cui_begin_box(ui,id,(cui_box){.width=160,.fixed_width=true,.height=36,.row=true,.gap=8,
+        .custom_padding=true,.padding_edges={.left=10,.right=10},.align_y=CUI_ALIGN_CENTER,
+        .background=t->background,.border_width=1,.border=open?tokens.selected_line:cui_hovered(ui,id)?cui_color_mix_oklab(t->border,t->text,.45f):t->border});
+    const char *display=current[0]?current:"Unavailable";
+    for(unsigned i=0;i<count;++i)if(selected==items[i].id)display=labels[i];
+    cui_text_ellipsis(ui,id^UINT64_C(0x76616c7565),cui_string(display),
+        (cui_text_ellipsis_options){.width=-1,.font_size=12.5f,.color=foreground});
+    settings_icon(ui,id^UINT64_C(0x63686576726f6e),t,"down",foreground);
+    cui_end_box(ui);
+    if(open&&cui_overlay_begin(ui,&popup->overlay)) {
+        if(!was_open) {
+            popup->list=(cui_list_state){.active=selected?selected:items[0].id};
+            cui_focus(ui,popup->list.active);
+        }
+        cui_rect anchor=cui_bounds(ui,id);
+        cui_rect panel=cui_popup_place(anchor,(cui_size){160,count*32.f+8},viewport,CUI_POPUP_BELOW,4).bounds;
+        cui_overlay_set_bounds(&popup->overlay,panel);
+        cui_begin_portal(ui,popup->overlay.id,(cui_box){.padding=4,.background=t->surface,.border=t->border,.border_width=1},panel,220);
+        cui_box_shadow shadow={.layer={.offset_y=16,.sigma=20,.color={16,17,19,t->dark?184:51}}};
+        cui_set_box_shadows(ui,&shadow,1,(cui_corner_radii){0});
+        cui_theme theme=*t;theme.font_size=12;theme.popover=t->surface;
+        cui_id chosen=selected;
+        if(cui_list(ui,id^UINT64_C(0x6c697374),&theme,items,count,&chosen,&popup->list,
+            (cui_list_options){.height=32,.dt=.016f,.scroll_scope=popup->overlay.id})) {
+            for(unsigned i=0;i<count;++i)if(chosen==items[i].id)app_request_edit(a,edit,values[i]);
+            cui_overlay_close(ui,&popup->overlay);cui_focus(ui,id);cui_invalidate(ui);
+        }
+        cui_end_box(ui);cui_overlay_end(ui);
+    }
+    row_end(ui);
+}
+typedef struct {AppState *app;AppEdit edit;} RecordingNumber;
+static void record_number_request(void *user,const cui_component_slider_request *event) {
+    if(event->phase!=CUI_SLIDER_COMMIT)return;
+    RecordingNumber *request=user;char value[24];snprintf(value,sizeof value,"%.0f",event->requested);
+    app_request_edit(request->app,request->edit,value);
+}
+static void record_number(cui_context *ui,AppState *a,const cui_theme *t,const char *idname,const char *label,
+                          const char *note,int value,int maximum,AppEdit edit,bool narrow) {
+    cui_id id=cui_id_from(ui,idname);row_begin(ui,t,label,note,narrow);
+    cui_begin_box(ui,0,(cui_box){.width=160,.row=true,.gap=8,.align_y=CUI_ALIGN_CENTER});
+    cui_slider_state *state=cui_resource_get(ui,id,UINT64_C(0x7265636e756d6265),sizeof *state,NULL,NULL);
+    RecordingNumber request={a,edit};
+    if(state)cui_slider_events(ui,id,t,cui_string(label),value,state,
+        (cui_slider_options){.minimum=0,.maximum=maximum,.step=1,.disabled=record_settings_disabled(a)},
+        (cui_slider_style_options){.width=120,.track_height=4,.hit_height=24,.hide_label=true},
+        (cui_component_slider_handler){record_number_request,&request});
+    char display[24];snprintf(display,sizeof display,"%d%s",value,edit==APP_EDIT_RECORD_COUNTDOWN?" s":"");txt(ui,display,11,t->muted);
+    cui_end_box(ui);row_end(ui);
+}
+typedef struct {cui_edit *edit;cui_input_state state;char buffer[4096],acknowledged[4096];uint64_t generation;bool connected,focused;} RecordingDirectory;
+static void directory_destroy(void *user) {cui_edit_destroy(((RecordingDirectory *)user)->edit);}
+static void record_directory(cui_context *ui,AppState *a,const cui_theme *t,bool narrow) {
+    cui_id id=cui_id_from(ui,"record-directory");
+    RecordingDirectory *state=cui_resource_get(ui,id,UINT64_C(0x7265636469726563),sizeof *state,NULL,directory_destroy);
+    if(!state)return;
+    if(!state->edit) {
+        snprintf(state->buffer,sizeof state->buffer,"%s",a->live.record_directory);
+        state->edit=cui_edit_create((cui_edit_config){.buffer=state->buffer,.capacity=sizeof state->buffer});
+    }
+    if(!state->edit)return;
+    bool focused=cui_focused(ui)==id;
+    bool reset=strcmp(state->acknowledged,a->live.record_directory)||state->generation!=a->live.generation||
+        state->connected!=a->live.connected||(state->focused&&!focused);
+    size_t count=0;const cui_event *events=cui_frame_events(ui,&count);
+    for(size_t i=0;i<count;++i)if(focused&&!cui_event_consumed(ui,i)&&events[i].type==CUI_EVENT_KEY_DOWN&&events[i].key==CUI_KEY_ESCAPE) {
+        reset=true;cui_consume_event(ui,i);
+    }
+    if(reset)cui_edit_set_content(state->edit,(cui_edit_content){.text=cui_string(a->live.record_directory)});
+    snprintf(state->acknowledged,sizeof state->acknowledged,"%s",a->live.record_directory);
+    state->generation=a->live.generation;state->connected=a->live.connected;state->focused=focused;
+    row_begin(ui,t,"Save folder","Press Enter to apply. The daemon chooses each take name.",narrow);
+    cui_input_result result=cui_input_ex(ui,id,t,cui_string("Recording save folder"),state->edit,&state->state,
+        (cui_input_options){.width=160,.height=36,.disabled=record_settings_disabled(a)});
+    if(result.submitted) {
+        app_request_edit(a,APP_EDIT_RECORD_DIRECTORY,state->buffer);
+        cui_edit_set_content(state->edit,(cui_edit_content){.text=cui_string(a->live.record_directory)});cui_invalidate(ui);
+    }
+    row_end(ui);
+}
 #define FIELD(label,note,value,kind) field(ui,t,label,note,value,kind,narrow)
 #define SEG(label,note,values,sel) segments(ui,t,label,note,values,sizeof(values)/sizeof(values[0]),sel,false,a,narrow)
 static void content(cui_context *ui,AppState *a,const cui_theme *t,bool narrow) {
@@ -159,7 +268,7 @@ static void content(cui_context *ui,AppState *a,const cui_theme *t,bool narrow) 
     cui_text_ex(ui,cui_string(titles[c]),17,t->text,0,(cui_text_style){.weight=CUI_TEXT_WEIGHT_SEMIBOLD});
     cui_begin_box(ui,0,(cui_box){.width=-1,.max_width=480});
     txt(ui,subs[c],12,t->muted);cui_end_box(ui);
-    if(c!=0 && c!=9) txt(ui,connected ? "Read only · changes are not available in this workspace" : "Connect the daemon to inspect current settings",11,t->muted);
+    if(c!=0 && c!=2 && c!=9) txt(ui,connected ? "Read only · changes are not available in this workspace" : "Connect the daemon to inspect current settings",11,t->muted);
     const char *theme[]={"dark","light","system"};
     const char *density[]={"comfortable","compact"};
     const char *fit[]={"contain","cover"},*shape[]={"rect","rounded","circle"};
@@ -186,14 +295,23 @@ static void content(cui_context *ui,AppState *a,const cui_theme *t,bool narrow) 
         group(ui,t,"CAPTURE"); FIELD("Screen border","A hairline around the captured screen.","",'s');
         FIELD("Corner radius","0 for a hard native rectangle.","— px",'r'); group_end(ui);
         group(ui,t,"ANNOTATIONS"); FIELD("Cursor, clicks and keys","Per-output visibility lives in the panel matrix.","",'s');group_end(ui);break;
-    case 2:
-        group(ui,t,"OUTPUT"); FIELD("Container",NULL,connected?a->live.record_container:"Unavailable",'c');
-        FIELD("Encoder","Hardware encoders depend on the backend.",connected?a->live.record_codec:"Unavailable",'c');
-        FIELD("Frame rate",NULL,connected?fps:"— fps",'c'); group_end(ui);
-        group(ui,t,"TAKE"); FIELD("Countdown","Before every start and every resume.","— s",'r');
-        FIELD("Continue the same file after a cut","Off writes a new file per segment.","",'s');group_end(ui);
-        group(ui,t,"PROJECT");FIELD("Save folder",NULL,"Not connected",'b');
-        FIELD("Autosave the cut list","Editable recording projects are not implemented.","",'s');group_end(ui);break;
+    case 2: {
+        const char *containers[]={"MP4","MKV","MOV","WebM"},*container_values[]={"mp4","matroska","mov","webm"};
+        const char *encoders[]={"Automatic","H.264 · software","HEVC · software","VP9 · software","AV1 · software"},*encoder_values[]={"auto","libx264","libx265","libvpx-vp9","libaom-av1"};
+        const char *audio[]={"AAC","Opus","PCM 16-bit","FLAC"},*audio_values[]={"aac","libopus","pcm_s16le","flac"};
+        txt(ui,record_settings_disabled(a)?"Recording settings are locked while a take is active or the daemon is unavailable.":"Changes apply to the next take in this daemon session.",11,t->muted);
+        if(a->live.edit_error[0])txt(ui,a->live.edit_error,11,t->danger);
+        group(ui,t,"OUTPUT");
+        record_select(ui,a,t,"record-container","Container",NULL,a->live.record_container,containers,container_values,4,APP_EDIT_RECORD_CONTAINER,narrow);
+        record_select(ui,a,t,"record-video-codec","Encoder","Available encoders depend on the backend.",a->live.record_codec,encoders,encoder_values,5,APP_EDIT_RECORD_VIDEO_CODEC,narrow);
+        record_select(ui,a,t,"record-audio-codec","Audio codec",NULL,a->live.record_audio_codec,audio,audio_values,4,APP_EDIT_RECORD_AUDIO_CODEC,narrow);
+        record_number(ui,a,t,"record-crf","Quality (CRF)","Lower values improve quality and increase file size.",a->live.record_crf,51,APP_EDIT_RECORD_CRF,narrow);
+        FIELD("Frame rate","Requires restarting the capture daemon.",connected?fps:"— fps",'t');group_end(ui);
+        group(ui,t,"TAKE");record_number(ui,a,t,"record-countdown","Countdown","Before each start and resume from a cut.",a->live.record_countdown,60,APP_EDIT_RECORD_COUNTDOWN,narrow);
+        FIELD("Continue the same file after a cut","Cuts omit media time; resume continues the same file.","Always",'t');group_end(ui);
+        group(ui,t,"PROJECT");record_directory(ui,a,t,narrow);
+        FIELD("Autosave the cut list","Editable recording projects are unavailable.","Unavailable",'t');group_end(ui);break;
+    }
     case 3:
         group(ui,t,"DESTINATION"); FIELD("Name",NULL,connected?a->live.stream_service:"Not connected",'b');
         FIELD("Server URL",NULL,connected?"Hidden for privacy":"Not connected",'b'); FIELD("Stream-key file",NULL,"Never displayed",'b');group_end(ui);
@@ -248,6 +366,9 @@ static void content(cui_context *ui,AppState *a,const cui_theme *t,bool narrow) 
 }
 void app_settings_frame(cui_context *ui,AppState *a,const cui_theme *t,float width,float height) {
     init(ui,a);
+    if(!a->settings.overlay.open||!a->live.connected||a->recording_select_generation!=a->live.generation||a->settings_category!=2)
+        for(unsigned i=0;i<3;++i)if(a->recording_select_initialized[i])cui_overlay_close(ui,&a->recording_selects[i].overlay);
+    a->recording_select_generation=a->live.generation;
     if(a->settings_category>=10)a->settings_category=0;
     float w=fminf(1020,fmaxf(0,width-40)),h=fminf(720,fmaxf(0,height-40));
     cui_surface_options o={.viewport={0,0,width,height},.width=w,.height=h,.margin=20,

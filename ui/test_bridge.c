@@ -6,14 +6,14 @@
 #include "../src/panel_transport.h"
 static PanelSnapshot snap;
 static int calls, mode, settings, setting_fail;
-static char setting_key[64], setting_value[32];
+static char setting_key[64], setting_value[4096];
 int panel_client_command(PanelClient *client, int argc, const char *const *argv, char *error, size_t size)
 {
     (void)client; (void)error; (void)size;
-    assert(argc == 2 || argc == 3);
+    assert(argc >= 2 && argc <= 4);
     ++settings;
     snprintf(setting_key, sizeof setting_key, "%s %s", argv[0], argv[1]);
-    snprintf(setting_value, sizeof setting_value, "%.31s", argc == 3 ? argv[2] : "");
+    snprintf(setting_value, sizeof setting_value, "%.31s", argc >= 3 ? argv[argc-1] : "");
     if (setting_fail) return -1;
     ++snap.command_queued;
     return 0;
@@ -297,5 +297,92 @@ int main(void)
  snap.connected=false;bridge_poll(b,0,&live);
  assert(!live.pending && live.edit_error[0] && !live.cinematic_zoom_available && !live.zoom_factor);
  assert(bridge_edit(b,APP_EDIT_ZOOM_FACTOR,"2",error,sizeof error)<0);
+ /* Recording lifecycle and audio routing use acknowledged daemon commands. */
+ snap.connected=true;snap.command_completed=snap.command_queued;snap.state.recording=false;
+ strcpy(snap.config.backend,"xorg");snap.countdown=false;snap.finalizing=false;
+ snap.config.mic_gain=.8;snap.config.desktop_gain=1.25;
+ strcpy(snap.audio_status,"{\"available\":true,\"mic_ready\":false,\"desktop_ready\":true,\"virtual_ready\":false,\"virtual_silent\":true}");
+ strcpy(snap.state.record_path,"/tmp/session.mkv");snap.duration_ns=123456789;
+ bridge_poll(b,0,&live);
+ assert(live.mic_gain==80 && live.desktop_gain==125 && live.audio_available && live.desktop_ready && !live.mic_ready && live.virtual_silent);
+ assert(live.record_duration_ns==123456789 && !strcmp(live.record_path,"/tmp/session.mkv"));
+ assert(bridge_edit(b,APP_EDIT_RECORD_ACTION,"cut",error,sizeof error)<0);
+ assert(!bridge_edit(b,APP_EDIT_RECORD_ACTION,"start",error,sizeof error));
+ assert(!strcmp(setting_key,"record start"));bridge_poll(b,0,&live);assert(!live.recording && live.pending);
+ snap.command_completed=snap.command_queued;snap.state.recording=true;bridge_poll(b,0,&live);assert(live.recording && !live.pending);
+ assert(bridge_edit(b,APP_EDIT_RECORD_ACTION,"start",error,sizeof error)<0);
+ assert(bridge_edit(b,APP_EDIT_RECORD_CONTAINER,"mp4",error,sizeof error)<0);
+ const char *actions[]={"pause","cut","resume","stop"};
+ for(unsigned i=0;i<4;++i) {
+   assert(!bridge_edit(b,APP_EDIT_RECORD_ACTION,actions[i],error,sizeof error));
+   snap.command_completed=snap.command_queued;bridge_poll(b,0,&live);
+ }
+ snap.state.recording=false;snap.countdown=true;
+ assert(!bridge_edit(b,APP_EDIT_RECORD_ACTION,"cancel",error,sizeof error));
+ snap.command_completed=snap.command_queued;snap.countdown=false;bridge_poll(b,0,&live);
+ struct {AppEdit edit;const char *value,*key;} audio_edits[]={
+  {APP_EDIT_RECORD_DIRECTORY,"/tmp/a long folder name with spaces for recordings","record.directory"},
+  {APP_EDIT_RECORD_CONTAINER,"mp4","record.container"},
+  {APP_EDIT_RECORD_VIDEO_CODEC,"auto","record.video_codec"},
+  {APP_EDIT_RECORD_AUDIO_CODEC,"aac","record.audio_codec"},
+  {APP_EDIT_RECORD_CRF,"51","record.crf"},
+  {APP_EDIT_RECORD_COUNTDOWN,"60","record.countdown"},
+  {APP_EDIT_AUDIO_MIC,"true","audio mic"},{APP_EDIT_AUDIO_DESKTOP,"false","audio desktop"},
+  {APP_EDIT_AUDIO_VIRTUAL,"true","audio virtual"},
+  {APP_EDIT_AUDIO_MIC_GAIN,"80","audio mic"},{APP_EDIT_AUDIO_DESKTOP_GAIN,"400","audio desktop"}};
+ for(unsigned i=0;i<sizeof audio_edits/sizeof *audio_edits;++i) {
+   assert(!bridge_edit(b,audio_edits[i].edit,audio_edits[i].value,error,sizeof error));
+   assert(!strcmp(setting_key,audio_edits[i].key));
+   if(audio_edits[i].edit==APP_EDIT_AUDIO_MIC_GAIN)assert(!strcmp(setting_value,"80%"));
+   snap.command_completed=snap.command_queued;bridge_poll(b,0,&live);
+ }
+ previous=settings;
+ assert(bridge_edit(b,APP_EDIT_RECORD_ACTION,"overwrite",error,sizeof error)<0);
+ assert(bridge_edit(b,APP_EDIT_RECORD_CRF,"1.5",error,sizeof error)<0);
+ assert(bridge_edit(b,APP_EDIT_RECORD_COUNTDOWN,"61",error,sizeof error)<0);
+ assert(bridge_edit(b,APP_EDIT_AUDIO_MIC_GAIN,"401",error,sizeof error)<0);
+ assert(bridge_edit(b,APP_EDIT_AUDIO_MIC_GAIN,"80%",error,sizeof error)<0);
+ assert(bridge_edit(b,APP_EDIT_RECORD_DIRECTORY,"",error,sizeof error)<0);
+ assert(bridge_edit(b,APP_EDIT_RECORD_DIRECTORY,"/tmp/unsafe\nfolder",error,sizeof error)<0);
+ char oversized[4097];memset(oversized,'x',sizeof oversized-1);oversized[sizeof oversized-1]=0;
+ assert(bridge_edit(b,APP_EDIT_RECORD_DIRECTORY,oversized,error,sizeof error)<0);
+ assert(settings==previous);
+ char longest_directory[4096];memset(longest_directory,'d',sizeof longest_directory-1);longest_directory[4095]=0;
+ assert(!bridge_edit(b,APP_EDIT_RECORD_DIRECTORY,longest_directory,error,sizeof error));
+ assert(strlen(setting_value)==4095 && !strcmp(setting_value,longest_directory));
+ snap.command_completed=snap.command_queued;bridge_poll(b,0,&live);
+ assert(!bridge_edit(b,APP_EDIT_AUDIO_MIC_GAIN,"200",error,sizeof error));
+ bridge_poll(b,0,&live);assert(live.pending && live.mic_gain==80);
+ snap.command_completed=snap.command_queued;snap.command_failed=true;
+ bridge_poll(b,0,&live);assert(!live.pending && live.edit_error[0] && live.mic_gain==80);
+ snap.command_failed=false;
+ assert(!bridge_devices(b,APP_DEVICE_MIC,error,sizeof error));
+ snap.command_completed=snap.command_queued;snap.device_reply_id=snap.command_queued;
+ strcpy(snap.device_reply,"alsa_input.usb [id=42 serial=112 class=Audio/Source] USB Microphone (default mic)\nalsa_output.pci [id=43 serial=113 class=Audio/Sink] Speakers\n");
+ bridge_poll(b,0,&live);assert(live.devices.count==1 && !strcmp(live.devices.choices[0].id,"alsa_input.usb"));
+ assert(!bridge_source(b,APP_DEVICE_MIC,"alsa_input.usb",error,sizeof error));
+ assert(!strcmp(setting_key,"audio mic") && !strcmp(setting_value,"alsa_input.usb"));
+ snap.command_completed=snap.command_queued;bridge_poll(b,0,&live);
+ assert(bridge_source(b,APP_DEVICE_MIC,"invented",error,sizeof error)<0);
+ assert(!bridge_devices(b,APP_DEVICE_DESKTOP,error,sizeof error));
+ snap.command_completed=snap.command_queued;snap.device_reply_id=snap.command_queued;
+ bridge_poll(b,0,&live);assert(live.devices.count==2);
+ assert(!bridge_source(b,APP_DEVICE_DESKTOP,"alsa_output.pci",error,sizeof error));
+ snap.command_completed=snap.command_queued;bridge_poll(b,0,&live);
+ assert(!bridge_devices(b,APP_DEVICE_MIC,error,sizeof error));
+ snap.command_completed=snap.command_queued;snap.device_reply_id=snap.command_queued;
+ strcpy(snap.device_reply,"malformed\n");bridge_poll(b,0,&live);assert(live.devices.error[0] && !live.devices.count);
+ strcpy(snap.config.backend,"macos");bridge_poll(b,0,&live);assert(!live.can_virtual_audio);
+ assert(bridge_edit(b,APP_EDIT_AUDIO_VIRTUAL,"true",error,sizeof error)<0);
+ assert(!bridge_devices(b,APP_DEVICE_MIC,error,sizeof error));
+ snap.command_completed=snap.command_queued;snap.device_reply_id=snap.command_queued;
+ strcpy(snap.device_reply,"default [microphone] System Settings > Sound input\ndefault [desktop] ScreenCaptureKit system audio; virtual audio unavailable\n");
+ bridge_poll(b,0,&live);assert(live.devices.count==1 && !strcmp(live.devices.choices[0].id,"default"));
+ assert(!bridge_source(b,APP_DEVICE_MIC,"default",error,sizeof error));
+ snap.command_completed=snap.command_queued;bridge_poll(b,0,&live);
+ assert(!bridge_devices(b,APP_DEVICE_DESKTOP,error,sizeof error));
+ ++snap.daemon_generation;bridge_poll(b,0,&live);assert(!live.pending && !live.devices.count);
+ snap.command_completed=snap.command_queued;
+ assert(bridge_source(b,APP_DEVICE_MIC,"default",error,sizeof error)<0);
  bridge_close(b);bridge_poll(NULL,0,&live);assert(live.enabled && !live.connected && !live.has_frame);
 }

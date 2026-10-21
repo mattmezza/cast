@@ -1,11 +1,42 @@
 /* SPDX-License-Identifier: MIT */
 #include "app.h"
+#ifdef CAST_TEST_NATIVE_FONTS
+#include "cui/cui_text.h"
+#endif
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
+#ifdef CAST_TEST_NATIVE_FONTS
+static cui_font *geometry_font,*geometry_symbol,*geometry_variants[6];
+static void native_fonts_close(void) {
+    cui_font_close(geometry_font);
+    cui_font_close(geometry_symbol);
+    for(unsigned i=0;i<6;++i)cui_font_close(geometry_variants[i]);
+}
+static void native_fonts_open(void) {
+    const char *directory=getenv("CAST_TEST_FONT_DIR");assert(directory);
+    char path[4096];snprintf(path,sizeof path,"%s/Inter-Regular.otf",directory);
+    geometry_font=cui_font_open(path);assert(geometry_font);
+    const char *names[]={"Inter-Bold.otf","Inter-Medium.ttf","Inter-SemiBold.ttf",
+        "IBMPlexMono-Regular.ttf","IBMPlexMono-Medium.ttf","IBMPlexMono-SemiBold.ttf"};
+    const cui_text_style styles[]={
+        {.weight=CUI_TEXT_WEIGHT_BOLD},{.weight=CUI_TEXT_WEIGHT_MEDIUM},{.weight=CUI_TEXT_WEIGHT_SEMIBOLD},
+        {.family=1,.monospace=true},{.family=1,.monospace=true,.weight=CUI_TEXT_WEIGHT_MEDIUM},
+        {.family=1,.monospace=true,.weight=CUI_TEXT_WEIGHT_SEMIBOLD}};
+    for(unsigned i=0;i<6;++i) {
+        snprintf(path,sizeof path,"%s/%s",directory,names[i]);
+        geometry_variants[i]=cui_font_open(path);assert(geometry_variants[i]);
+        assert(cui_font_set_style(geometry_font,styles[i],geometry_variants[i]));
+    }
+    snprintf(path,sizeof path,"%s/Inter-Regular.otf",directory);
+    geometry_symbol=cui_font_open(path);assert(geometry_symbol);
+    assert(cui_font_set_fallbacks(geometry_font,&geometry_symbol,1));
+    atexit(native_fonts_close);
+}
+#endif
 typedef struct {
     cui_context *ui;
     AppState app;
@@ -14,10 +45,12 @@ typedef struct {
     cui_draw_list draw;
 } Preview;
 
+#ifndef CAST_TEST_NATIVE_FONTS
 static cui_size measure(void *user, cui_str text, float size) {
     (void)user;
     return (cui_size){text.length * size * .6f, size * 1.2f};
 }
+#endif
 static cui_id id(Preview *p, const char *name) { return cui_id_from(p->ui, name); }
 static cui_rect bounds(Preview *p, const char *name) { return cui_bounds(p->ui, id(p, name)); }
 static void frame(Preview *p) {
@@ -29,11 +62,16 @@ static void frame(Preview *p) {
     (void)cui_frame_events(p->ui, &count);
     for (size_t i = 0; i < count; ++i) {
         cui_id accepted = cui_event_accepted_activation(p->ui, i);
-        assert(accepted != id(p, "output-start"));
-        const char *disabled_output[] = {"menu-output-item-0", "menu-output-item-1",
-            "menu-output-item-2", "menu-output-item-3", "menu-output-item-5"};
+        if (p->app.workspace != APP_RECORD || !p->app.live.enabled ||
+            !p->app.live.connected || composition_blocked || p->app.live.record_finalizing)
+            assert(accepted != id(p, "output-start"));
+        const char *disabled_output[] = {"menu-output-item-0", "menu-output-item-3", "menu-output-item-5"};
         for (size_t j = 0; j < sizeof disabled_output / sizeof disabled_output[0]; ++j)
             assert(accepted != id(p, disabled_output[j]));
+        if (!p->app.live.enabled || !p->app.live.connected || composition_blocked || p->app.live.record_finalizing) {
+            assert(accepted != id(p, "menu-output-item-1"));
+            assert(accepted != id(p, "menu-output-item-2"));
+        }
         if (composition_blocked) {
             const char *readonly[] = {"layout-overlay", "layout-split", "layout-screen",
                 "layout-camera", "layout-stage", "fit-contain", "fit-cover",
@@ -70,7 +108,14 @@ static void frame(Preview *p) {
 static void settle(Preview *p) { frame(p); frame(p); }
 static Preview create(float width, float height) {
     Preview p = {.width = width, .height = height};
+    #ifdef CAST_TEST_NATIVE_FONTS
+    p.ui=cui_create((cui_config){.width=width,.height=height,.measure=cui_font_measure,
+        .measure_styled=cui_font_measure_styled,.text_geometry=cui_font_text_geometry,
+        .text_geometry_line=cui_font_text_geometry_line,.font_metrics=cui_font_get_metrics,
+        .measure_user=geometry_font});
+#else
     p.ui = cui_create((cui_config){.width = width, .height = height, .measure = measure});
+#endif
     assert(p.ui);
     app_init(&p.app);
     settle(&p);
@@ -322,7 +367,7 @@ static void settings(void) {
 }
 static void settings_controls_fit(void) {
     const float widths[] = {480, 800, 1360};
-    const unsigned expected_sliders[] = {0, 1, 1, 3, 2, 0, 0, 0, 0, 0};
+    const unsigned expected_sliders[] = {0, 1, 2, 3, 2, 0, 0, 0, 0, 0};
     for (size_t w = 0; w < sizeof widths / sizeof widths[0]; ++w) {
         Preview p = create(widths[w], 820);
         click(&p, "settings-open");
@@ -740,7 +785,95 @@ static void look_edits(void) {
     assert(!p.app.zoom_popup.open);
     cui_destroy(p.ui);
 }
+static void record_fixture(Preview *p, const char *mode) {
+    p->app.workspace=APP_RECORD;p->app.workspace_tab=id(p,"workspace-record");
+    p->app.live.enabled=p->app.live.connected=true;p->app.live.generation=1;
+    p->app.live.width=640;p->app.live.height=480;p->app.live.fps=15;
+    p->app.live.mic_gain=p->app.live.desktop_gain=100;p->app.live.can_select_audio=true;
+    snprintf(p->app.live.backend,sizeof p->app.live.backend,"xorg");
+    snprintf(p->app.live.record_container,sizeof p->app.live.record_container,"matroska");
+    snprintf(p->app.live.record_codec,sizeof p->app.live.record_codec,"libx264");
+    snprintf(p->app.live.record_audio_codec,sizeof p->app.live.record_audio_codec,"aac");
+    snprintf(p->app.live.mic_name,sizeof p->app.live.mic_name,"Microphone off");
+    snprintf(p->app.live.desktop_name,sizeof p->app.live.desktop_name,"Desktop audio off");
+    p->app.live.record_crf=23;
+    if(!strcmp(mode,"recording")||!strcmp(mode,"paused")||!strcmp(mode,"cut")) {
+        p->app.live.recording=true;p->app.live.record_paused=!strcmp(mode,"paused");p->app.live.record_cut=!strcmp(mode,"cut");
+        const char *path=getenv("CAST_TEST_RECORD_PATH");
+        snprintf(p->app.live.record_path,sizeof p->app.live.record_path,"%s",path?path:"/tmp/cast-recording-test.mkv");
+    }
+    if(!strcmp(mode,"countdown")) {p->app.live.record_countdown_active=true;p->app.live.record_countdown_remaining_ns=UINT64_C(2000000000);}
+    if(!strcmp(mode,"finalizing"))p->app.live.record_finalizing=true;
+    settle(p);
+    if(!strncmp(mode,"settings",8)) {
+        app_open_settings(p->ui,&p->app,0);p->app.settings_category=2;settle(p);
+        if(!strcmp(mode,"settings-container"))click(p,"record-container");
+    }
+}
+static void audio_pickers(void) {
+    Preview p=create(1360,1000);record_fixture(&p,"idle");
+    click(&p,"audio-mic-source");
+    assert(p.app.source_picker.popup.overlay.open&&p.app.device_request_requested);
+    assert(p.app.device_request_kind==APP_DEVICE_MIC);picker_reply(&p,APP_DEVICE_MIC,2);
+    key(&p,CUI_KEY_HOME,0);key(&p,CUI_KEY_ENTER,0);
+    assert(p.app.source_choice_requested&&p.app.source_choice_kind==APP_DEVICE_MIC);
+    assert(!strcmp(p.app.source_choice_value,"device-0"));
+    assert(!p.app.live.mic&&!p.app.live.desktop&&!p.app.live.recording&&!p.app.live.stream_active);
+    p.app.source_choice_requested=false;settle(&p);
+    click(&p,"audio-desktop-source");
+    assert(p.app.device_request_requested&&p.app.device_request_kind==APP_DEVICE_DESKTOP);
+    picker_reply(&p,APP_DEVICE_DESKTOP,2);key(&p,CUI_KEY_HOME,0);key(&p,CUI_KEY_DOWN,0);key(&p,CUI_KEY_ENTER,0);
+    assert(p.app.source_choice_requested&&p.app.source_choice_kind==APP_DEVICE_DESKTOP);
+    assert(!strcmp(p.app.source_choice_value,"device-1"));
+    assert(!p.app.live.mic&&!p.app.live.desktop&&!p.app.live.recording&&!p.app.live.stream_active);
+    p.app.source_choice_requested=false;settle(&p);
+    click(&p,"audio-mic-source");picker_reply(&p,APP_DEVICE_MIC,1);p.app.live.generation++;settle(&p);
+    assert(!p.app.source_picker.popup.overlay.open&&!p.app.source_choice_requested);
+    click(&p,"audio-desktop-source");picker_reply(&p,APP_DEVICE_DESKTOP,1);p.app.live.connected=false;settle(&p);
+    assert(!p.app.source_picker.popup.overlay.open&&!p.app.source_choice_requested);cui_destroy(p.ui);
+}
+static void recording_edits(void) {
+    Preview p=create(1360,1000);record_fixture(&p,"idle");click(&p,"output-start");
+    assert(p.app.edit_requested&&p.app.edit==APP_EDIT_RECORD_ACTION&&!strcmp(p.app.edit_value,"start"));
+    assert(!p.app.live.recording);
+    assert(!app_request_edit(&p.app,APP_EDIT_RECORD_ACTION,"start"));
+    p.app.edit_requested=false;p.app.live.pending=true;settle(&p);click(&p,"output-start");assert(!p.app.edit_requested);
+    p.app.live.pending=false;record_fixture(&p,"recording");click(&p,"record-pause");
+    assert(p.app.edit_requested&&p.app.edit==APP_EDIT_RECORD_ACTION&&!strcmp(p.app.edit_value,"pause"));assert(!p.app.live.record_paused);
+    p.app.edit_requested=false;record_fixture(&p,"paused");click(&p,"record-resume");
+    assert(p.app.edit_requested&&p.app.edit==APP_EDIT_RECORD_ACTION&&!strcmp(p.app.edit_value,"resume"));
+    p.app.edit_requested=false;p.app.live.record_paused=false;record_fixture(&p,"recording");click(&p,"record-cut");
+    assert(p.app.edit_requested&&p.app.edit==APP_EDIT_RECORD_ACTION&&!strcmp(p.app.edit_value,"cut"));assert(!p.app.live.record_cut);
+    p.app.edit_requested=false;record_fixture(&p,"cut");click(&p,"record-resume");assert(p.app.edit_requested&&!strcmp(p.app.edit_value,"resume"));
+    p.app.edit_requested=false;p.app.live.record_cut=false;record_fixture(&p,"recording");click(&p,"output-start");
+    assert(p.app.edit_requested&&!strcmp(p.app.edit_value,"stop"));
+    p.app.edit_requested=false;p.app.live.recording=false;record_fixture(&p,"countdown");click(&p,"record-cancel");
+    assert(p.app.edit_requested&&!strcmp(p.app.edit_value,"cancel"));
+    p.app.edit_requested=false;p.app.live.record_countdown_active=false;record_fixture(&p,"finalizing");click(&p,"output-start");assert(!p.app.edit_requested);
+    p.app.live.record_finalizing=false;p.app.live.connected=false;settle(&p);click(&p,"output-start");assert(!p.app.edit_requested);
+    assert(!app_request_edit(&p.app,APP_EDIT_AUDIO_MIC_GAIN,"nan"));p.app.live.connected=true;
+    assert(!app_request_edit(&p.app,APP_EDIT_RECORD_CONTAINER,"unsupported"));
+    assert(!app_request_edit(&p.app,APP_EDIT_RECORD_CRF,"52"));assert(!app_request_edit(&p.app,APP_EDIT_RECORD_COUNTDOWN,"61"));
+    record_fixture(&p,"settings");click(&p,"record-container");key(&p,CUI_KEY_HOME,0);key(&p,CUI_KEY_ENTER,0);
+    assert(p.app.edit_requested&&p.app.edit==APP_EDIT_RECORD_CONTAINER&&!strcmp(p.app.edit_value,"mp4"));
+    assert(!strcmp(p.app.live.record_container,"matroska"));
+    p.app.edit_requested=false;p.app.live.recording=true;settle(&p);click(&p,"record-container");
+    assert(!p.app.edit_requested&&!p.app.recording_selects[0].overlay.open);cui_destroy(p.ui);
+}
 int main(int argc,char **argv) {
+#ifdef CAST_TEST_NATIVE_FONTS
+    native_fonts_open();
+#endif
+    if(argc==3&&!strcmp(argv[1],"--record-layout")) {
+        assert(!strcmp(argv[2],"idle")||!strcmp(argv[2],"recording")||!strcmp(argv[2],"paused")||
+            !strcmp(argv[2],"cut")||!strcmp(argv[2],"countdown")||!strcmp(argv[2],"settings")||!strcmp(argv[2],"settings-container"));
+        Preview p=create(1360,1000);record_fixture(&p,argv[2]);
+        cui_set_layout_debug(p.ui,true);settle(&p);
+        size_t required=0;cui_debug_layout_export(p.ui,CUI_DEBUG_LAYOUT_JSON,NULL,0,&required);
+        char *dump=malloc(required);assert(dump);
+        assert(cui_debug_layout_export(p.ui,CUI_DEBUG_LAYOUT_JSON,dump,required,&required));
+        puts(dump);free(dump);cui_destroy(p.ui);return 0;
+    }
     if(argc==3&&!strcmp(argv[1],"--look-layout")) {
         assert(!strcmp(argv[2],"blurred")||!strcmp(argv[2],"gradient")||!strcmp(argv[2],"solid")||!strcmp(argv[2],"default")||!strcmp(argv[2],"camera")||!strcmp(argv[2],"zoom"));
         Preview p=create(1360,820);
@@ -758,6 +891,8 @@ int main(int argc,char **argv) {
         assert(cui_debug_layout_export(p.ui,CUI_DEBUG_LAYOUT_JSON,dump,required,&required));
         puts(dump);free(dump);cui_destroy(p.ui);return 0;
     }
+    audio_pickers();
+    recording_edits();
     look_edits();
     workspaces();
     compositions();

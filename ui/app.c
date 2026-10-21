@@ -100,7 +100,40 @@ bool app_request_edit(AppState *s, AppEdit edit, const char *value) {
         if(s->live.enabled && edit==APP_EDIT_ZOOM_FACTOR && (size<s->live.zoom_min||size>s->live.zoom_max))return false;
         if(s->live.enabled && edit==APP_EDIT_ZOOM_MIN && (size>s->live.zoom_factor||size>s->live.zoom_max))return false;
         if(s->live.enabled && edit==APP_EDIT_ZOOM_MAX && (size<s->live.zoom_factor||size<s->live.zoom_min))return false;
+    } else if(edit==APP_EDIT_RECORD_ACTION) {
+        if(!s->live.enabled||!s->live.connected)return false;
+        if(strcmp(value,"start")&&strcmp(value,"stop")&&strcmp(value,"pause")&&strcmp(value,"resume")&&strcmp(value,"cut")&&strcmp(value,"cancel"))return false;
+        if(s->live.record_finalizing)return false;
+        if(!strcmp(value,"start")&&(s->live.recording||s->live.record_countdown_active))return false;
+        if(!strcmp(value,"cancel")&&!s->live.record_countdown_active)return false;
+        if(!strcmp(value,"stop")&&!s->live.recording&&!s->live.record_countdown_active)return false;
+        if((!strcmp(value,"pause")||!strcmp(value,"resume")||!strcmp(value,"cut"))&&s->live.record_countdown_active)return false;
+        if((!strcmp(value,"pause")||!strcmp(value,"cut"))&&!s->live.recording)return false;
+        if((!strcmp(value,"pause")||!strcmp(value,"cut"))&&(s->live.record_paused||s->live.record_cut))return false;
+        if(!strcmp(value,"resume")&&(!s->live.recording||(!s->live.record_paused&&!s->live.record_cut)))return false;
+    } else if(edit==APP_EDIT_RECORD_DIRECTORY) {
+        for(const unsigned char *p=(const unsigned char *)value;*p;++p)if(*p<32||*p==127)return false;
+    } else if(edit==APP_EDIT_RECORD_CONTAINER) {
+        if(strcmp(value,"matroska")&&strcmp(value,"mp4")&&strcmp(value,"mov")&&strcmp(value,"webm"))return false;
+    } else if(edit==APP_EDIT_RECORD_VIDEO_CODEC) {
+        if(strcmp(value,"auto")&&strcmp(value,"libx264")&&strcmp(value,"libx265")&&strcmp(value,"libvpx-vp9")&&strcmp(value,"libaom-av1"))return false;
+    } else if(edit==APP_EDIT_RECORD_AUDIO_CODEC) {
+        if(strcmp(value,"aac")&&strcmp(value,"libopus")&&strcmp(value,"pcm_s16le")&&strcmp(value,"flac"))return false;
+    } else if(edit==APP_EDIT_RECORD_CRF||edit==APP_EDIT_RECORD_COUNTDOWN||edit==APP_EDIT_AUDIO_MIC_GAIN||edit==APP_EDIT_AUDIO_DESKTOP_GAIN) {
+        bool dot=false;
+        for(const char *p=value;*p;++p) {
+            if(*p=='.'&&!dot&&(edit==APP_EDIT_AUDIO_MIC_GAIN||edit==APP_EDIT_AUDIO_DESKTOP_GAIN))dot=true;
+            else if(*p<'0'||*p>'9')return false;
+        }
+        char *end=NULL;size=strtof(value,&end);
+        float max=edit==APP_EDIT_RECORD_CRF?51:edit==APP_EDIT_RECORD_COUNTDOWN?60:400;
+        if(!end||*end||!isfinite(size)||size<0||size>max)return false;
+    } else if(edit==APP_EDIT_AUDIO_MIC||edit==APP_EDIT_AUDIO_DESKTOP||edit==APP_EDIT_AUDIO_VIRTUAL) {
+        if(strcmp(value,"true")&&strcmp(value,"false"))return false;
+        if(edit==APP_EDIT_AUDIO_VIRTUAL&&!s->live.can_virtual_audio)return false;
     } else return false;
+    if(edit>=APP_EDIT_RECORD_CONTAINER&&edit<=APP_EDIT_RECORD_DIRECTORY &&
+       (s->live.recording||s->live.record_countdown_active||s->live.record_finalizing))return false;
     if (!s->live.enabled) {
         if (edit == APP_EDIT_LAYOUT) s->layout = (AppLayout)index;
         else if (edit == APP_EDIT_FIT) s->fit_cover = !strcmp(value, "cover");
@@ -162,6 +195,11 @@ const char *app_layout_name(AppLayout l) {
 static const char *output_state(const AppState *s, unsigned lane) {
     const AppLive *l = &s->live;
     if (!l->connected) return "Not connected";
+    if(lane==APP_RECORD) {
+        if(l->record_finalizing)return "Finalising";
+        if(l->record_countdown_active)return "Countdown";
+        if(l->record_cut)return "Cut";
+    }
     bool active = lane == 0 ? l->virtual_enabled : lane == 1 ? l->recording : l->stream_active;
     bool paused = lane == 0 ? l->virtual_paused : lane == 1 ? l->record_paused : l->stream_paused;
     bool frozen = lane == 0 ? l->virtual_frozen : lane == 1 ? l->record_frozen : l->stream_frozen;
@@ -269,10 +307,14 @@ static void shortcuts(cui_context *ui, AppState *s, float width) {
         const cui_event *e = &events[i];
         if (cui_event_consumed(ui, i) || e->type != CUI_EVENT_KEY_DOWN || e->repeat ||
             e->ime_composing || e->prefer_character_input) continue;
-        if (s->settings.overlay.open || s->panel_sheet.overlay.open || s->source_picker.popup.overlay.open) continue;
+        if (s->settings.overlay.open || s->panel_sheet.overlay.open || s->source_picker.popup.overlay.open || s->zoom_popup.open) continue;
         bool handled = true;
         if (e->modifiers) continue;
-        if (e->key >= CUI_KEY_1 && e->key <= CUI_KEY_3) {
+        if(e->key==CUI_KEY_R) {
+            if(!app_request_edit(s,APP_EDIT_RECORD_ACTION,s->live.record_countdown_active?"cancel":s->live.recording?"stop":"start"))continue;
+        } else if(e->key==CUI_KEY_C) {
+            if(!app_request_edit(s,APP_EDIT_RECORD_ACTION,"cut"))continue;
+        } else if (e->key >= CUI_KEY_1 && e->key <= CUI_KEY_3) {
             s->workspace = (AppWorkspace)(e->key - CUI_KEY_1);
             s->workspace_tab = cui_id_from(ui, workspace_ids[s->workspace]);
         } else if (e->key == CUI_KEY_LEFT_BRACKET) {
@@ -655,7 +697,11 @@ static void source_content(cui_context *ui, AppState *s, const cui_theme *t) {
 static void card_begin(cui_context *ui, const cui_theme *t, const char *id, const char *heading) {
     cui_begin_box(ui, cui_id_from(ui, id), (cui_box){.width = -1, .padding = 10, .gap = 9,
         .background = t->surface, .border = t->border, .border_width = 1});
-    title(ui, t, heading, 12);
+    const char *icon=!strcmp(id,"output-card")?(!strcmp(heading,"Recording")?"rec":!strcmp(heading,"Virtual camera")?"eye":"stream"):!strcmp(id,"audio-card")?"sliders":!strcmp(id,"details-card")?(!strcmp(heading,"Take format")?"film":!strcmp(heading,"Where it lands")?"cam":"stream"):NULL;
+    if(icon)cui_begin_box(ui,0,(cui_box){.width=-1,.row=true,.gap=8,.align_y=CUI_ALIGN_CENTER});
+    if(icon)app_icon(ui,cui_id_from(ui,heading)^UINT64_C(0x6361726469636f6e),t,cui_string(icon),(cui_icon_options){.size=CUI_ICON_CUSTOM,.custom_size=16});
+    title(ui, t, heading, 12.5f);
+    if(icon)cui_end_box(ui);
 }
 typedef struct { const cui_theme *theme; const char *label; float size; } FramingLabel;
 static void framing_label(cui_context *ui, void *user) {
@@ -698,7 +744,8 @@ static void director_card(cui_context *ui, AppState *s, const cui_theme *t) {
     cui_begin_box(ui,0,(cui_box){.width=-1,.row=true});
     text(ui,t,"Zoom");fill(ui);
     char level[24];snprintf(level,sizeof level,"%.2f×",s->live.zoom_factor>0?s->live.zoom_factor:1);text(ui,t,level);cui_end_box(ui);
-    zoom_control(ui,s,t,"director-zoom",fmaxf(1,cui_bounds(ui,cui_id_from(ui,"director-card")).w-22));
+    float director_width=cui_bounds(ui,cui_id_from(ui,"director-card")).w;
+    zoom_control(ui,s,t,"director-zoom",director_width>22?director_width-22:258);
     cui_begin_box(ui,0,(cui_box){.width=-1,.row=true,.gap=3});
     const float levels[]={1,1.15f,1.3f,1.5f,1.8f};
     for(unsigned i=0;i<5;++i) {
@@ -722,13 +769,115 @@ static void director_card(cui_context *ui, AppState *s, const cui_theme *t) {
     cui_end_box(ui);
     cui_end_box(ui);
 }
+static void record_action(cui_context *ui,AppState *s,const cui_theme *t,const char *id,const char *label,const char *icon,const char *action,bool primary) {
+    ButtonIcon artwork={cui_id_from(ui,id)^UINT64_C(0x7265636f72646963),t,icon,14};
+    if(cui_button_ex(ui,cui_id_from(ui,id),t,cui_string(label),(cui_button_options){
+        .variant=primary?CUI_BUTTON_PRIMARY:CUI_BUTTON_SECONDARY,.width=-1,.height=36,.font_size=12,
+        .leading_content=icon?button_icon:NULL,.leading_user=&artwork,
+        .disabled=composition_disabled(s)||!s->live.enabled||!s->live.connected||s->live.record_finalizing})) {
+        app_request_edit(s,APP_EDIT_RECORD_ACTION,action);cui_invalidate(ui);
+    }
+}
+static void recording_output(cui_context *ui,AppState *s,const cui_theme *t) {
+    card_begin(ui,t,"output-card","Recording");
+    char status[96];
+    if(s->live.record_finalizing)snprintf(status,sizeof status,"Finalising…");
+    else if(s->live.record_countdown_active)snprintf(status,sizeof status,"Recording in %.0f…",ceil((double)s->live.record_countdown_remaining_ns/1e9));
+    else snprintf(status,sizeof status,"%s",!s->live.connected?"Not connected":s->live.record_cut?"Cut · ready to resume":s->live.record_paused?"Paused":s->live.recording?"Recording":"Off");
+    badge(ui,t,status);
+    text(ui,t,"A take writes to one file. Cuts omit media time; resuming continues that same file.");
+    if(s->live.record_path[0])cui_text_ellipsis(ui,cui_id_from(ui,"record-current-path"),cui_string(s->live.record_path),
+        (cui_text_ellipsis_options){.width=-1,.font_size=11,.color=t->muted});
+    if(s->live.record_cut)text(ui,t,"Cut omits media time. Resume keeps the same file.");
+    else if(s->live.record_paused)text(ui,t,"Paused: the take receives neutral video and silent audio.");
+    if(s->live.record_finalizing)record_action(ui,s,t,"output-start","Finalising…",NULL,"stop",false);
+    else if(s->live.record_countdown_active)record_action(ui,s,t,"record-cancel","Cancel countdown",NULL,"cancel",false);
+    else if(!s->live.recording)record_action(ui,s,t,"output-start","Start recording","rec","start",true);
+    else {
+        bool paused=s->live.record_paused||s->live.record_cut;
+        record_action(ui,s,t,paused?"record-resume":"record-cut",paused?"Resume recording":"Cut at playhead",paused?"play":"cut",paused?"resume":"cut",true);
+        cui_begin_box(ui,0,(cui_box){.width=-1,.row=true,.gap=6});
+        if(!paused)record_action(ui,s,t,"record-pause","Pause","pause","pause",false);
+        record_action(ui,s,t,"output-start","Stop","stop","stop",false);
+        cui_end_box(ui);
+    }
+    if(s->live.recording) {
+        char duration[64];uint64_t seconds=s->live.record_duration_ns/UINT64_C(1000000000);
+        snprintf(duration,sizeof duration,"%02llu:%02llu:%02llu",(unsigned long long)(seconds/3600),(unsigned long long)(seconds/60%60),(unsigned long long)(seconds%60));text(ui,t,duration);
+    }
+    if(s->live.error[0])text(ui,t,s->live.error);
+    cui_end_box(ui);
+}
+typedef struct {AppState *app;AppEdit edit;} AudioGainRequest;
+static void audio_gain_request(void *user,const cui_component_slider_request *request) {
+    if(request->phase!=CUI_SLIDER_COMMIT)return;
+    AudioGainRequest *gain=user;char value[24];
+    snprintf(value,sizeof value,"%.2f",pow(10,request->requested/20)*100);
+    app_request_edit(gain->app,gain->edit,value);
+}
+static void audio_channel(cui_context *ui,AppState *s,const cui_theme *t,bool mic) {
+    const char *name=mic?"Mic":"Desktop";
+    const char *switch_id=mic?"audio-mic-enabled":"audio-desktop-enabled";
+    float gain=mic?s->live.mic_gain:s->live.desktop_gain;
+    bool enabled=mic?s->live.mic:s->live.desktop;
+    cui_begin_box(ui,cui_id_from(ui,mic?"audio-mic-channel":"audio-desktop-channel"),
+        (cui_box){.width=-1,.gap=2,.custom_padding=true,.padding_edges={.top=7,.bottom=7},
+            .custom_border_edges=true,.border_edges={.bottom=1},.border=t->border});
+    cui_begin_box(ui,0,(cui_box){.width=-1,.row=true,.gap=8,.align_y=CUI_ALIGN_CENTER});
+    cui_text(ui,cui_string(name),11.5f,t->text);fill(ui);
+    char db[24];if(gain>0)snprintf(db,sizeof db,"%+.1f dB",20*log10f(gain/100));else snprintf(db,sizeof db,"−∞ dB");
+    cui_text_ex(ui,cui_string(db),10.5f,cast_design_tokens(t->dark).secondary,0,(cui_text_style){.family=1,.monospace=true});
+    if(cui_switch_ex(ui,cui_id_from(ui,switch_id),t,cui_string(""),&enabled,NULL,
+        (cui_switch_options){.width=28,.size=CUI_CONTROL_SMALL,.disabled=composition_disabled(s)||!s->live.connected,
+            .accessibility_label=cui_string(mic?"Microphone enabled":"Desktop audio enabled")})) {
+        app_request_edit(s,mic?APP_EDIT_AUDIO_MIC:APP_EDIT_AUDIO_DESKTOP,enabled?"true":"false");cui_invalidate(ui);
+    }
+    cui_end_box(ui);
+    app_source_picker(ui,s,t,mic?APP_DEVICE_MIC:APP_DEVICE_DESKTOP,mic?"audio-mic-source":"audio-desktop-source",
+        s->live.connected?(mic?s->live.mic_name:s->live.desktop_name):"No audio device connected");
+    cui_id id=cui_id_from(ui,mic?"audio-mic-gain":"audio-desktop-gain");
+    cui_slider_state *state=cui_resource_get(ui,id,UINT64_C(0x617564696f676169),sizeof *state,NULL,NULL);
+    AudioGainRequest request={s,mic?APP_EDIT_AUDIO_MIC_GAIN:APP_EDIT_AUDIO_DESKTOP_GAIN};
+    float card_width=cui_bounds(ui,cui_id_from(ui,"audio-card")).w;
+    float width=card_width>22?card_width-22:258;
+    if(state)cui_slider_events(ui,id,t,cui_string(mic?"Microphone gain":"Desktop audio gain"),fmax(-24,fmin(12,gain>0?20*log10(gain/100):-24)),state,
+        (cui_slider_options){.minimum=-24,.maximum=12,.step=1,.disabled=composition_disabled(s)||!s->live.connected},
+        (cui_slider_style_options){.width=width,.track_height=4,.hit_height=24,.hide_label=true},
+        (cui_component_slider_handler){audio_gain_request,&request});
+    cui_end_box(ui);
+}
+static void audio_card(cui_context *ui,AppState *s,const cui_theme *t) {
+    card_begin(ui,t,"audio-card",s->workspace==APP_RECORD?"Audio mixer":"Audio");
+    audio_channel(ui,s,t,true);audio_channel(ui,s,t,false);
+    bool enabled=s->live.virtual_audio;
+    if(cui_switch_ex(ui,cui_id_from(ui,"audio-virtual-enabled"),t,cui_string("Virtual microphone"),&enabled,NULL,
+        (cui_switch_options){.disabled=composition_disabled(s)||!s->live.connected||!s->live.can_virtual_audio,
+            .accessibility_label=cui_string("Virtual microphone")})) {
+        app_request_edit(s,APP_EDIT_AUDIO_VIRTUAL,enabled?"true":"false");cui_invalidate(ui);
+    }
+    text(ui,t,s->workspace==APP_CAMERA?"Expose the same mix to calls through the virtual microphone.":"The mix is shared by recording and streaming. Muting a channel mutes it everywhere.");
+    if(s->live.virtual_audio&&s->live.virtual_silent)text(ui,t,"Virtual microphone is silent while the virtual camera is private.");
+    text(ui,t,"Live level meters are unavailable.");
+    if(s->live.connected)text(ui,t,!s->live.audio_available?"Audio backend unavailable":
+        s->live.mic_ready&&s->live.desktop_ready?"Microphone and desktop audio ready":
+        s->live.mic_ready?"Microphone ready · desktop audio unavailable":
+        s->live.desktop_ready?"Desktop audio ready · microphone unavailable":"Audio sources unavailable");
+    cui_end_box(ui);
+}
+static void format_row(cui_context *ui,const cui_theme *t,const char *label,const char *value) {
+    cui_begin_box(ui,0,(cui_box){.width=-1,.row=true,.gap=8,.align_y=CUI_ALIGN_CENTER});
+    cui_text(ui,cui_string(label),11.5f,cast_design_tokens(t->dark).secondary);fill(ui);
+    cui_text_ex(ui,cui_string(value),11,cast_design_tokens(t->dark).secondary,0,(cui_text_style){.family=1,.monospace=true});cui_end_box(ui);
+}
 static void inspector_content(cui_context *ui, AppState *s, const cui_theme *t) {
     cui_begin_box(ui, cui_id_from(ui, "inspector-content"),
         (cui_box){.width = -1, .padding = 10, .gap = 10});
-    director_card(ui, s, t);
+    if(s->workspace!=APP_RECORD)director_card(ui, s, t);
     const char *headings[] = {"Virtual camera", "Recording", "Live stream"};
     const char *actions[] = {"Start virtual camera", "Start recording", "Start stream"};
     const char *icons[] = {"eye", "file", "network"};
+    if(s->workspace==APP_RECORD)recording_output(ui,s,t);
+    else {
     card_begin(ui, t, "output-card", headings[s->workspace]);
     badge(ui, t, output_state(s, s->workspace));
     text(ui, t, s->workspace == APP_CAMERA
@@ -744,21 +893,18 @@ static void inspector_content(cui_context *ui, AppState *s, const cui_theme *t) 
     text(ui, t, s->live.enabled ? "Output controls are read only in this milestone." : "Requires a connected capture daemon.");
     if (s->live.error[0]) text(ui, t, s->live.error);
     cui_end_box(ui);
-    card_begin(ui, t, "audio-card", s->workspace == APP_RECORD ? "Audio mixer" : "Audio");
-    cui_begin_box(ui, 0, (cui_box){.width = -1, .row = true, .gap = 8, .align_y = CUI_ALIGN_CENTER});
-    app_icon(ui, cui_id_from(ui, "mic-icon"), t, cui_string("mic"),
-        (cui_icon_options){.custom_size = 16, .size = CUI_ICON_CUSTOM});
-    text(ui, t, s->live.connected ? s->live.mic_name : "No microphone connected");
-    cui_end_box(ui);
-    text(ui, t, s->live.connected ? s->live.desktop_name : "Device discovery and levels will come from the daemon.");
-    cui_end_box(ui);
+    }
+    audio_card(ui,s,t);
     card_begin(ui, t, "details-card", s->workspace == APP_CAMERA ? "Where it lands" :
         s->workspace == APP_RECORD ? "Take format" : "Destination & quality");
-    text(ui, t, s->workspace == APP_CAMERA
-        ? "Select cast as the camera in your calling app once the virtual device is running."
-        : s->workspace == APP_RECORD
-        ? "The connected daemon will report the container, encoder and recording location."
-        : "A destination and stream-key file must be configured before broadcasting. Keys are never displayed here.");
+    if(s->workspace==APP_RECORD) {
+        format_row(ui,t,"Container",s->live.connected?s->live.record_container:"Unavailable");
+        format_row(ui,t,"Encoder",s->live.connected?s->live.record_codec:"Unavailable");
+        char fps[32];snprintf(fps,sizeof fps,"%d fps",s->live.fps);format_row(ui,t,"Frame rate",s->live.connected?fps:"Unavailable");
+        if(button(ui,t,"settings-recording","Recording settings","gear",-1,30,false,false)) {
+            s->settings_category=2;app_open_settings(ui,s,cui_id_from(ui,"settings-recording"));
+        }
+    } else text(ui,t,s->workspace==APP_CAMERA?"Select cast as the camera in your calling app once the virtual device is running.":"A destination and stream-key file must be configured before broadcasting. Keys are never displayed here.");
     cui_end_box(ui);
     card_begin(ui, t, "pro-card", "Go further with Pro");
     badge(ui, t, s->live.connected ? (s->live.pro ? "PRO BUILD" : "COMMUNITY") : "PRO");
@@ -957,7 +1103,7 @@ static void center(cui_context *ui, AppState *s, const cui_theme *t,
         cui_begin_box(ui, 0, (cui_box){.width = 286, .fixed_width = true});
         layout_picker_ex(ui, s, t, true);
         cui_end_box(ui);
-    } else cui_text(ui, cui_string(s->live.connected ? "Read only" : "Not connected"), 10.5f, t->muted);
+    } else cui_text(ui, cui_string(s->live.connected ? "Ready" : "Not connected"), 10.5f, t->muted);
     if(button(ui,t,"stage-zoom","Zoom","zoom",76,30,s->zoom_popup.open,composition_disabled(s))) {
         if(!s->zoom_popup_initialized) {cui_overlay_init(&s->zoom_popup,cui_id_from(ui,"zoom-pop"),false);s->zoom_popup_initialized=true;}
         if(s->zoom_popup.open)cui_overlay_close(ui,&s->zoom_popup);
@@ -1012,7 +1158,7 @@ static void status(cui_context *ui, AppState *s, const cui_theme *t, float width
     cui_begin_box(ui, 0, (cui_box){.width = -1, .row = true, .gap = 5,
         .align_y = CUI_ALIGN_CENTER, .clip = true});
     if (width >= 1100) cui_text(ui, cui_string(s->live.error[0] ? s->live.error :
-        s->live.enabled ? "Read only" : "Local preview"), 10.5f,
+        s->edit_requested||s->live.pending ? "Applying changes…" : s->live.enabled ? (s->live.connected?"Ready":"Disconnected") : "Local preview"), 10.5f,
         s->live.error[0] ? t->danger : t->muted);
     cui_end_box(ui);
     if (width >= 680) {
@@ -1023,7 +1169,9 @@ static void status(cui_context *ui, AppState *s, const cui_theme *t, float width
                 i == 1 ? s->live.recording : s->live.stream_active);
             bool paused = i == 0 ? s->live.virtual_paused : i == 1 ? s->live.record_paused : s->live.stream_paused;
             const char *state = !s->live.connected ? "—" : !active ? "off" : paused ? "paused" : "live";
-            StatusLane lane = {t, labels[i], state, active && !paused ? cast_design_tokens(t->dark).live : t->muted};
+            if(i==1&&s->live.connected)state=s->live.record_finalizing?"finalising":s->live.record_countdown_active?"countdown":s->live.record_cut?"cut":state;
+            bool writing=active&&!paused&&!(i==1&&(s->live.record_cut||s->live.record_countdown_active||s->live.record_finalizing));
+            StatusLane lane = {t, labels[i], state, writing ? cast_design_tokens(t->dark).live : t->muted};
             cui_theme_button_colors colors = t->buttons[CUI_THEME_BUTTON_SECONDARY];
             colors.normal = colors.hover = colors.active = colors.border = (cui_color){0};
             float lane_width = 6 + 10 + cui_measure_text(ui, cui_string(labels[i]), 10.5f).width +

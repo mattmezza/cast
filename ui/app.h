@@ -18,7 +18,7 @@ typedef struct AppState {
     char source_choice_value[APP_DEVICE_ID_MAX];
     bool edit_requested;
     AppEdit edit;
-    char edit_value[32];
+    char edit_value[4096];
     AppWorkspace workspace;
     AppLayout layout;
     AppAppearance appearance;
@@ -27,6 +27,9 @@ typedef struct AppState {
     bool settings_initialized;
     unsigned settings_category;
     cui_surface_state settings;
+    cui_choice_popup recording_selects[3];
+    bool recording_select_initialized[3];
+    uint64_t recording_select_generation;
     cui_overlay zoom_popup;
     bool zoom_popup_initialized;
     cui_scroll_state settings_scroll, settings_rail_scroll;
