@@ -53,7 +53,8 @@ SuperScreencast Community is open source under the MIT license. Every shipping f
 free, including commercial use, recording, streaming and existing zoom. SuperScreencast Pro is
 a separate proprietary edition requiring private modules and an offline commercial
 license. Pro implements cinematic zoom, local transcription/subtitles and timed or
-speech-following speaker notes. Editable recording projects remain planned. See
+speech-following speaker notes. Project save/open, flattened-take editing and export are available in Community;
+separate source/layer capture remains planned. See
 [editions](docs/editions.md) and [licensing](docs/licensing.md). This is a personal project; contributions
 and pull requests are not currently accepted. Issues may be used to report bugs,
 with no response-time commitment.
@@ -63,7 +64,9 @@ with no response-time commitment.
 An initial macOS recorder port reuses the control panel and composition engine,
 with ScreenCaptureKit display/system-audio capture and AVFoundation camera/mic
 adapters. It includes a native Composition/Recording preview window. Virtual
-devices and streaming are not included; see [macOS setup and validation](docs/macos.md).
+devices are not included. The development streaming path now has a Darwin
+mailbox and process supervisor; native macOS streaming acceptance remains pending.
+See [macOS setup and validation](docs/macos.md).
 
 ## Build and run
 

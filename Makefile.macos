@@ -424,3 +424,7 @@ check-live-media: $(BUILD)/test_live_media
 	$(BUILD)/test_live_media
 check-workspace-live: $(BINARY)
 	CAST_TEST_BINARY='$(abspath $(BINARY))' python3 tests/test_workspace_live.py
+
+.PHONY: check-workspace-stream
+check-workspace-stream: $(BINARY)
+	CAST_TEST_BINARY='$(abspath $(BINARY))' python3 tests/test_workspace_stream.py

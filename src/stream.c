@@ -22,6 +22,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
+#ifdef __APPLE__
+#include <sys/event.h>
+#endif
+#if defined(__APPLE__) || defined(CAST_TEST_STREAM_FILE_LOCK)
+#define STREAM_FILE_LOCK 1
+#endif
 #ifndef __APPLE__
 #include <sys/prctl.h>
 #endif
@@ -31,7 +38,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define STREAM_MAGIC 0x43535432U
+#define STREAM_MAGIC 0x43535433U
 #define STREAM_RATE 48000
 #define STREAM_AUDIO_RING 48000
 #define STREAM_AUDIO_CHUNK 480
@@ -46,11 +53,15 @@ struct StreamShared {
     size_t size, frame_size;
     Config cfg;
     pthread_mutex_t media_mutex;
+    atomic_int media_owner;
+    atomic_uint queue_depth;
+    atomic_bool discard_pending, retired;
     atomic_uint_fast64_t epoch, session, heartbeat, phase_started_ns;
     atomic_int phase, failure, failure_code, finished, connected;
     atomic_uint_fast64_t bytes_written, video_frames, audio_samples, dropped_frames;
     uint64_t frame_epoch, frame_ns, frame_sequence, consumed_sequence;
-    bool have_frame, silent;
+    bool have_frame;
+    atomic_bool silent;
     unsigned queue_head, queue_count, queue_capacity;
     uint64_t frame_times[120];
     uint64_t audio_begin, audio_end;
@@ -97,6 +108,7 @@ struct CastStream {
 #endif
 };
 struct StreamEncoder {
+    int mailbox_fd; /* Process-local: never stored in the mapped mailbox. */
     struct StreamShared *shared;
     AVFormatContext *format;
     AVCodecContext *video, *sound;
@@ -126,27 +138,85 @@ static void wipe(void *memory, size_t size)
     explicit_bzero(memory, size);
 #endif
 }
-static void lock_media(struct StreamShared *shared)
+static void clear_media_locked(struct StreamShared *shared);
+/* Host callers hold CastStream.mutex. POSIX record locks are process-owned,
+ * so this local serialization is required even though the worker is isolated.
+ * Local codec fixtures use fd=-1 and their ordinary pthread mutex. */
+static void lock_media(struct StreamShared *shared, int fd)
 {
+#ifdef STREAM_FILE_LOCK
+    if (fd >= 0) {
+        struct flock lock = {.l_type = F_WRLCK, .l_whence = SEEK_SET, .l_len = 1};
+        int result;
+        do { result = fcntl(fd, F_SETLKW, &lock); } while (result < 0 && errno == EINTR);
+        /* A broken mailbox cannot be used safely; never continue unlocked. */
+        if (result < 0) abort();
+        int owner = atomic_exchange(&shared->media_owner, (int)getpid());
+        if (owner) atomic_fetch_add(&shared->epoch, 1);
+        if (owner || atomic_load(&shared->discard_pending)) clear_media_locked(shared);
+        return;
+    }
+#else
+    (void)fd;
+#endif
     int result = pthread_mutex_lock(&shared->media_mutex);
 #ifndef __APPLE__
     if (result == EOWNERDEAD) {
-        /* A deadline can kill an encoder during its short memory copy. No stale
-         * partially copied frame may survive that process's retirement. */
-        shared->have_frame = false;
-        atomic_fetch_add(&shared->dropped_frames, shared->queue_count);
-        shared->queue_head = shared->queue_count = 0;
-        shared->audio_begin = shared->audio_end = 0;
-        wipe(shared->frame, shared->frame_size * (shared->queue_capacity + 1));
-        wipe(shared->audio, sizeof(shared->audio));
+        atomic_fetch_add(&shared->epoch, 1);
+        clear_media_locked(shared);
         pthread_mutex_consistent(&shared->media_mutex);
+    } else if (result) abort();
+#else
+    if (result) abort();
+#endif
+    if (atomic_load(&shared->discard_pending)) clear_media_locked(shared);
+}
+/* Never wait on an isolated worker from the capture/control/supervisor host. */
+static bool try_lock_media(struct StreamShared *shared, int fd)
+{
+#ifdef STREAM_FILE_LOCK
+    if (fd >= 0) {
+        struct flock lock = {.l_type = F_WRLCK, .l_whence = SEEK_SET, .l_len = 1};
+        if (fcntl(fd, F_SETLK, &lock) < 0) return false;
+        int owner = atomic_exchange(&shared->media_owner, (int)getpid());
+        if (owner) atomic_fetch_add(&shared->epoch, 1);
+        if (owner || atomic_load(&shared->discard_pending)) clear_media_locked(shared);
+        return true;
     }
 #else
-    (void)result;
+    (void)fd;
 #endif
+    int result = pthread_mutex_trylock(&shared->media_mutex);
+#ifndef __APPLE__
+    if (result == EOWNERDEAD) {
+        atomic_fetch_add(&shared->epoch, 1);
+        clear_media_locked(shared);
+        if (pthread_mutex_consistent(&shared->media_mutex)) abort();
+    } else
+#endif
+    if (result) return false;
+    if (atomic_load(&shared->discard_pending)) clear_media_locked(shared);
+    return true;
+}
+static void unlock_media(struct StreamShared *shared, int fd)
+{
+    atomic_store(&shared->queue_depth, atomic_load(&shared->discard_pending) ||
+                 atomic_load(&shared->retired) ? 0 : shared->queue_count);
+#ifdef STREAM_FILE_LOCK
+    if (fd >= 0) {
+        atomic_store(&shared->media_owner, 0);
+        struct flock lock = {.l_type = F_UNLCK, .l_whence = SEEK_SET, .l_len = 1};
+        if (fcntl(fd, F_SETLK, &lock) < 0) abort();
+        return;
+    }
+#else
+    (void)fd;
+#endif
+    if (pthread_mutex_unlock(&shared->media_mutex)) abort();
 }
 static void clear_media_locked(struct StreamShared *shared)
 {
+    atomic_store(&shared->discard_pending, false);
     atomic_fetch_add(&shared->dropped_frames, shared->queue_count);
     shared->have_frame = false;
     shared->consumed_sequence = shared->frame_sequence;
@@ -326,7 +396,7 @@ static int interrupted(void *opaque)
                                                         : shared->cfg.stream.write_timeout_ms) *
                      1000000ULL;
     uint64_t started = atomic_load(&shared->phase_started_ns);
-    return atomic_load(&shared->session) == 0 || (started && cast_now_ns() - started > limit);
+    return atomic_load(&shared->retired) || atomic_load(&shared->session) == 0 || (started && cast_now_ns() - started > limit);
 }
 static void discard_ffmpeg_log(void *opaque, int level, const char *format, va_list arguments)
 {
@@ -470,17 +540,17 @@ static int write_packets(struct StreamEncoder *encoder, AVCodecContext *codec, A
         }
         /* Acceptance is serialized with the privacy epoch, but the memory
          * mutex is released before invoking any FFmpeg/network operation. */
-        lock_media(encoder->shared);
+        lock_media(encoder->shared, encoder->mailbox_fd);
         if (encoder->epoch != atomic_load(&encoder->shared->epoch)) {
             if (codec == encoder->video) {
                 atomic_fetch_add(&encoder->shared->dropped_frames, 1);
             }
-            pthread_mutex_unlock(&encoder->shared->media_mutex);
+            unlock_media(encoder->shared, encoder->mailbox_fd);
             av_packet_unref(packet);
             continue;
         }
         child_phase(encoder->shared, WORKER_WRITE);
-        pthread_mutex_unlock(&encoder->shared->media_mutex);
+        unlock_media(encoder->shared, encoder->mailbox_fd);
         /* No interleaved muxer queue: each accepted packet is submitted now.
          * Network-accepted packets cannot be retracted by a privacy command. */
         result = av_write_frame(encoder->format, packet);
@@ -533,7 +603,7 @@ static int encode_video(struct StreamEncoder *encoder)
     }
     uint64_t epoch = atomic_load(&shared->epoch);
     bool have_frame;
-    lock_media(shared);
+    lock_media(shared, encoder->mailbox_fd);
     if (shared->queue_count) {
         unsigned latest = (shared->queue_head + shared->queue_count - 1) % shared->queue_capacity;
         bool fresh = cast_now_ns() - shared->frame_times[latest] <=
@@ -556,7 +626,7 @@ static int encode_video(struct StreamEncoder *encoder)
         memcpy(raw, shared->frame, shared->frame_size);
         shared->consumed_sequence = shared->frame_sequence;
     }
-    pthread_mutex_unlock(&shared->media_mutex);
+    unlock_media(shared, encoder->mailbox_fd);
     if (!have_frame) {
         /* Waiting for a freshly composed privacy frame never reveals a raw
          * source. The configured background is the conservative fallback. */
@@ -616,7 +686,7 @@ static int encode_audio(struct StreamEncoder *encoder)
     /* Capture latency is a fixed 60ms; the continuous video/audio output clocks
      * share one origin and are never reset by pause/freeze/blur. */
     uint64_t begin = samples_at(encoder->started_ns - 60000000ULL) + (uint64_t)encoder->audio_pts;
-    lock_media(shared);
+    lock_media(shared, encoder->mailbox_fd);
     for (int i = 0; i < count; i++) {
         uint64_t sample = begin + (uint64_t)i;
         bool available =
@@ -626,7 +696,7 @@ static int encode_audio(struct StreamEncoder *encoder)
                 available ? shared->audio[(sample % STREAM_AUDIO_RING) * 2 + (unsigned)channel] : 0;
         }
     }
-    pthread_mutex_unlock(&shared->media_mutex);
+    unlock_media(shared, encoder->mailbox_fd);
     if (epoch != atomic_load(&shared->epoch)) {
         for (int channel = 0; channel < 2; channel++) {
             wipe(encoder->audio_frame->data[channel], (size_t)count * sizeof(float));
@@ -660,6 +730,40 @@ static void test_hold(struct StreamShared *shared, int stage)
     }
 }
 #endif
+#ifdef __APPLE__
+static void *watch_parent(void *opaque)
+{
+    int queue = *(int *)opaque;
+    free(opaque);
+    struct kevent event;
+    int result;
+    do { result = kevent(queue, NULL, 0, &event, 1, NULL); }
+    while (result < 0 && errno == EINTR);
+    /* Fail closed on parent exit or a broken supervision channel. */
+    _exit(2);
+}
+static int supervise_parent(pid_t parent)
+{
+    int queue = kqueue();
+    if (queue < 0) return -1;
+    if (fcntl(queue, F_SETFD, FD_CLOEXEC) < 0) { close(queue); return -1; }
+    struct kevent event;
+    EV_SET(&event, (uintptr_t)parent, EVFILT_PROC, EV_ADD | EV_ENABLE | EV_ONESHOT,
+           NOTE_EXIT, 0, NULL);
+    if (kevent(queue, &event, 1, NULL, 0, NULL) < 0 || getppid() != parent || parent <= 1) {
+        close(queue); return -1;
+    }
+    int *argument = malloc(sizeof *argument);
+    if (!argument) { close(queue); return -1; }
+    *argument = queue;
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, watch_parent, argument)) {
+        free(argument); close(queue); return -1;
+    }
+    pthread_detach(thread);
+    return 0;
+}
+#endif
 int stream_worker_main(int fd)
 {
     struct stat metadata;
@@ -669,15 +773,20 @@ int stream_worker_main(int fd)
     }
     struct StreamShared *shared =
         mmap(NULL, (size_t)metadata.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    close(fd);
     if (shared == MAP_FAILED) {
+        close(fd);
         return 2;
     }
+#ifndef STREAM_FILE_LOCK
+    close(fd);
+    fd = -1;
+#endif
     if (shared->magic != STREAM_MAGIC || shared->size != (size_t)metadata.st_size ||
         shared->frame_size != (size_t)shared->cfg.width * shared->cfg.height * 4 ||
         shared->queue_capacity < 1 || shared->queue_capacity > 120 ||
         shared->size != sizeof(*shared) + shared->frame_size * (shared->queue_capacity + 1)) {
         munmap(shared, (size_t)metadata.st_size);
+        if (fd >= 0) close(fd);
         return 2;
     }
 #ifdef CAST_EDITION_PRO
@@ -694,17 +803,25 @@ int stream_worker_main(int fd)
     prctl(PR_SET_PDEATHSIG, SIGKILL);
     prctl(PR_SET_DUMPABLE, 0);
 #else
-    /* Streaming startup is rejected until Darwin has equivalent worker supervision. */
-    munmap(shared, shared->size);
-    return 2;
+    if (supervise_parent(parent)) {
+        munmap(shared, shared->size);
+        close(fd);
+        return 2;
+    }
 #endif
     if (getppid() != parent || parent == 1) {
         munmap(shared, shared->size);
         return 2;
     }
+    struct rlimit core_limit = {0, 0};
+    if (setrlimit(RLIMIT_CORE, &core_limit)) {
+        munmap(shared, shared->size);
+        close(fd);
+        return 2;
+    }
     av_log_set_callback(discard_ffmpeg_log);
     signal(SIGPIPE, SIG_IGN);
-    struct StreamEncoder encoder = {.shared = shared, .force_keyframe = true};
+    struct StreamEncoder encoder = {.mailbox_fd = fd, .shared = shared, .force_keyframe = true};
     char key[STREAM_KEY_MAX + 3], ignored[CAST_ERR];
     int result = read_key(shared->cfg.stream.key_file, key, ignored, sizeof(ignored));
     wipe(ignored, sizeof(ignored));
@@ -765,7 +882,7 @@ int stream_worker_main(int fd)
     encoder.started_ns = cast_now_ns();
     encoder.epoch = atomic_load(&shared->epoch);
     child_phase(shared, WORKER_IDLE);
-    while (atomic_load(&shared->session)) {
+    while (atomic_load(&shared->session) && !atomic_load(&shared->retired)) {
         uint64_t now = cast_now_ns();
         uint64_t elapsed = now - encoder.started_ns;
         /* AAC releases each packet one encoder frame later. Delay video by
@@ -812,6 +929,7 @@ finished:
     atomic_store(&shared->finished, 1);
     int failed = atomic_load(&shared->failure);
     munmap(shared, (size_t)metadata.st_size);
+    close(fd);
     return failed ? 1 : 0;
 }
 static void worker_error(struct CastStream *stream, int failure, int code)
@@ -847,6 +965,34 @@ static void worker_error(struct CastStream *stream, int failure, int code)
     av_strerror(code < 0 ? code : AVERROR(code ? code : EIO), detail, sizeof(detail));
     snprintf(stream->status.error, sizeof(stream->status.error), "%s (%s)", action, detail);
 }
+/* All callers hold stream->mutex, pinning both mapping and registered child.
+ * Epoch/silence invalidate work before any attempt to acquire its mailbox. */
+static void retire_media(CastStream *stream)
+{
+    struct StreamShared *shared = stream->shared;
+    atomic_fetch_add(&shared->epoch, 1);
+    atomic_store(&shared->discard_pending, true);
+    atomic_store(&shared->queue_depth, 0);
+    /* Allow a normal bounded memory copy to finish, but never wait on a
+     * stopped worker or a wedged process-shared lock. No kernel lock wait. */
+    uint64_t deadline = cast_now_ns() + 5000000ULL;
+    bool acquired;
+    do {
+        acquired = try_lock_media(shared, stream->fd);
+        if (acquired || cast_now_ns() >= deadline) break;
+        struct timespec pause = {.tv_nsec = 100000};
+        nanosleep(&pause, NULL);
+    } while (true);
+    if (acquired) {
+        clear_media_locked(shared);
+        unlock_media(shared, stream->fd);
+    } else {
+        atomic_store(&shared->retired, true);
+        atomic_store(&shared->failure, FAILURE_WRITE);
+        atomic_store(&shared->failure_code, AVERROR(ETIMEDOUT));
+        if (stream->child > 0) kill(stream->child, SIGKILL);
+    }
+}
 static int spawn_worker(struct CastStream *stream)
 {
     struct StreamShared *shared = stream->shared;
@@ -859,10 +1005,11 @@ static int spawn_worker(struct CastStream *stream)
     atomic_store(&shared->heartbeat, cast_now_ns());
     /* Retire all raw media at the reconnect boundary. The daemon composes a
      * fresh frame using its current pause/freeze/blur state on its next tick. */
-    lock_media(shared);
+    if (!try_lock_media(shared, stream->fd)) return EBUSY;
     atomic_fetch_add(&shared->epoch, 1);
     clear_media_locked(shared);
-    pthread_mutex_unlock(&shared->media_mutex);
+    atomic_store(&shared->retired, false);
+    unlock_media(shared, stream->fd);
     audio_stream_privacy(stream->audio);
     stream->audio_epoch = atomic_load(&shared->epoch);
     stream->audio_next_ns = cast_now_ns() - 30000000ULL;
@@ -909,7 +1056,11 @@ static void publish_audio(struct CastStream *stream, uint64_t now)
         audio_stream_read(stream->audio, stream->audio_next_ns, mix, STREAM_AUDIO_CHUNK);
         cast_audio_extra_mix(atomic_load(&stream->extra_audio), stream->audio_next_ns,
                              atomic_load(&stream->extra_after_ns), mix, STREAM_AUDIO_CHUNK);
-        lock_media(shared);
+        if (!try_lock_media(shared, stream->fd)) {
+            wipe(mix, sizeof mix);
+            stream->audio_next_ns += STREAM_TICK_NS;
+            continue;
+        }
         if (epoch == atomic_load(&shared->epoch) && !shared->silent) {
             if (!shared->audio_end || start > shared->audio_end) {
                 shared->audio_begin = start;
@@ -924,7 +1075,7 @@ static void publish_audio(struct CastStream *stream, uint64_t now)
                 shared->audio_begin = shared->audio_end - STREAM_AUDIO_RING;
             }
         }
-        pthread_mutex_unlock(&shared->media_mutex);
+        unlock_media(shared, stream->fd);
         wipe(mix, sizeof(mix));
         stream->audio_next_ns += STREAM_TICK_NS;
     }
@@ -941,10 +1092,7 @@ static void retry_or_fail(struct CastStream *stream, int failure, int code, uint
         stream->status.active = false;
         stream->status.state = STREAM_FAILED;
         atomic_store(&stream->shared->session, 0);
-        lock_media(stream->shared);
-        atomic_fetch_add(&stream->shared->epoch, 1);
-        clear_media_locked(stream->shared);
-        pthread_mutex_unlock(&stream->shared->media_mutex);
+        retire_media(stream);
         audio_stream_privacy(stream->audio);
         return;
     }
@@ -1120,13 +1268,6 @@ void stream_close(CastStream *stream)
 }
 int stream_start(CastStream *stream, const Config *cfg, char *error, size_t size)
 {
-#ifdef __APPLE__
-    (void)stream;
-    (void)cfg;
-    snprintf(error, size, "streaming is not supported on macOS in this release");
-    return -1;
-#endif
-
     if (config_validate(cfg, error, size)) {
         return -1;
     }
@@ -1160,9 +1301,9 @@ int stream_start(CastStream *stream, const Config *cfg, char *error, size_t size
         pthread_mutex_unlock(&stream->mutex);
         return -1;
     }
-#ifdef __APPLE__
-    int fd = -1;
-    errno = ENOTSUP;
+#ifdef STREAM_FILE_LOCK
+    int fd = -1, reader = -1;
+    if (!cast_preview_files(shared_size, &fd, &reader) && reader >= 0) close(reader);
 #else
     int fd = memfd_create("cast-stream-mailbox", MFD_CLOEXEC | MFD_ALLOW_SEALING);
 #endif
@@ -1191,7 +1332,11 @@ int stream_start(CastStream *stream, const Config *cfg, char *error, size_t size
     /* Pin this start's initialized auto choice for the exec worker and retries. */
     snprintf(shared->cfg.stream.video_encoder, sizeof(shared->cfg.stream.video_encoder), "%s",
              chosen.encoder);
-    shared->silent = true;
+    atomic_init(&shared->silent, true);
+    atomic_init(&shared->media_owner, 0);
+    atomic_init(&shared->discard_pending, false);
+    atomic_init(&shared->retired, false);
+    atomic_init(&shared->queue_depth, 0);
     pthread_mutexattr_t attributes;
     pthread_mutexattr_init(&attributes);
     pthread_mutexattr_setpshared(&attributes, PTHREAD_PROCESS_SHARED);
@@ -1238,11 +1383,9 @@ int stream_stop(CastStream *stream, char *error, size_t size)
     stream->status.outgoing_bitrate_kbps = 0;
     stream->status.state = stream->child ? STREAM_STOPPING : STREAM_STOPPED;
     if (stream->shared) {
-        lock_media(stream->shared);
         atomic_store(&stream->shared->session, 0);
-        atomic_fetch_add(&stream->shared->epoch, 1);
-        clear_media_locked(stream->shared);
-        pthread_mutex_unlock(&stream->shared->media_mutex);
+        atomic_store(&stream->shared->silent, true);
+        retire_media(stream);
     }
     if (stream->child > 0) {
         kill(stream->child, SIGKILL);
@@ -1267,13 +1410,16 @@ int stream_frame(CastStream *stream, const Frame *frame, bool silent, char *erro
         pthread_mutex_unlock(&stream->mutex);
         return -1;
     }
-    lock_media(shared);
-    if (silent != shared->silent) {
+    if (silent != atomic_load(&shared->silent)) {
         atomic_store(&stream->extra_after_ns, cast_now_ns());
-        atomic_fetch_add(&shared->epoch, 1);
-        clear_media_locked(shared);
+        atomic_store(&shared->silent, silent);
+        retire_media(stream);
     }
-    shared->silent = silent;
+    if (atomic_load(&shared->retired) || !try_lock_media(shared, stream->fd)) {
+        atomic_fetch_add(&shared->dropped_frames, 1);
+        pthread_mutex_unlock(&stream->mutex);
+        return 0;
+    }
     if (shared->queue_count == shared->queue_capacity) {
         wipe(shared->frame + shared->frame_size * (shared->queue_head + 1), shared->frame_size);
         shared->queue_head = (shared->queue_head + 1) % shared->queue_capacity;
@@ -1291,7 +1437,7 @@ int stream_frame(CastStream *stream, const Frame *frame, bool silent, char *erro
     shared->frame_times[tail] = shared->frame_ns;
     shared->frame_sequence++;
     shared->queue_count++;
-    pthread_mutex_unlock(&shared->media_mutex);
+    unlock_media(shared, stream->fd);
     pthread_mutex_unlock(&stream->mutex);
     return 0;
 }
@@ -1300,11 +1446,8 @@ void stream_privacy(CastStream *stream, bool silent)
     pthread_mutex_lock(&stream->mutex);
     atomic_store(&stream->extra_after_ns, cast_now_ns());
     if (stream->shared) {
-        lock_media(stream->shared);
-        stream->shared->silent = silent;
-        atomic_fetch_add(&stream->shared->epoch, 1);
-        clear_media_locked(stream->shared);
-        pthread_mutex_unlock(&stream->shared->media_mutex);
+        atomic_store(&stream->shared->silent, silent);
+        retire_media(stream);
     }
     pthread_mutex_unlock(&stream->mutex);
     audio_stream_privacy(stream->audio);
@@ -1314,10 +1457,7 @@ void stream_barrier(CastStream *stream)
     pthread_mutex_lock(&stream->mutex);
     atomic_store(&stream->extra_after_ns, cast_now_ns());
     if (stream->shared) {
-        lock_media(stream->shared);
-        atomic_fetch_add(&stream->shared->epoch, 1);
-        clear_media_locked(stream->shared);
-        pthread_mutex_unlock(&stream->shared->media_mutex);
+        retire_media(stream);
     }
     pthread_mutex_unlock(&stream->mutex);
     audio_stream_privacy(stream->audio);
@@ -1331,23 +1471,12 @@ void stream_status(CastStream *stream, StreamSnapshot *status)
         status->video_frames = atomic_load(&stream->shared->video_frames);
         status->audio_samples = atomic_load(&stream->shared->audio_samples);
         status->dropped_frames = atomic_load(&stream->shared->dropped_frames);
-        lock_media(stream->shared);
-        status->queue_depth = stream->shared->queue_count;
-        pthread_mutex_unlock(&stream->shared->media_mutex);
+        status->queue_depth = atomic_load(&stream->shared->queue_depth);
     }
     pthread_mutex_unlock(&stream->mutex);
 }
 void stream_doctor(const Config *cfg, char *output, size_t size)
 {
-#ifdef __APPLE__
-    (void)cfg;
-    size_t used_macos = strlen(output);
-    if (used_macos < size) {
-        snprintf(output + used_macos, size - used_macos,
-                 "streaming: unsupported on macOS in this release\n");
-    }
-    return;
-#endif
     char error[CAST_ERR] = "";
     int support = local_support(cfg, NULL, error, sizeof(error));
     size_t used = strlen(output);
@@ -1367,6 +1496,120 @@ void stream_doctor(const Config *cfg, char *output, size_t size)
              valid ? "invalid: " : "accessible, owned regular mode-600 file", valid ? error : "");
 }
 #ifdef CAST_TEST
+struct LockFixture {
+    pthread_mutex_t host;
+    struct StreamShared *shared;
+    int fd;
+};
+static void *lock_fixture_thread(void *opaque)
+{
+    struct LockFixture *fixture = opaque;
+    for (unsigned i = 0; i < 10000; ++i) {
+        pthread_mutex_lock(&fixture->host);
+        lock_media(fixture->shared, fixture->fd);
+        fixture->shared->frame_sequence++;
+        unlock_media(fixture->shared, fixture->fd);
+        pthread_mutex_unlock(&fixture->host);
+    }
+    return NULL;
+}
+static int mailbox_case(CastAudio *audio, bool stopped)
+{
+    int fd = -1, reader = -1, ready[2];
+    size_t size = sizeof(struct StreamShared) + 24;
+    if (cast_preview_files(size, &fd, &reader)) return -1;
+    if (reader >= 0) close(reader);
+    struct stat metadata;
+    if (fstat(fd, &metadata) || !S_ISREG(metadata.st_mode) || metadata.st_nlink) {
+        close(fd); return -1;
+    }
+    struct StreamShared *shared = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (shared == MAP_FAILED) { close(fd); return -1; }
+    memset(shared, 0, size);
+    shared->frame_size = 8;
+    shared->queue_capacity = 2;
+    atomic_init(&shared->epoch, 1);
+    pthread_mutexattr_t attributes;
+    pthread_mutexattr_init(&attributes);
+    pthread_mutexattr_setpshared(&attributes, PTHREAD_PROCESS_SHARED);
+#ifndef __APPLE__
+    pthread_mutexattr_setrobust(&attributes, PTHREAD_MUTEX_ROBUST);
+#endif
+    pthread_mutex_init(&shared->media_mutex, &attributes);
+    pthread_mutexattr_destroy(&attributes);
+    if (pipe(ready)) { munmap(shared, size); close(fd); return -1; }
+    pid_t child = fork();
+    if (!child) {
+        close(ready[0]);
+        lock_media(shared, fd);
+        shared->have_frame = true;
+        shared->queue_count = 2;
+        shared->queue_head = 1;
+        shared->audio_begin = 20;
+        shared->audio_end = 100;
+        memset(shared->frame, 0xaa, 24);
+        memset(shared->audio, 0xaa, sizeof shared->audio);
+        char byte = 1;
+        atomic_store(&shared->queue_depth, 2);
+        if (write(ready[1], &byte, 1) != 1) _exit(3);
+        if (stopped) raise(SIGSTOP);
+        for (;;) pause();
+    }
+    close(ready[1]);
+    char byte;
+    int result = child > 0 && read(ready[0], &byte, 1) == 1 ? 0 : -1;
+    close(ready[0]);
+    if (!result && stopped) {
+        int status;
+        if (waitpid(child, &status, WUNTRACED) != child || !WIFSTOPPED(status)) result = -1;
+        CastStream host = {.shared = shared, .fd = fd, .child = child, .audio = audio,
+                           .active = true};
+        host.cfg.width = 2;
+        host.cfg.height = 1;
+        pthread_mutex_init(&host.mutex, NULL);
+        pthread_cond_init(&host.changed, NULL);
+        uint8_t pixels[8] = {0};
+        Frame frame = {.width = 2, .height = 1, .stride = 8, .data = pixels};
+        StreamSnapshot snapshot;
+        char error[CAST_ERR];
+        uint64_t before = cast_now_ns();
+        if (stream_frame(&host, &frame, false, error, sizeof error)) result = -1;
+        stream_status(&host, &snapshot);
+        stream_privacy(&host, true);
+        if (stream_stop(&host, error, sizeof error) || cast_now_ns() - before >= 100000000ULL ||
+            !atomic_load(&shared->retired) || !atomic_load(&shared->silent)) result = -1;
+        pthread_cond_destroy(&host.changed);
+        pthread_mutex_destroy(&host.mutex);
+    }
+    if (child > 0) { kill(child, SIGKILL); if (waitpid(child, NULL, 0) != child) result = -1; }
+    if (!result) {
+        lock_media(shared, fd);
+        if (shared->have_frame || shared->queue_count || shared->queue_head ||
+            shared->audio_begin || shared->audio_end || atomic_load(&shared->epoch) != (stopped ? 4U : 2U))
+            result = -1;
+        for (size_t i = 0; i < 24; ++i) if (shared->frame[i]) result = -1;
+        for (size_t i = 0; i < sizeof shared->audio; ++i)
+            if (((unsigned char *)shared->audio)[i]) result = -1;
+        unlock_media(shared, fd);
+        struct LockFixture fixture = {.shared = shared, .fd = fd};
+        pthread_mutex_init(&fixture.host, NULL);
+        pthread_t threads[3];
+        unsigned count = 0;
+        for (; count < 3; ++count)
+            if (pthread_create(&threads[count], NULL, lock_fixture_thread, &fixture)) break;
+        for (unsigned i = 0; i < count; ++i) pthread_join(threads[i], NULL);
+        if (count != 3 || shared->frame_sequence != 30000) result = -1;
+        pthread_mutex_destroy(&fixture.host);
+    }
+    pthread_mutex_destroy(&shared->media_mutex);
+    munmap(shared, size);
+    close(fd);
+    return result;
+}
+int stream_test_mailbox_recovery(CastAudio *audio)
+{
+    return mailbox_case(audio, false) || mailbox_case(audio, true) ? -1 : 0;
+}
 /* Exercise the production codec, cadence, privacy epoch and FLV packet paths
  * through a local file. Network transport remains a separate integration test. */
 int stream_test_file(const Config *cfg, const char *path)
@@ -1387,7 +1630,7 @@ int stream_test_file(const Config *cfg, const char *path)
     for (size_t i = 0; i < bytes; i += 4) {
         shared->frame[i] = shared->frame[i + 3] = 255;
     }
-    struct StreamEncoder encoder = {.shared = shared, .force_keyframe = true, .epoch = 1};
+    struct StreamEncoder encoder = {.mailbox_fd = -1, .shared = shared, .force_keyframe = true, .epoch = 1};
     int result = setup_encoder(&encoder);
     if (result < 0) {
         goto finished;

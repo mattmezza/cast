@@ -620,10 +620,12 @@ static void backpressure_test(Config *config, CastAudio *audio, const char *dire
     wait_state(stream, STREAM_STREAMING, 2000);
     assert(kill(ingest, SIGSTOP) == 0);
     uint64_t deadline = cast_now_ns() + 5000000000ULL;
-    while (stream_test_write_age(stream) < 100000000ULL && cast_now_ns() < deadline) {
+    while (stream_test_write_age(stream) < 400000000ULL && cast_now_ns() < deadline) {
         feed_noise(stream, &frame, &seed, 50);
     }
-    assert(stream_test_write_age(stream) >= 100000000ULL);
+    /* A sustained write stall distinguishes actual socket backpressure from a
+     * transient encode/write scheduling delay before switching to flat pixels. */
+    assert(stream_test_write_age(stream) >= 400000000ULL);
     uint64_t before = cast_now_ns();
     stream_privacy(stream, true);
     double privacy_ms = (cast_now_ns() - before) / 1e6;
@@ -711,6 +713,7 @@ int main(int argc, char **argv)
     char error[CAST_ERR];
     CastAudio *audio = audio_test_open(&config);
     assert(audio);
+    assert(stream_test_mailbox_recovery(audio) == 0);
     if (argc == 2 && !strcmp(argv[1], "--sustained")) {
         sustained_test(&config, audio, directory);
     } else if (argc == 5 && !strcmp(argv[1], "--fixture")) {

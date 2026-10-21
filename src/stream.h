@@ -40,6 +40,7 @@ int stream_worker_main(int fd);
 /* Read-only validation never opens a network connection. No secret appears in diagnostics. */
 int stream_key_validate(const char *, char *, size_t);
 #ifdef CAST_TEST
+int stream_test_mailbox_recovery(CastAudio *);
 int stream_test_file(const Config *, const char *);
 void stream_test_hold(CastStream *, int);
 void stream_test_stage(CastStream *, int);

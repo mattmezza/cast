@@ -212,6 +212,15 @@ check-stream: $(BUILD)/test_stream
 	$(BUILD)/test_stream
 	python3 tests/test_stream_network.py --binary $(BUILD)/test_stream
 
+# Exercise the Darwin mailbox/owner-death policy on Linux without native devices.
+$(BUILD)/test_stream_file_lock: tests/test_stream.c $(MEDIA_SOURCES) src/config.c src/config_presets.c vendor/inih/ini.c src/cast.h src/media_internal.h src/stream.h $(STREAM_DNS_SOURCE)
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -DCAST_TEST -DCAST_TEST_STREAM_FILE_LOCK $(STREAM_DNS_FLAGS) -o $@ $(filter %.c,$^) $(PKG_LIBS) $(LDLIBS) $(LDFLAGS)
+.PHONY: check-stream-file-lock
+check-stream-file-lock: $(BUILD)/test_stream_file_lock
+	$(BUILD)/test_stream_file_lock
+	python3 tests/test_stream_network.py --binary $(BUILD)/test_stream_file_lock
+
 $(BUILD)/test_wayland: tests/test_wayland.c tests/compositor_runtime_stubs.c src/wayland.c src/compositor.c src/composition_assets.c src/presentation_text.c src/state.c src/cast.h src/compositor.h src/pro_runtime.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CPPFLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -std=gnu11 -o $@ tests/test_wayland.c tests/compositor_runtime_stubs.c src/compositor.c src/composition_assets.c src/presentation_text.c src/state.c $(PKG_LIBS) $(LDLIBS) $(LDFLAGS)
@@ -641,6 +650,10 @@ check-live-media: $(BUILD)/test_live_media
 	$(BUILD)/test_live_media
 check-workspace-live: $(BINARY)
 	CAST_TEST_BINARY='$(abspath $(BINARY))' python3 tests/test_workspace_live.py
+
+.PHONY: check-workspace-stream
+check-workspace-stream: $(BINARY)
+	CAST_TEST_BINARY='$(abspath $(BINARY))' python3 tests/test_workspace_stream.py
 
 endif # Darwin uses Makefile.macos
 

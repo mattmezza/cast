@@ -56,7 +56,7 @@ It does not request capture permissions or test Apple hardware APIs.
 
 ## Try the redesign prototype
 
-The unfinished CUI workspace is opt-in and attaches to a running daemon. Build
+The CUI workspace is opt-in and attaches to a running daemon. Build
 both processes with the same options; the prototype and legacy panel bundle
 incompatible Clay versions and cannot be enabled together:
 
@@ -67,12 +67,15 @@ make -j4 CUI=1 PANEL=0
 ./cast workspace
 ```
 
-The workspace shows live composition and supports acknowledged layout, fit,
-camera placement/size, display and camera selection. Output actions and most
-Settings forms are still unavailable. Closing the workspace leaves capture
-running; stop the foreground daemon with Ctrl+C. Both commands use your default
-configuration; supply the same `--config` and `--socket` when overriding them.
-Hardware capture still needs the permissions described below.
+The workspace supports composition/background/zoom controls, recording, project
+save/open, a docked editing timeline and a live source Media Bin. Settings reflect
+the connected daemon and available edition/codec capabilities. See
+[workspace workflows](workspace.md) for the shared UI behavior and verification
+limits. Closing the workspace leaves capture running; stop the foreground daemon
+with Ctrl+C. Both commands use your default configuration; supply the same
+`--config` and `--socket` when overriding them. Hardware capture still needs the
+permissions described below. Native macOS verification is separate from the Linux
+synthetic and Xvfb checks.
 
 For a disconnected visual fixture that needs no capture permissions:
 
@@ -272,3 +275,29 @@ minimum macOS version among its runtime libraries, which can exceed the source
 deployment target. For Pro, pass the same `EDITION=pro MEDIA_PROFILE=lgpl` and
 speech SDK variables as the executable build; its bundle also includes the speech
 helper and controlled CPU module. These apps are not notarized.
+
+
+## Streaming development validation
+
+The source now implements RTMP/RTMPS streaming on macOS using an anonymous
+mailbox, process-owned file locks and an encoder-process watchdog. Host frame,
+audio and status operations do not wait for the encoder's mailbox lock. Privacy
+has a bounded lock-acquisition budget before retiring a stalled worker; retry
+clears retired media before starting another process. The corresponding Linux
+mailbox and alternate file-lock policy have local loopback coverage, including
+suspended/killed lock owners, privacy, retries and TLS/DNS stalls. This is not a
+claim of native macOS compilation, hardware throughput or service acceptance.
+
+After building on a Mac, run this local synthetic check:
+
+```sh
+make CUI=1 PANEL=0 check-workspace-stream
+```
+
+It needs `ffmpeg`, `ffprobe` and Python 3, starts its own synthetic daemon and a
+loopback-only RTMP receiver, and disables camera, microphone, desktop audio and
+virtual outputs. It verifies the received H.264/AAC stream, privacy controls and
+shutdown, then removes test processes, its temporary key and media. It neither
+requests capture permission nor contacts a streaming service. Real capture,
+RTMPS service credentials and a sustained hardware recording/streaming run still
+need separate acceptance on the intended Mac.

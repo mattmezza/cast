@@ -681,3 +681,21 @@ and `test_stream --extra-audio`. They use synthetic audio and loopback transport
 including privacy acceptance-prefix rejection; sanitized focused runs passed
 ASan, UBSan and leak checking. Native macOS runtime behavior is not established
 by these Linux tests.
+
+### Darwin streaming path and bounded control
+
+`check-stream-file-lock` compiles the alternate mailbox-lock policy on Linux and
+runs the same loopback RTMP/RTMPS suite as `check-stream`. Both pass with the
+controlled SDK. Focused fixtures suspend and kill a child inside a partially
+written mailbox, then verify bounded host frame/status/privacy/stop operations,
+epoch retirement, zeroed raw video/PCM and crash recovery. Host publication uses
+try-lock operations; privacy allows a 5 ms acquisition budget before retiring
+and killing only its registered encoder child. A normal Linux regression run
+also passes. These checks do not compile or execute Darwin's kqueue watchdog or
+Apple's anonymous-file adapter.
+
+`make check-workspace-stream` is a portable production-daemon check for a native
+host: synthetic capture, disabled audio/device routes, a private one-use key and
+a loopback-only receiver. It checks actual H.264/AAC decode, privacy and media
+clock continuity, packet timestamps, key redaction, responsive commands and
+process cleanup. It passed on Linux; native macOS execution remains pending.

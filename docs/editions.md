@@ -20,7 +20,7 @@ installed model; timed notes and cinematic motion do not require inference.
 | `editable_projects` | Separate layer/source capture and later source reframing | Absent; flattened projects/editor/export are free | Not implemented |
 | `cinematic_zoom` | Advanced animation, automatic zoom, cursor smoothing | Absent; existing zoom remains free | Implemented; license required |
 | `transcription_subtitles` | Local transcription, styled captions, exports | Absent | Implemented; `STT=1`, model and license required |
-| `speech_teleprompter` | Notes window, timed/speech following | Absent | Implemented; native window needs `PANEL=1`, speech mode needs shared inference |
+| `speech_teleprompter` | Notes window, timed/speech following | Absent | Implemented; native window needs `CUI=1` or `PANEL=1`, speech mode needs shared inference |
 
 ## Build and install
 
