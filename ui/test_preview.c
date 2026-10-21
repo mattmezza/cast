@@ -191,12 +191,12 @@ static void workspaces(void) {
     for (unsigned i = 0; i < 3; ++i) {
         click(&p, tabs[i]);
         assert(p.app.workspace == (AppWorkspace)i);
-        same(stage, bounds(&p, "composition-stage"));
+        if(i==APP_RECORD){assert(bounds(&p,"timeline-dock").h>0);assert(bounds(&p,"composition-stage").h<stage.h);}else same(stage,bounds(&p,"composition-stage"));
     }
     for (unsigned i = 0; i < 3; ++i) {
         key(&p, (cui_key)(CUI_KEY_1 + i), 0);
         assert(p.app.workspace == (AppWorkspace)i);
-        same(stage, bounds(&p, "composition-stage"));
+        if(i==APP_RECORD){assert(bounds(&p,"timeline-dock").h>0);assert(bounds(&p,"composition-stage").h<stage.h);}else same(stage,bounds(&p,"composition-stage"));
     }
     key(&p, CUI_KEY_1, CUI_MOD_CTRL);
     assert(p.app.workspace == APP_STREAM);
@@ -212,6 +212,7 @@ static void workspaces(void) {
 }
 static void compositions(void) {
     Preview p = create(1360, 1000);
+    p.app.show_timeline[APP_RECORD]=false;settle(&p);
     const char *layouts[] = {"layout-overlay", "layout-split", "layout-screen", "layout-camera", "layout-stage"};
     cui_rect stage = bounds(&p, "composition-stage");
     for (unsigned i = 0; i < APP_LAYOUT_COUNT; ++i) {
@@ -367,7 +368,7 @@ static void settings(void) {
 }
 static void settings_controls_fit(void) {
     const float widths[] = {480, 800, 1360};
-    const unsigned expected_sliders[] = {0, 1, 2, 3, 2, 0, 0, 0, 0, 0};
+    const unsigned expected_sliders[] = {0, 1, 2, 0, 2, 0, 0, 0, 0, 0};
     for (size_t w = 0; w < sizeof widths / sizeof widths[0]; ++w) {
         Preview p = create(widths[w], 820);
         click(&p, "settings-open");
@@ -882,6 +883,24 @@ static void recording_edits(void) {
     p.app.edit_requested=false;p.app.live.recording=true;settle(&p);click(&p,"record-container");
     assert(!p.app.edit_requested&&!p.app.recording_selects[0].overlay.open);cui_destroy(p.ui);
 }
+static void project_discard(void) {
+    Preview p=create(1360,820);
+    p.app.live.enabled=true;p.app.live.connected=true;p.app.live.generation=7;
+    p.app.live.project.open=true;p.app.live.project.dirty=true;
+    const char *args[]={"project","new"};
+    assert(app_timeline_submit(&p.app,2,args));
+    assert(!p.app.extension_requested);settle(&p);
+    assert(p.app.discard_dialog.overlay.open);
+    click(&p,"project-discard-cancel");assert(!p.app.extension_requested && !p.app.discard_dialog.overlay.open);
+    assert(app_timeline_submit(&p.app,2,args));settle(&p);
+    click(&p,"project-discard-confirm");
+    assert(p.app.extension_requested && p.app.extension_argc==2 && !strcmp(p.app.extension_args[1],"new"));
+    p.app.extension_requested=false;
+    assert(app_timeline_submit(&p.app,2,args));settle(&p);
+    ++p.app.live.generation;settle(&p);
+    assert(!p.app.discard_dialog.overlay.open && !p.app.extension_requested);
+    cui_destroy(p.ui);
+}
 int main(int argc,char **argv) {
 #ifdef CAST_TEST_NATIVE_FONTS
     native_fonts_open();
@@ -913,6 +932,7 @@ int main(int argc,char **argv) {
         assert(cui_debug_layout_export(p.ui,CUI_DEBUG_LAYOUT_JSON,dump,required,&required));
         puts(dump);free(dump);cui_destroy(p.ui);return 0;
     }
+    project_discard();
     prompter_entitlement();
     audio_pickers();
     recording_edits();

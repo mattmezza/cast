@@ -2,6 +2,7 @@
 #include "app.h"
 #include "cast_theme.h"
 #include "brand.h"
+#include "timeline_controls.h"
 #include "cui/cui_styled_slider_events.h"
 #include <ctype.h>
 #include <math.h>
@@ -176,6 +177,7 @@ void app_init(AppState *s) {
     s->appearance = APP_SYSTEM;
     s->system_dark = true;
     s->show_sources = s->show_inspector = true;
+    s->show_timeline[APP_RECORD] = true;
     s->source_sections[0] = s->source_sections[1] = true;
     s->camera_anchor = 8;
     s->camera_size = 26;
@@ -299,6 +301,7 @@ static void toggle_panel(cui_context *ui, AppState *s, unsigned kind, float widt
     cui_invalidate(ui);
 }
 static void shortcuts(cui_context *ui, AppState *s, float width) {
+    if(s->text_input_owner && cui_focused(ui)==s->text_input_owner)return;
     /* Bare character shortcuts must yield to the focused text editor. Semantics
      * are rebuilt later in this frame, so use these stable editor identities. */
     const char *editors[]={"background-from","background-via","background-to","background-fill"};
@@ -310,7 +313,7 @@ static void shortcuts(cui_context *ui, AppState *s, float width) {
         const cui_event *e = &events[i];
         if (cui_event_consumed(ui, i) || e->type != CUI_EVENT_KEY_DOWN || e->repeat ||
             e->ime_composing || e->prefer_character_input) continue;
-        if (s->settings.overlay.open || s->panel_sheet.overlay.open || s->source_picker.popup.overlay.open || s->zoom_popup.open) continue;
+        if (s->settings.overlay.open || s->panel_sheet.overlay.open || s->source_picker.popup.overlay.open || s->zoom_popup.open || s->discard_requested || s->discard_dialog.overlay.open) continue;
         bool handled = true;
         if (e->modifiers) continue;
         if(e->key==CUI_KEY_T) {
@@ -617,15 +620,11 @@ static void source_content(cui_context *ui, AppState *s, const cui_theme *t) {
     cui_begin_box(ui, cui_id_from(ui, "source-content"),
         (cui_box){.width = -1, .padding = 10, .gap = 10});
     if (s->workspace == APP_STREAM) {
-        title(ui, t, "Destination", 12);
-        text(ui, t, s->live.connected ? output_state(s, APP_STREAM) : "No destination connected");
-        button(ui, t, "destination-choose", "Set up destination", "network", -1, 36, false, true);
+        app_stream_destination(ui,t,&s->live.stream,composition_disabled(s)||s->extension_requested,app_stream_submit,s);
         rule(ui, t);
     }
     if (s->workspace == APP_RECORD) {
-        title(ui, t, "Recording", 12);
-        text(ui, t, s->live.connected ? output_state(s, APP_RECORD) : "No take connected");
-        text(ui, t, "A recording writes to one file. Pauses and cuts keep the same take.");
+        app_project_controls(ui,t,&s->live.project,composition_disabled(s)||s->extension_requested||!s->live.connected,app_timeline_submit,s);
         rule(ui, t);
     }
     if (section(ui, s, t, 0, "Composition")) {
@@ -849,6 +848,16 @@ static void audio_channel(cui_context *ui,AppState *s,const cui_theme *t,bool mi
         (cui_slider_options){.minimum=-24,.maximum=12,.step=1,.disabled=composition_disabled(s)||!s->live.connected},
         (cui_slider_style_options){.width=width,.track_height=4,.hit_height=24,.hide_label=true},
         (cui_component_slider_handler){audio_gain_request,&request});
+    if(s->live.audio_levels_supported) {
+        AppAudioLevel level=mic?s->live.mic_level:s->live.desktop_level;
+        cui_id meter=cui_id_from(ui,mic?"audio-mic-meter":"audio-desktop-meter");
+        float peak=enabled&&level.available&&level.fresh?fminf(1,fmaxf(0,level.peak)):0;
+        cui_rect bounds=cui_bounds(ui,meter);
+        cui_begin_box(ui,meter,(cui_box){.width=-1,.height=4,.fixed_height=true,.clip=true,.background=cast_design_tokens(t->dark).control});
+        cui_set_underlay(ui,(cui_rect){0,0,fmaxf(0,bounds.w)*peak,4},
+            level.clipped?t->danger:peak>.85f?t->primary:cast_design_tokens(t->dark).live,(cui_corner_radii){0});
+        cui_end_box(ui);
+    }
     cui_end_box(ui);
 }
 static void audio_card(cui_context *ui,AppState *s,const cui_theme *t) {
@@ -882,6 +891,7 @@ static void inspector_content(cui_context *ui, AppState *s, const cui_theme *t) 
     const char *actions[] = {"Start virtual camera", "Start recording", "Start stream"};
     const char *icons[] = {"eye", "file", "network"};
     if(s->workspace==APP_RECORD)recording_output(ui,s,t);
+    else if(s->workspace==APP_STREAM)app_stream_output(ui,t,&s->live.stream,composition_disabled(s)||s->extension_requested,app_stream_submit,s);
     else {
     card_begin(ui, t, "output-card", headings[s->workspace]);
     badge(ui, t, output_state(s, s->workspace));
@@ -1048,7 +1058,8 @@ static void reopen_rail(cui_context *ui, AppState *s, const cui_theme *t,
 }
 static void center(cui_context *ui, AppState *s, const cui_theme *t,
                    float width, float height, float window_width, bool sources_mounted, bool inspector_mounted) {
-    bool short_window = height < 320;
+    float dock_height = s->show_timeline[s->workspace] && height >= 360 ? fminf(262, height * .42f) : 0;
+    bool short_window = height - dock_height < 320;
     float heading_height = short_window ? 32 : 40;
     float notice_height = short_window ? 28 : 44;
     float meta_height = short_window ? 20 : 24;
@@ -1065,6 +1076,8 @@ static void center(cui_context *ui, AppState *s, const cui_theme *t,
     const char *right_toggle = window_width < 800 ? "toggle-inspector" : "center-toggle-inspector";
     if (icon_button(ui, t, left_toggle, "Sources panel [", "panel-left", sources_mounted))
         toggle_panel(ui, s, 1, window_width, cui_id_from(ui, left_toggle));
+    if (icon_button(ui,t,"center-toggle-timeline","Timeline \\","film",s->show_timeline[s->workspace]))
+        s->show_timeline[s->workspace]=!s->show_timeline[s->workspace];
     if (icon_button(ui, t, right_toggle, "Output panel ]", "panel-right", inspector_mounted))
         toggle_panel(ui, s, 2, window_width, cui_id_from(ui, right_toggle));
     cui_end_box(ui);
@@ -1082,7 +1095,7 @@ static void center(cui_context *ui, AppState *s, const cui_theme *t,
         (width > 460 ? "Capture is not connected to this preview." : "No preview connection");
     text(ui, t, notice);
     cui_end_box(ui);
-    stage(ui, s, t, width, fmaxf(24, height - heading_height - notice_height - meta_height - bar_height));
+    stage(ui, s, t, width, fmaxf(24, height - dock_height - heading_height - notice_height - meta_height - bar_height));
     cui_begin_box(ui, cui_id_from(ui, "stage-meta"),
         (cui_box){.width = -1, .height = meta_height, .row = true, .padding = 2, .gap = 8,
             .align_x = CUI_ALIGN_CENTER, .align_y = CUI_ALIGN_CENTER});
@@ -1116,6 +1129,11 @@ static void center(cui_context *ui, AppState *s, const cui_theme *t,
         cui_invalidate(ui);
     }
     cui_end_box(ui);
+    if (dock_height > 0)
+        app_timeline_dock(ui,t,&s->live.project,(AppTimelineOptions){.connected=s->live.connected,
+            .blocked=composition_disabled(s)||s->extension_requested,.recording=s->live.recording,
+            .cut=s->live.record_cut,.countdown=s->live.record_countdown_active,
+            .finalizing=s->live.record_finalizing,.width=width,.height=dock_height},app_timeline_submit,s);
     if (window_width >= 1000 && !sources_mounted) reopen_rail(ui, s, t, true, width, height);
     if (window_width >= 800 && !inspector_mounted) reopen_rail(ui, s, t, false, width, height);
     cui_end_box(ui);
@@ -1215,6 +1233,28 @@ static void drawer(cui_context *ui, AppState *s, const cui_theme *t, float width
         cui_surface_end(ui);
     }
 }
+static void project_discard_dialog(cui_context *ui,AppState *s,const cui_theme *t,float width,float height) {
+    if(!s->discard_initialized) {cui_surface_init(&s->discard_dialog,cui_id_from(ui,"project-discard-dialog"),CUI_SURFACE_DIALOG);s->discard_initialized=true;}
+    if(s->discard_requested) {cui_surface_open(ui,&s->discard_dialog,0);s->discard_requested=false;}
+    if(s->discard_dialog.overlay.open && (!s->live.connected || s->discard_generation!=s->live.generation)) {
+        cui_surface_close(ui,&s->discard_dialog,CUI_SURFACE_CLOSED);s->discard_argc=0;
+    }
+    if(cui_surface_begin(ui,t,&s->discard_dialog,cui_string("Unsaved project changes"),
+        cui_string("Save your project before continuing, or discard these changes."),
+        (cui_surface_options){.viewport={0,0,width,height},.width=fminf(460,width-40),.height=190,.no_outside_dismiss=true})) {
+        cui_text(ui,cui_string("The saved project file will remain unchanged."),12,t->muted);
+        cui_begin_box(ui,0,(cui_box){.width=-1,.row=true,.gap=10});
+        if(cui_button_ex(ui,cui_id_from(ui,"project-discard-cancel"),t,cui_string("Keep editing"),(cui_button_options){.height=32}))
+            cui_surface_close(ui,&s->discard_dialog,CUI_SURFACE_CLOSED);
+        if(cui_button_ex(ui,cui_id_from(ui,"project-discard-confirm"),t,cui_string("Discard changes"),
+            (cui_button_options){.height=32,.disabled=s->live.pending || s->live.project.busy})) {
+            const char *args[3];for(unsigned i=0;i<s->discard_argc;++i)args[i]=s->discard_args[i];
+            if(app_request_command(s,s->discard_argc,args))cui_surface_close(ui,&s->discard_dialog,CUI_SURFACE_CLOSED);
+        }
+        cui_end_box(ui);cui_surface_end(ui);
+    }
+    if(!s->discard_dialog.overlay.open)s->discard_argc=0;
+}
 void app_frame(cui_context *ui, AppState *s, float width, float height) {
     if(s->zoom_popup_initialized) {
         if(s->settings.overlay.open || (s->live.enabled&&!s->live.connected))cui_overlay_close(ui,&s->zoom_popup);
@@ -1252,6 +1292,7 @@ void app_frame(cui_context *ui, AppState *s, float width, float height) {
         app_source_picker_close(ui, s);
     zoom_popup(ui,s,&t,width,height);
     app_settings_frame(ui, s, &t, width, height);
+    project_discard_dialog(ui,s,&t,width,height);
 }
 
 const char *app_setting(const AppState *a,const char *section,const char *key) {
@@ -1260,7 +1301,7 @@ const char *app_setting(const AppState *a,const char *section,const char *key) {
     return "";
 }
 static bool extension_request(AppState *a,bool command,unsigned argc,const char *const *argv) {
-    if(!a || !a->live.connected || a->live.pending || a->live.snapshot_busy || a->edit_requested || a->extension_requested || !argc || argc>4)return false;
+    if(!a || !a->live.connected || a->live.pending || a->live.snapshot_busy || a->edit_requested || a->extension_requested || !argc || argc>8)return false;
     for(unsigned i=0;i<argc;++i)if(!argv[i] || strlen(argv[i])>=sizeof a->extension_args[i])return false;
     for(unsigned i=0;i<argc;++i)snprintf(a->extension_args[i],sizeof a->extension_args[i],"%s",argv[i]);
     a->extension_argc=argc;a->extension_command=command;a->extension_generation=a->live.generation;a->extension_requested=true;return true;
@@ -1270,4 +1311,58 @@ bool app_request_setting(AppState *a,const char *key,const char *value) {
 }
 bool app_request_command(AppState *a,unsigned argc,const char *const *argv) {
     return extension_request(a,true,argc,argv);
+}
+
+bool app_stream_submit(void *user,AppStreamIntent intent,const char *value) {
+    AppState *a=user;
+    if(!app_stream_value_valid(intent,value))return false;
+    if(intent==APP_STREAM_ACTION) {
+        if(!app_stream_action_allowed(&a->live.stream,composition_disabled(a)||a->extension_requested,value))return false;
+        const char *args[]={"stream",value};return app_request_command(a,2,args);
+    }
+    if(a->live.stream.active)return false;
+    static const char *keys[]={NULL,"stream.service","stream.server_url","stream.key_file",
+        "stream.video_bitrate_kbps","stream.audio_bitrate_kbps","stream.encoder_preset",
+        "stream.reconnect_attempts","stream.reconnect_initial_ms","stream.reconnect_max_ms"};
+    return (unsigned)intent<sizeof keys/sizeof *keys && keys[intent] && app_request_setting(a,keys[intent],value);
+}
+bool app_request_file(AppState *a,const FileDialogRequest *request) {
+    if(!a || !request || !a->live.connected || a->live.pending || a->file_requested || a->file_busy || a->extension_requested || a->edit_requested)return false;
+    char error[256];
+    if(!file_dialog_request_valid(request,error,sizeof error))return false;
+    a->file_request=*request;a->file_request.generation=a->live.generation;a->file_requested=true;return true;
+}
+bool app_take_file_result(AppState *a,const char *target,FileDialogResult *out) {
+    if(!a || !target || !out || !a->file_result_ready)return false;
+    if(!a->live.connected || a->file_result.generation!=a->live.generation) {
+        memset(&a->file_result,0,sizeof a->file_result);a->file_result_ready=false;return false;
+    }
+    if(a->file_result.argc<3 || strcmp(a->file_result.args[1],target))return false;
+    *out=a->file_result;memset(&a->file_result,0,sizeof a->file_result);a->file_result_ready=false;return true;
+}
+bool app_timeline_submit(void *user,unsigned argc,const char *const *argv) {
+    AppState *a=user;
+    if(argc>=2 && argc<=3 && !strcmp(argv[0],"project") &&
+       (!strcmp(argv[1],"new") || !strcmp(argv[1],"open") || !strcmp(argv[1],"recover")) && a->live.project.dirty) {
+        if(a->discard_requested || a->discard_dialog.overlay.open || !a->live.connected || a->live.pending)return false;
+        for(unsigned i=0;i<argc;++i)if(!argv[i] || strlen(argv[i])>=sizeof a->discard_args[i])return false;
+        for(unsigned i=0;i<argc;++i)snprintf(a->discard_args[i],sizeof a->discard_args[i],"%s",argv[i]);
+        a->discard_argc=argc;a->discard_generation=a->live.generation;a->discard_requested=true;return true;
+    }
+    if(argc==2 && !strcmp(argv[0],"file")) {
+        FileDialogRequest r={.argc=3,.path_index=2,.filter_count=1};
+        bool media=!strcmp(argv[1],"import");
+        bool exporting=!strcmp(argv[1],"export");
+        bool save=exporting || !strcmp(argv[1],"save");
+        if(!media && !save && strcmp(argv[1],"open"))return false;
+        snprintf(r.args[0],sizeof r.args[0],"%s",media || exporting?"timeline":"project");
+        snprintf(r.args[1],sizeof r.args[1],"%s",media?"import":exporting?"export":save?"save":"open");
+        r.save=save;
+        snprintf(r.title,sizeof r.title,"%s",media?"Import media":exporting?"Export montage":save?"Save project":"Open project");
+        snprintf(r.filters[0].name,sizeof r.filters[0].name,"%s",media?"Video and audio":exporting?"Matroska video":"Cast project");
+        snprintf(r.filters[0].extensions,sizeof r.filters[0].extensions,"%s",media?"mp4;mkv;mov;webm;wav;flac;mp3;ogg;m4a":exporting?"mkv":"cast");
+        if(save)snprintf(r.default_path,sizeof r.default_path,"%s",exporting?"Montage.mkv":a->live.project.path[0]?a->live.project.path:"Untitled.cast");
+        return app_request_file(a,&r);
+    }
+    return app_request_command(a,argc,argv);
 }

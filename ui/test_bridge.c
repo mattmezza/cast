@@ -10,7 +10,7 @@ static char setting_key[64], setting_value[4096];
 int panel_client_command(PanelClient *client, int argc, const char *const *argv, char *error, size_t size)
 {
     (void)client; (void)error; (void)size;
-    assert(argc >= 2 && argc <= 4);
+    assert(argc >= 2 && argc <= 8);
     ++settings;
     snprintf(setting_key, sizeof setting_key, "%s %s", argv[0], argv[1]);
     snprintf(setting_value, sizeof setting_value, "%.31s", argc >= 3 ? argv[argc-1] : "");
@@ -412,6 +412,10 @@ int main(void)
  const char *session_command[]={"notes","open"};
  assert(!bridge_session(b,true,snap.daemon_generation,2,session_command,error,sizeof error));
  assert(!strcmp(setting_key,"notes open"));
+ snap.command_completed=snap.command_queued;bridge_poll(b,0,&live);
+ const char *extraction[]={"transcription","transcribe","/tmp/input.wav","--output","/tmp/captions","--format","both"};
+ assert(!bridge_session(b,true,snap.daemon_generation,7,extraction,error,sizeof error));
+ assert(!strcmp(setting_key,"transcription transcribe") && !strcmp(setting_value,"both"));
  snap.command_completed=snap.command_queued;bridge_poll(b,0,&live);
  snap.connected=false;
  assert(bridge_session(b,false,snap.daemon_generation,2,session_setting,error,sizeof error)<0);

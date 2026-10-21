@@ -2,6 +2,7 @@
 #define CAST_UI_LIVE_H
 #include "cui/cui.h"
 #include "../src/project_session.h"
+#include "stream_controls.h"
 typedef enum { APP_EDIT_NONE, APP_EDIT_LAYOUT, APP_EDIT_FIT, APP_EDIT_ANCHOR, APP_EDIT_SIZE,
     APP_EDIT_BACKGROUND_SOURCE, APP_EDIT_SCREEN_BACKGROUND, APP_EDIT_CAMERA_BACKGROUND,
     APP_EDIT_SCREEN_BACKGROUND_COLOR, APP_EDIT_CAMERA_BACKGROUND_COLOR,
@@ -25,11 +26,15 @@ typedef struct {
     uint64_t generation;
 } AppDevices;
 #define APP_SETTING_MAX 128
+typedef struct { float peak, rms; bool fresh, clipped, available; } AppAudioLevel;
 typedef struct { char section[50], key[64], value[1024]; } AppSetting;
 /* Sanitized daemon state. Pixels are borrowed until the next poll. */
 typedef struct {
     bool enabled, connected, has_frame, pro, pending, snapshot_busy;
     CastProjectSnapshot project;
+    AppStreamSnapshot stream;
+    bool audio_levels_supported;
+    AppAudioLevel mic_level, desktop_level;
     bool notes_available, notes_window_open, license_valid;
     char license_id[32];
     unsigned setting_count;

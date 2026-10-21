@@ -269,11 +269,11 @@ static void content(cui_context *ui,AppState *a,const cui_theme *t,bool narrow) 
     cui_text_ex(ui,cui_string(titles[c]),17,t->text,0,(cui_text_style){.weight=CUI_TEXT_WEIGHT_SEMIBOLD});
     cui_begin_box(ui,0,(cui_box){.width=-1,.max_width=480});
     txt(ui,subs[c],12,t->muted);cui_end_box(ui);
-    if(c!=0 && c!=2 && c!=4 && c!=6 && c!=9) txt(ui,connected ? "Read only · changes are not available in this workspace" : "Connect the daemon to inspect current settings",11,t->muted);
+    if(c!=0 && c!=2 && c!=3 && c!=4 && c!=6 && c!=9) txt(ui,connected ? "Read only · changes are not available in this workspace" : "Connect the daemon to inspect current settings",11,t->muted);
     const char *theme[]={"dark","light","system"};
     const char *density[]={"comfortable","compact"};
     const char *fit[]={"contain","cover"},*shape[]={"rect","rounded","circle"};
-    const char *quality[]={"Low","Balanced","Sharp"},*anchor[]={"camera","float"};
+    const char *anchor[]={"camera","float"};
     switch(c) {
     case 0:
         group(ui,t,"THEME");
@@ -314,12 +314,9 @@ static void content(cui_context *ui,AppState *a,const cui_theme *t,bool narrow) 
         FIELD("Autosave the cut list","Editable recording projects are unavailable.","Unavailable",'t');group_end(ui);break;
     }
     case 3:
-        group(ui,t,"DESTINATION"); FIELD("Name",NULL,connected?a->live.stream_service:"Not connected",'b');
-        FIELD("Server URL",NULL,connected?"Hidden for privacy":"Not connected",'b'); FIELD("Stream-key file",NULL,"Never displayed",'b');group_end(ui);
-        group(ui,t,"ENCODING");SEG("Quality preset",NULL,quality,-1);
-        FIELD("Bitrate",NULL,"— kbps",'r');FIELD("Keyframe interval",NULL,"— s",'r');group_end(ui);
-        group(ui,t,"SAFETY");FIELD("Start paused","Not a preference. Revealing is always separate.","Required",'t');
-        FIELD("Reconnect attempts","0 means never retry automatically.","—",'r');group_end(ui);break;
+        app_stream_destination(ui,t,&a->live.stream,a->live.pending||a->edit_requested||a->extension_requested||a->live.snapshot_busy,app_stream_submit,a);
+        app_stream_encoding(ui,t,&a->live.stream,a->live.pending||a->edit_requested||a->extension_requested||a->live.snapshot_busy,app_stream_submit,a);
+        break;
     case 4:
 #if defined(WITH_PRO) && defined(WITH_CUI)
         if(cast_workspace_settings(ui,a,t,4,narrow))break;

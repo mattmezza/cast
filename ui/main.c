@@ -3,6 +3,7 @@
 #include "cui/cui_sdl3.h"
 #include "app.h"
 #include "cast_theme.h"
+#include "workspace_preferences.h"
 #ifdef CAST_CUI_EMBEDDED
 #include "workspace.h"
 #include "daemon_bridge.h"
@@ -171,6 +172,26 @@ int main(int argc, char **argv) {
 #endif
     AppState app;
     app_init(&app);
+#ifdef CAST_CUI_EMBEDDED
+    WorkspacePreferences saved_preferences;
+    workspace_preferences_defaults(&saved_preferences);
+    char preferences_path[4096]={0},preferences_error[256]={0};
+    bool persist_preferences=true;
+    for(int i=1;i<argc;++i)if(!strcmp(argv[i],"--frames") || !strcmp(argv[i],"--capture") || !strcmp(argv[i],"--debug-live") || !strcmp(argv[i],"--debug-layout"))persist_preferences=false;
+    int preferences_loaded=1;
+    if(persist_preferences && workspace_preferences_path(preferences_path,sizeof preferences_path))
+        preferences_loaded=workspace_preferences_load(preferences_path,&saved_preferences,preferences_error,sizeof preferences_error);
+    if(preferences_loaded<0)persist_preferences=false;
+    if(persist_preferences && preferences_loaded==0) {
+        app.appearance=(AppAppearance)saved_preferences.theme;
+        app.show_sources=saved_preferences.show_sources;app.show_inspector=saved_preferences.show_inspector;
+        app.show_timeline[APP_CAMERA]=saved_preferences.timeline_camera;
+        app.show_timeline[APP_RECORD]=saved_preferences.timeline_record;
+        app.show_timeline[APP_STREAM]=saved_preferences.timeline_stream;
+        initial_width=saved_preferences.window_width;initial_height=saved_preferences.window_height;
+    }
+    int saved_width=initial_width,saved_height=initial_height;
+#endif
     bool debug_layout = false;
     cui_debug_layout_format debug_format = CUI_DEBUG_LAYOUT_TEXT;
     for (int i = 1; i < argc; ++i) {
@@ -262,6 +283,7 @@ int main(int argc, char **argv) {
     int result = 2;
     cui_sdl3 *host = NULL;
     cui_context *ui = NULL;
+    FileDialogHost *files = file_dialog_create();
     atomic_bool settings_pending = ATOMIC_VAR_INIT(false);
     bool settings_watch_registered = false;
 #ifdef CAST_CUI_EMBEDDED
@@ -431,6 +453,9 @@ int main(int argc, char **argv) {
         }
         float width, height;
         cui_sdl3_size(host, &width, &height);
+#ifdef CAST_CUI_EMBEDDED
+        saved_width=(int)width;saved_height=(int)height;
+#endif
         if (!cui_begin_frame(ui, width, height, cui_sdl3_frame_delta(host))) {
             result = 3;
             break;
@@ -471,8 +496,26 @@ int main(int argc, char **argv) {
             next_poll = 0;
             cui_invalidate(ui);
         }
+        if(app.file_requested) {
+            if(!file_dialog_start(files,&app.file_request,NULL))
+                snprintf(app.live.edit_error,sizeof app.live.edit_error,"%s",file_dialog_error(files));
+            app.file_requested=false;app.file_result_ready=false;memset(&app.file_result,0,sizeof app.file_result);
+        }
+        FileDialogResult selection;
+        if(file_dialog_poll(files,app.live.generation,app.live.connected,&selection)) {
+            if(selection.status==FILE_DIALOG_SELECTED) {
+                const char *args[8];for(unsigned i=0;i<selection.argc;++i)args[i]=selection.args[i];
+                if(selection.argc>=3 && !strcmp(args[0],"workspace-draft")) {
+                    app.file_result=selection;app.file_result_ready=true;
+                } else if(!app_timeline_submit(&app,selection.argc,args))
+                    snprintf(app.live.edit_error,sizeof app.live.edit_error,"Workspace is busy; select the file again.");
+            } else if(selection.status==FILE_DIALOG_ERROR)
+                snprintf(app.live.edit_error,sizeof app.live.edit_error,"%s",selection.error);
+            cui_invalidate(ui);
+        }
+        app.file_busy=file_dialog_busy(files);
         if(app.extension_requested) {
-            const char *args[4];for(unsigned i=0;i<app.extension_argc;++i)args[i]=app.extension_args[i];
+            const char *args[8];for(unsigned i=0;i<app.extension_argc;++i)args[i]=app.extension_args[i];
             char error[CAST_ERR]={0};
             int queued=bridge_session(bridge,app.extension_command,app.extension_generation,app.extension_argc,args,error,sizeof error);
             app.live.pending=queued==0;
@@ -495,6 +538,8 @@ int main(int argc, char **argv) {
 #endif
         cui_theme theme = cast_theme(app_is_dark(&app));
         cui_draw_list list = cui_end_frame(ui);
+        cui_text_input_state text_input;
+        app.text_input_owner=cui_get_text_input_config(ui,&text_input)?text_input.owner:0;
         if (cui_last_error(ui) != CUI_OK) {
             fprintf(stderr, "CUI layout failed (error %d).\n", (int)cui_last_error(ui));
             result = 3;
@@ -527,6 +572,22 @@ int main(int argc, char **argv) {
         ++rendered; /* Only successful renders count toward the requested bound. */
     }
 cleanup:
+#ifdef CAST_CUI_EMBEDDED
+    if(persist_preferences && preferences_path[0] && host && result==0) {
+        WorkspacePreferences current={.theme=(WorkspaceTheme)app.appearance,
+            .show_sources=app.show_sources,.show_inspector=app.show_inspector,
+            .timeline_camera=app.show_timeline[APP_CAMERA],.timeline_record=app.show_timeline[APP_RECORD],
+            .timeline_stream=app.show_timeline[APP_STREAM],.window_width=saved_width,.window_height=saved_height};
+        if((preferences_loaded==1 || current.theme!=saved_preferences.theme ||
+            current.show_sources!=saved_preferences.show_sources || current.show_inspector!=saved_preferences.show_inspector ||
+            current.timeline_camera!=saved_preferences.timeline_camera || current.timeline_record!=saved_preferences.timeline_record ||
+            current.timeline_stream!=saved_preferences.timeline_stream || current.window_width!=saved_preferences.window_width ||
+            current.window_height!=saved_preferences.window_height) && workspace_preferences_valid(&current) &&
+           workspace_preferences_save(preferences_path,&current,preferences_error,sizeof preferences_error)<0)
+            fprintf(stderr,"Workspace preferences: %s\n",preferences_error);
+    }
+#endif
+    file_dialog_close(files);
 #ifdef CAST_CUI_EMBEDDED
     if (debug_live) {
         printf("{\"connected\":%s,\"has_frame\":%s,\"generation\":%llu,"

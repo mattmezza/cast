@@ -111,7 +111,7 @@ PACKAGES += sdl3 freetype2 harfbuzz
 ifeq ($(EDITION),pro)
 PACKAGES += sdl3-ttf
 endif
-CUI_SOURCES = ui/main.c ui/app.c ui/menus.c ui/settings.c ui/cast_theme.c ui/brand.c ui/source_picker.c ui/daemon_bridge.c ui/timeline_controls.c ui/stream_controls.c
+CUI_SOURCES = ui/main.c ui/app.c ui/menus.c ui/settings.c ui/cast_theme.c ui/brand.c ui/source_picker.c ui/daemon_bridge.c ui/timeline_controls.c ui/stream_controls.c ui/file_dialog.c ui/file_dialog_model.c ui/workspace_preferences.c
 ifeq ($(EDITION),pro)
 CUI_SOURCES += $(wildcard $(PRO_DIR)/src/workspace/*.c)
 CPPFLAGS += -Iui

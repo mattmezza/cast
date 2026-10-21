@@ -5,7 +5,7 @@ AR ?= ar
 PKG_CONFIG ?= pkg-config
 CFLAGS ?= -O2 -g
 # Consumer sources may live in subdirectories; target stays beside bundled assets.
-APP_SOURCES ?= main.c app.c menus.c cast_theme.c brand.c settings.c source_picker.c timeline_controls.c stream_controls.c
+APP_SOURCES ?= main.c app.c menus.c cast_theme.c brand.c settings.c source_picker.c timeline_controls.c stream_controls.c file_dialog.c file_dialog_model.c workspace_preferences.c
 TARGET ?= build/cast-ui-preview
 APP_OBJECTS := $(APP_SOURCES:%.c=build/%.o)
 CPPFLAGS += -Ivendor/include -Ivendor/third_party/clay
@@ -53,7 +53,7 @@ build/%.o: %.c
 
 -include $(OBJECTS:.o=.d) $(APP_OBJECTS:.o=.d)
 -include build/test_preview.d
-build/test_preview: build/test_preview.o build/app.o build/menus.o build/cast_theme.o build/brand.o build/settings.o build/source_picker.o build/vendor/libcui.a
+build/test_preview: build/test_preview.o build/app.o build/menus.o build/cast_theme.o build/brand.o build/settings.o build/source_picker.o build/stream_controls.o build/timeline_controls.o build/file_dialog_model.o build/vendor/libcui.a
 	$(CC) $(LDFLAGS) $^ -lm -o $@
 
 check: build/test_preview
@@ -80,9 +80,20 @@ check: check-bridge
 build/test_native_layout.o: test_preview.c app.h live.h
 	@mkdir -p build
 	$(CC) $(CPPFLAGS) $(NATIVE_CFLAGS) $(CFLAGS) -DCAST_TEST_NATIVE_FONTS -MMD -MP -c $< -o $@
-build/test_native_layout: build/test_native_layout.o build/app.o build/menus.o build/cast_theme.o build/brand.o build/settings.o build/source_picker.o build/vendor/libcui_text.a build/vendor/libcui_bidi.a build/vendor/libcui.a
+build/test_native_layout: build/test_native_layout.o build/app.o build/menus.o build/cast_theme.o build/brand.o build/settings.o build/source_picker.o build/stream_controls.o build/timeline_controls.o build/file_dialog_model.o build/vendor/libcui_text.a build/vendor/libcui_bidi.a build/vendor/libcui.a
 	$(CC) $(LDFLAGS) $^ $(LDLIBS) -o $@
 -include build/test_native_layout.d
+
+build/test_stream_controls: test_stream_controls.c stream_controls.c stream_controls.h build/vendor/libcui.a
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Werror test_stream_controls.c stream_controls.c build/vendor/libcui.a -lm -o $@
+build/test_timeline_controls: test_timeline_controls.c timeline_controls.c timeline_controls.h brand.c cast_theme.c build/vendor/libcui.a
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Werror test_timeline_controls.c timeline_controls.c brand.c cast_theme.c build/vendor/libcui.a -lm -o $@
+check-stream: build/test_stream_controls
+	./build/test_stream_controls
+check-timeline: build/test_timeline_controls
+	./build/test_timeline_controls
+check: check-stream check-timeline
+.PHONY: check-stream check-timeline
 
 # Local interface persistence is portable; no SDL, daemon or real user config.
 build/test_workspace_preferences: test_workspace_preferences.c workspace_preferences.c workspace_preferences.h

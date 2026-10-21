@@ -23,15 +23,15 @@ static void menu_icon(cui_context *ui, void *user) {
 }
 typedef struct { const char *label, *shortcut, *action; bool available; } MenuDef;
 static const MenuDef file_menu[] = {
-    {"New project", "Ctrl+N", "new", false}, {"Open project…", "Ctrl+O", "open", false}, {0},
-    {"Save project", "Ctrl+S", "save", false}, {"Save a copy…", "", "copy", false}, {0},
-    {"Export take…", "", "export", false}, {0}, {"Quit cast", "Ctrl+Q", "quit", true}};
+    {"New project", "Ctrl+N", "new", true}, {"Open project…", "Ctrl+O", "open", true}, {0},
+    {"Save project", "Ctrl+S", "save", true}, {"Save a copy…", "", "copy", true}, {0},
+    {"Export take…", "", "export", true}, {0}, {"Quit cast", "Ctrl+Q", "quit", true}};
 static const MenuDef edit_menu[] = {
-    {"Undo cut", "Ctrl+Z", "undo", false}, {"Redo", "Ctrl+Shift+Z", "redo", false}, {0},
+    {"Undo edit", "Ctrl+Z", "undo", true}, {"Redo", "Ctrl+Shift+Z", "redo", true}, {0},
     {"Rename project…", "", "rename", false}, {"Delete project", "", "delete", false}};
 static const MenuDef view_menu[] = {
     {"Left panel", "[", "left", true}, {"Right panel", "]", "right", true},
-    {"Timeline", "\\", "timeline", false}, {0}, {"Full-screen stage", "F11", "fullscreen", false},
+    {"Timeline", "\\", "timeline", true}, {0}, {"Full-screen stage", "F11", "fullscreen", false},
     {"Open preview window", "", "preview", false}};
 static const MenuDef composition_menu[] = {
     {"Overlay", "", "layout-0", true}, {"Split", "", "layout-1", true},
@@ -60,10 +60,21 @@ static void menu_row(cui_context *ui, void *user) {
 static void dispatch(cui_context *ui, AppState *app, const MenuDef *def, cui_id trigger) {
     if (!strcmp(def->action, "left")) app->show_sources = !app->show_sources;
     else if (!strcmp(def->action, "right")) app->show_inspector = !app->show_inspector;
+    else if (!strcmp(def->action,"timeline")) app->show_timeline[app->workspace]=!app->show_timeline[app->workspace];
+    else if (!strcmp(def->action,"undo") || !strcmp(def->action,"redo")) {
+        const char *args[]={"timeline",def->action};app_request_command(app,2,args);
+    }
     else if (!strncmp(def->action, "layout-", 7)) {
         const char *layouts[] = {"overlay", "split", "screen", "camera", "stage"};
         unsigned index = (unsigned)(def->action[7] - '0');
         if (index < APP_LAYOUT_COUNT) app_request_edit(app, APP_EDIT_LAYOUT, layouts[index]);
+    }
+    else if (!strcmp(def->action,"new")) {
+        const char *args[]={"project","new"};app_timeline_submit(app,2,args);
+    } else if (!strcmp(def->action,"open") || !strcmp(def->action,"copy") || !strcmp(def->action,"export")) {
+        const char *args[]={"file",!strcmp(def->action,"copy")?"save":def->action};app_timeline_submit(app,2,args);
+    } else if (!strcmp(def->action,"save")) {
+        const char *args[]={app->live.project.path[0]?"project":"file","save"};app_timeline_submit(app,2,args);
     }
     else if (!strcmp(def->action, "record"))
         app_request_edit(app, APP_EDIT_RECORD_ACTION,
@@ -100,6 +111,13 @@ void app_menu_bar(cui_context *ui, AppState *app, const cui_theme *t, float widt
             char id[64]; snprintf(id, sizeof id, "%s-item-%zu", ids[m], i);
             bool disabled = !def->available || (m == 3 && i < 5 && (app->edit_requested || app->live.pending || (app->live.enabled && !app->live.connected))) ||
                 (m == 2 && ((i == 0 && width < 1000) || (i == 1 && width < 800)));
+            if(m==0 && i<7 && def->label) {
+                disabled=!app->live.connected || app->live.pending || app->live.project.busy || app->extension_requested || app->file_busy;
+                if(i==0 || i==1)disabled=disabled || app->live.recording || app->live.stream.active;
+                if(i==3 || i==4)disabled=disabled || !app->live.project.open;
+                if(i==6)disabled=disabled || !app->live.project.clip_count || app->live.project.recording || app->live.project.exporting || app->live.project.missing_count;
+            }
+            if(m==1 && i<2)disabled=!app->live.connected || app->live.pending || app->live.project.busy || app->live.project.recording;
             if (m == 4 && (i == 1 || i == 2)) {
                 disabled = !app->live.enabled || !app->live.connected || app->live.pending ||
                     app->live.snapshot_busy || app->edit_requested || app->live.record_finalizing ||

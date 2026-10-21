@@ -15,7 +15,7 @@
 #define CAST_MAX_ARGS 64
 #define CAST_IPC_MAX 8192
 /* Owned RGBA8 frames. ts_ns is CLOCK_MONOTONIC; stride may exceed width*4. */
-typedef struct {
+typedef struct CastFrame {
     uint8_t *data;
     int width, height, stride;
     uint64_t ts_ns;

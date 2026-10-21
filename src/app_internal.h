@@ -6,6 +6,7 @@
 #include "pro_runtime.h"
 #include "stream.h"
 typedef struct AppRuntime AppRuntime;
+typedef struct CastProjectSession CastProjectSession;
 
 /* Daemon session storage stays stable while asynchronous selection references it. */
 typedef struct {
@@ -44,6 +45,7 @@ typedef struct App {
     PanelTransport *panel;
     EditionService *edition;
     AppRuntime *runtime;
+    CastProjectSession *project;
     bool runtime_prepared;
 } App;
 int app_error(char *, size_t, const char *, ...) __attribute__((format(printf, 3, 4)));

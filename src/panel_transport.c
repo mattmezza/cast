@@ -152,6 +152,8 @@ static void snapshot_fill(PanelSnapshot *s, App *a, PanelTransport *t)
     s->config = a->config;
     snprintf(s->composition_error, sizeof s->composition_error, "%s", a->composition_error);
     s->state = a->state;
+    media_audio_levels(a->media, &s->audio_levels);
+    project_session_snapshot(a->project, &s->project);
     edition_service_snapshot(a->edition, &s->edition);
     const CastRuntimeHooks *hooks = cast_runtime_hooks();
     if (a->runtime && hooks && hooks->snapshot) {
@@ -253,8 +255,10 @@ void panel_transport_publish(PanelTransport *t, App *a, const Frame *virtual, co
                   a->state.stream_active && !a->state.stream_paused && a->stream.data
                       ? &a->stream
                       : &a->neutral);
+    const Frame *review=project_session_review_frame(a->project);
+    bool reviewing=t->shared->snapshot.project.reviewing;
     preview_write(t->shared, PANEL_PREVIEW_COMPOSITION,
-                  a->composition_preview.data ? &a->composition_preview : NULL);
+                  reviewing ? review : a->composition_preview.data ? &a->composition_preview : NULL);
     t->composition_source_valid = a->composition_preview.data != NULL;
     atomic_fetch_add_explicit(&t->shared->sequence, 1, memory_order_release);
 }
@@ -310,8 +314,10 @@ void panel_transport_barrier(PanelTransport *t, App *a, bool invalidate)
                       : &a->neutral);
     /* Publish a newly rendered private composition, or no image. Outgoing
      * privacy placeholders must never appear in the private editing canvas. */
+    const Frame *review=project_session_review_frame(a->project);
+    bool reviewing=t->shared->snapshot.project.reviewing;
     preview_write(t->shared, PANEL_PREVIEW_COMPOSITION,
-                  a->composition_preview.data ? &a->composition_preview : NULL);
+                  reviewing ? review : a->composition_preview.data ? &a->composition_preview : NULL);
     atomic_fetch_add_explicit(&t->shared->sequence, 1, memory_order_release);
 }
 static void attach_error(int fd, const char *error)

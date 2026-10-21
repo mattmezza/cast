@@ -524,6 +524,32 @@ static void copy_config(AppLive *out, const PanelSnapshot *snapshot, const Daemo
     out->can_select_camera = true;
     snprintf(out->screen_id, sizeof out->screen_id, "%.*s", (int)sizeof config->monitor - 1, config->monitor);
     snprintf(out->camera_id, sizeof out->camera_id, "%.*s", (int)sizeof config->camera_device - 1, config->camera_device);
+    out->stream = (AppStreamSnapshot){.connected = snapshot->connected,
+        .generation = snapshot->daemon_generation, .phase = (AppStreamPhase)snapshot->stream.state,
+        .active = snapshot->stream.active, .paused = state->stream_paused,
+        .frozen = state->stream_frozen, .blurred = state->stream_blurred,
+        .video_bitrate_kbps = config->stream.video_bitrate_kbps,
+        .audio_bitrate_kbps = config->stream.audio_bitrate_kbps,
+        .reconnect_attempts = config->stream.reconnect_attempts,
+        .reconnect_initial_ms = config->stream.reconnect_initial_ms,
+        .reconnect_max_ms = config->stream.reconnect_max_ms,
+        .outgoing_bitrate_kbps = snapshot->stream.outgoing_bitrate_kbps,
+        .retry_attempt = snapshot->stream.retry_attempt, .queue_depth = snapshot->stream.queue_depth,
+        .dropped_frames = snapshot->stream.dropped_frames, .bytes_written = snapshot->stream.bytes_written};
+    snprintf(out->stream.service, sizeof out->stream.service, "%s", config->stream.service);
+    snprintf(out->stream.server_url, sizeof out->stream.server_url, "%s", config->stream.server_url);
+    snprintf(out->stream.key_file, sizeof out->stream.key_file, "%s", config->stream.key_file);
+    snprintf(out->stream.video_encoder, sizeof out->stream.video_encoder, "%s", config->stream.video_encoder);
+    snprintf(out->stream.encoder_preset, sizeof out->stream.encoder_preset, "%s", config->stream.encoder_preset);
+    if (snapshot->stream.error[0])
+        snprintf(out->stream.error, sizeof out->stream.error, "Stream failed. Check the destination, key file and connection, then retry.");
+    out->audio_levels_supported = snapshot->audio_levels.supported;
+    out->mic_level = (AppAudioLevel){.peak = snapshot->audio_levels.mic.peak,
+        .rms = snapshot->audio_levels.mic.rms, .fresh = snapshot->audio_levels.mic.fresh,
+        .clipped = snapshot->audio_levels.mic.clipped, .available = snapshot->audio_levels.mic.available};
+    out->desktop_level = (AppAudioLevel){.peak = snapshot->audio_levels.desktop.peak,
+        .rms = snapshot->audio_levels.desktop.rms, .fresh = snapshot->audio_levels.desktop.fresh,
+        .clipped = snapshot->audio_levels.desktop.clipped, .available = snapshot->audio_levels.desktop.available};
     out->pro = snapshot->edition.identity.pro;
     out->license_valid = snapshot->edition.license.state == CAST_LICENSE_VALID;
     snprintf(out->license_id, sizeof out->license_id, "%s", snapshot->edition.license.masked_id);
@@ -722,7 +748,7 @@ void bridge_poll(DaemonBridge *bridge, int target, AppLive *out)
 }
 
 int bridge_session(DaemonBridge *b,bool command,uint64_t generation,unsigned argc,const char *const *argv,char *error,size_t size) {
-    if(!b || b->pending || !argc || argc>4 || (!command && argc!=2))return refuse_edit(b,error,size,"Session edit unavailable");
+    if(!b || b->pending || !argc || argc>8 || (!command && argc!=2))return refuse_edit(b,error,size,"Session edit unavailable");
     size_t bytes=64;
     for(unsigned i=0;i<argc;++i){if(!argv[i] || strlen(argv[i])>=4096)return refuse_edit(b,error,size,"Session edit is too long");bytes+=strlen(argv[i])+1;}
     if(bytes>=CAST_IPC_MAX)return refuse_edit(b,error,size,"Session edit exceeds transport limit");

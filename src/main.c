@@ -55,6 +55,11 @@ static const char help[] =
     "  --record-bitrate KBPS --record-rate-control auto|bitrate|crf --stream-video-encoder NAME\n"
     "Test-only: --backend synthetic --camera-device synthetic --output-device none\n"
     "Commands (append --help for this reference):\n"
+    "  project new|open PATH|save [PATH]|recover PATH|status\n"
+    "  timeline import PATH [TRACK]; timeline move ID TRACK,START_NS\n"
+    "  timeline trim ID IN_NS,DURATION_NS; timeline split ID POSITION_NS\n"
+    "  timeline remove ID; timeline gain ID GAIN,MUTED; timeline undo|redo|seek NS\n"
+    "  timeline export PATH|status|cancel\n"
     "  layout overlay|stage|split|screen|camera|next|prev\n"
     "  split side left|right; split ratio PERCENT%\n"
     "  camera show|hide|toggle; camera size +5%|-5%|25%\n"
@@ -522,6 +527,7 @@ static void tick(App *a)
         }
     }
     a->record_finalizing = finalizing;
+    project_session_tick(a);
     app_runtime_sync(a);
     a->state.dropped_frames = dropped + a->loop_drops;
     if (a->state.recording && !running) {
@@ -800,6 +806,8 @@ static void drain_peers(App *a, Peer *peers, int *count)
                 int safety = app_runtime_safety(a, argc, argv, out, sizeof out);
                 if (safety != 1) {
                     rc = safety;
+                } else if (!strcmp(argv[0], "project") || !strcmp(argv[0], "timeline")) {
+                    rc = project_session_command(a, argc, argv, out, sizeof out);
                 } else if (!strcmp(argv[0], "--notes-window")) {
                     rc = app_runtime_notes_register(a, argc, argv, p->pid, out, sizeof out);
                 } else if (!strcmp(argv[0], "license") || !strcmp(argv[0], "edition") ||
@@ -999,6 +1007,11 @@ static int run_daemon(Config config, Startup startup)
             config.socket_path);
     a->source_generation = platform_source_generation(a->platform);
     a->panel = panel_transport_create();
+    a->project = project_session_open();
+    if (!a->project) {
+        snprintf(e, sizeof e, "cannot create project worker");
+        goto failed;
+    }
     if (app_runtime_open(a, e, sizeof e)) {
         goto failed;
     }
@@ -1127,6 +1140,7 @@ cleanup:
     if (a->compositor) {
         compositor_destroy(a->compositor);
     }
+    project_session_close(a->project);
     app_runtime_close(a);
     frame_free(&a->composition_preview);
     frame_free(&a->screen);
