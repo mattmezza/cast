@@ -505,6 +505,44 @@ comparison budget during simultaneous recording while meeting the media
 continuity checks; those historical system-media CPU figures are not a promise
 for the LGPL encoder profile. Receiver/decode cost remains excluded.
 
+### LGPL 4K30 software recording qualification (2026-10-21)
+
+The existing 60-second synthetic moving-gradient fixture was run at 3840×2160,
+30 fps, 6,000 kbps target bitrate and an eight-frame recorder queue on the
+Core Ultra 5 235U. The LGPL candidate selected `libopenh264` with codec frame
+skipping disabled; this is a software H.264/AAC recording test without capture,
+preview, GPU encoding or another concurrent benchmark.
+
+```sh
+make -j4 MEDIA_PROFILE=lgpl LGPL_ROOT="$PWD/build/deps-lgpl-candidate" \
+  PANEL=0 CUI=0 BUILD=build/community-roadmap-validation \
+  build/community-roadmap-validation/media_sustained
+build/community-roadmap-validation/media_sustained NEW_OUTPUT.mkv 3840 2160
+```
+
+**Failed throughput qualification:** 1,800 submitted frames produced 746 H.264
+packets and 1,054 recorder drops (58.6%) over a 60.021-second file. Full FFmpeg
+decode independently read all 746 video frames at 3840×2160 and 2,813 AAC frames
+without errors. Video timestamps remained increasing, but 732 of 745 intervals
+exceeded 50 ms and the maximum interval was 166 ms. The fixture's final error
+text still says “1080p30”; its actual supplied size and output were 4K30.
+
+The recorder's instrumented worker averaged 44.064 ms for RGBA-to-YUV conversion
+and 35.451 ms for encoding/muxing per accepted frame: 79.515 ms combined against
+a 33.333 ms frame budget. Both stages exceed that budget individually; increasing
+the queue would not restore sustained throughput. No encoder defaults or requested
+resolution were reduced to pass the test.
+
+`/usr/bin/time` was unavailable, so Python `resource.getrusage(RUSAGE_CHILDREN)`
+and a monotonic clock measured the fixture: 61.223 seconds elapsed, 228.799 user
+CPU seconds, 0.835 system CPU seconds, 375.08% of one CPU core and 514,196 KiB
+peak RSS (502.14 MiB). These include synthetic frame generation, queue copies,
+software encoding and the fixture's demux inspection. The later independent
+full decode is excluded. The output movie was removed after inspection; small
+measurement logs remain in `build/community-roadmap-validation/4k30-*`.
+This result establishes a current software 4K30 bottleneck, with no 4K60 or GPU
+performance claim.
+
 ## v0.7 panel drill-in refinement
 
 The second UI round changes only the native panel. Private Xvfb workflows verify
