@@ -405,7 +405,10 @@ static void chrome(cui_context *ui, AppState *s, const cui_theme *t, float width
     fill(ui);
     if (!narrow) tabs(ui, s, t, false);
     fill(ui);
-    if (width >= 1050) button(ui, t, "pause-all", "Pause all", "pause", 0, 28, false, true);
+    if(width>=1050 && button(ui,t,"pause-all",s->live.group_paused?"Resume outputs":"Pause all","pause",0,28,false,
+        !s->live.connected || s->live.pending || s->live.snapshot_busy || s->extension_requested)) {
+        const char *args[]={s->live.group_paused?"resume":"pause"};app_request_command(s,1,args);
+    }
     if (width >= 680) badge(ui, t, s->live.connected ? "Connected" : "Not connected");
     badge(ui, t, s->live.enabled ? (s->live.connected ? (s->live.pro ? "Pro" : "Community") : "Read only") : "Preview");
     cui_end_box(ui);
@@ -903,7 +906,6 @@ static void inspector_content(cui_context *ui, AppState *s, const cui_theme *t) 
         (cui_box){.width = -1, .padding = 10, .gap = 10});
     if(s->workspace!=APP_RECORD)director_card(ui, s, t);
     const char *headings[] = {"Virtual camera", "Recording", "Live stream"};
-    const char *actions[] = {"Start virtual camera", "Start recording", "Start stream"};
     const char *icons[] = {"eye", "file", "network"};
     if(s->workspace==APP_RECORD)recording_output(ui,s,t);
     else if(s->workspace==APP_STREAM)app_stream_output(ui,t,&s->live.stream,composition_disabled(s)||s->extension_requested,app_stream_submit,s);
@@ -916,11 +918,27 @@ static void inspector_content(cui_context *ui, AppState *s, const cui_theme *t) 
         ? "Record your composition to a file. Cuts omit time; resuming continues the same recording."
         : "Send your composition to a streaming destination. Start paused, then reveal when you are ready.");
     ButtonIcon output_icon = {cui_id_from(ui, "output-start-icon"), t, icons[s->workspace], 14};
-    cui_button_ex(ui, cui_id_from(ui, "output-start"), t, cui_string(actions[s->workspace]),
-        (cui_button_options){.variant = CUI_BUTTON_PRIMARY, .width = -1, .height = 40,
-            .font_size = 12, .leading_content = button_icon, .leading_user = &output_icon,
-            .icon_size = 14, .disabled = true});
-    text(ui, t, s->live.enabled ? "Output controls are read only in this milestone." : "Requires a connected capture daemon.");
+    bool blocked=!s->live.connected || composition_disabled(s) || s->extension_requested;
+    if(cui_button_ex(ui,cui_id_from(ui,"output-start"),t,
+        cui_string(s->live.virtual_enabled?"Stop virtual camera":"Start virtual camera"),
+        (cui_button_options){.variant=CUI_BUTTON_PRIMARY,.width=-1,.height=40,.font_size=12,
+            .leading_content=button_icon,.leading_user=&output_icon,.icon_size=14,.disabled=blocked})) {
+        const char *args[]={"virtual",s->live.virtual_enabled?"stop":"start"};app_request_command(s,2,args);
+    }
+    if(s->live.virtual_enabled) {
+        if(button(ui,t,"virtual-reveal",s->live.virtual_paused?"Reveal camera":"Privacy pause",
+            s->live.virtual_paused?"eye":"pause",-1,32,false,blocked)) {
+            const char *args[]={"virtual",s->live.virtual_paused?"resume":"pause"};app_request_command(s,2,args);
+        }
+        cui_begin_box(ui,0,(cui_box){.width=-1,.row=true,.gap=6});
+        if(button(ui,t,"virtual-freeze","Freeze","pause",-1,28,s->live.virtual_frozen,blocked || s->live.virtual_paused)) {
+            const char *args[]={"virtual",s->live.virtual_frozen?"unfreeze":"freeze"};app_request_command(s,2,args);
+        }
+        if(button(ui,t,"virtual-blur","Blur","eye",-1,28,s->live.virtual_blurred,blocked || s->live.virtual_paused)) {
+            const char *args[]={"virtual",s->live.virtual_blurred?"unblur":"blur"};app_request_command(s,2,args);
+        }
+        cui_end_box(ui);
+    }
     if (s->live.error[0]) text(ui, t, s->live.error);
     cui_end_box(ui);
     }

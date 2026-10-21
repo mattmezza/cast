@@ -10,9 +10,9 @@ static char setting_key[64], setting_value[4096];
 int panel_client_command(PanelClient *client, int argc, const char *const *argv, char *error, size_t size)
 {
     (void)client; (void)error; (void)size;
-    assert(argc >= 2 && argc <= 8);
+    assert(argc >= 1 && argc <= 8);
     ++settings;
-    snprintf(setting_key, sizeof setting_key, "%s %s", argv[0], argv[1]);
+    snprintf(setting_key, sizeof setting_key, "%s %s", argv[0], argc>1?argv[1]:"");
     snprintf(setting_value, sizeof setting_value, "%.31s", argc >= 3 ? argv[argc-1] : "");
     if (setting_fail) return -1;
     ++snap.command_queued;

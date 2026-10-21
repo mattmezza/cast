@@ -571,6 +571,7 @@ static void copy_config(AppLive *out, const PanelSnapshot *snapshot, const Daemo
     snprintf(out->layout, sizeof out->layout, "%.*s", (int)sizeof config->layout, config->layout);
     snprintf(out->fit, sizeof out->fit, "%.*s", (int)sizeof config->fit, config->fit);
     snprintf(out->anchor, sizeof out->anchor, "%.*s", (int)sizeof config->anchor, config->anchor);
+    out->group_paused = state->group_paused;
     out->virtual_enabled = config->virtual_enabled;
     out->virtual_paused = state->virtual_paused;
     out->virtual_frozen = state->virtual_frozen;

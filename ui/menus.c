@@ -39,9 +39,9 @@ static const MenuDef composition_menu[] = {
     {"Stage", "", "layout-4", true}, {0}, {"Save as preset…", "", "save-preset", false},
     {"Presets…", "", "presets", true}};
 static const MenuDef output_menu[] = {
-    {"Virtual camera on/off", "", "camera", false}, {"Recording on/off", "R", "record", true},
+    {"Virtual camera on/off", "", "camera", true}, {"Recording on/off", "R", "record", true},
     {"Cut at playhead", "C", "cut", true}, {"Streaming on/off", "", "stream", false}, {0},
-    {"Pause all", "", "pause", false}};
+    {"Pause all", "", "pause", true}};
 static const MenuDef help_menu[] = {
     {"Keyboard shortcuts", "?", "keys", true}, {"Documentation", "", "docs", true}, {0},
     {"About cast", "", "about", true}};
@@ -86,6 +86,11 @@ static void dispatch(cui_context *ui, AppState *app, const MenuDef *def, cui_id 
             app->live.recording || app->live.record_countdown_active ? "stop" : "start");
     else if (!strcmp(def->action, "cut"))
         app_request_edit(app, APP_EDIT_RECORD_ACTION, "cut");
+    else if(!strcmp(def->action,"camera")) {
+        const char *args[]={"virtual",app->live.virtual_enabled?"stop":"start"};app_request_command(app,2,args);
+    } else if(!strcmp(def->action,"pause")) {
+        const char *args[]={"pause"};app_request_command(app,1,args);
+    }
     else if (!strcmp(def->action, "quit")) app->quit_requested = true;
     else {
         app->settings_category = !strcmp(def->action, "presets") ? 5 : 9;
@@ -123,6 +128,7 @@ void app_menu_bar(cui_context *ui, AppState *app, const cui_theme *t, float widt
                 if(i==6)disabled=disabled || !app->live.project.clip_count || app->live.project.recording || app->live.project.exporting || app->live.project.missing_count;
             }
             if(m==1 && i<2)disabled=!app->live.connected || app->live.pending || app->live.project.busy || app->live.project.recording;
+            if(m==4 && (i==0 || i==5))disabled=!app->live.connected || app->live.pending || app->live.snapshot_busy || app->extension_requested;
             if (m == 4 && (i == 1 || i == 2)) {
                 disabled = !app->live.enabled || !app->live.connected || app->live.pending ||
                     app->live.snapshot_busy || app->edit_requested || app->live.record_finalizing ||

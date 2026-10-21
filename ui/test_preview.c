@@ -62,10 +62,10 @@ static void frame(Preview *p) {
     (void)cui_frame_events(p->ui, &count);
     for (size_t i = 0; i < count; ++i) {
         cui_id accepted = cui_event_accepted_activation(p->ui, i);
-        if (p->app.workspace != APP_RECORD || !p->app.live.enabled ||
+        if (!p->app.live.enabled ||
             !p->app.live.connected || composition_blocked || p->app.live.record_finalizing)
             assert(accepted != id(p, "output-start"));
-        const char *disabled_output[] = {"menu-output-item-0", "menu-output-item-3", "menu-output-item-5"};
+        const char *disabled_output[] = {"menu-output-item-3"};
         for (size_t j = 0; j < sizeof disabled_output / sizeof disabled_output[0]; ++j)
             assert(accepted != id(p, disabled_output[j]));
         if (!p->app.live.enabled || !p->app.live.connected || composition_blocked || p->app.live.record_finalizing) {
@@ -883,6 +883,22 @@ static void recording_edits(void) {
     p.app.edit_requested=false;p.app.live.recording=true;settle(&p);click(&p,"record-container");
     assert(!p.app.edit_requested&&!p.app.recording_selects[0].overlay.open);cui_destroy(p.ui);
 }
+static void virtual_edits(void) {
+    Preview p=create(1360,1000);p.app.live.enabled=true;p.app.live.connected=true;p.app.live.generation=3;
+    settle(&p);click(&p,"output-start");
+    assert(p.app.extension_requested && !strcmp(p.app.extension_args[0],"virtual") && !strcmp(p.app.extension_args[1],"start"));
+    assert(!p.app.live.virtual_enabled);
+    p.app.extension_requested=false;p.app.live.virtual_enabled=true;p.app.live.virtual_paused=true;settle(&p);
+    click(&p,"virtual-reveal");assert(p.app.extension_requested && !strcmp(p.app.extension_args[1],"resume") && p.app.live.virtual_paused);
+    p.app.extension_requested=false;p.app.live.virtual_paused=false;settle(&p);
+    click(&p,"virtual-freeze");assert(p.app.extension_requested && !strcmp(p.app.extension_args[1],"freeze"));
+    p.app.extension_requested=false;p.app.live.virtual_frozen=true;settle(&p);
+    click(&p,"virtual-freeze");assert(p.app.extension_requested && !strcmp(p.app.extension_args[1],"unfreeze"));
+    p.app.extension_requested=false;settle(&p);click(&p,"pause-all");
+    assert(p.app.extension_requested && p.app.extension_argc==1 && !strcmp(p.app.extension_args[0],"pause"));
+    p.app.extension_requested=false;p.app.live.pending=true;settle(&p);click(&p,"virtual-reveal");assert(!p.app.extension_requested);
+    cui_destroy(p.ui);
+}
 static void project_discard(void) {
     Preview p=create(1360,820);
     p.app.live.enabled=true;p.app.live.connected=true;p.app.live.generation=7;
@@ -932,6 +948,7 @@ int main(int argc,char **argv) {
         assert(cui_debug_layout_export(p.ui,CUI_DEBUG_LAYOUT_JSON,dump,required,&required));
         puts(dump);free(dump);cui_destroy(p.ui);return 0;
     }
+    virtual_edits();
     project_discard();
     prompter_entitlement();
     audio_pickers();

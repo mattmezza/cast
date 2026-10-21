@@ -41,6 +41,7 @@ typedef struct {
     AppSetting settings[APP_SETTING_MAX];
     cui_bitmap frame;
     int target, width, height, fps;
+    bool group_paused;
     bool virtual_enabled, virtual_paused, virtual_frozen, virtual_blurred;
     bool recording, record_paused, record_frozen, record_blurred;
     bool stream_active, stream_paused, stream_frozen, stream_blurred;
