@@ -4,12 +4,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 /* Real codec/FFmpeg probe/worker with isolated application handoff stubs. */
 static uint64_t duration;
 static bool finalizing;
 static unsigned applied;
+#ifdef CAST_TEST
+void project_session_test_autosave_due(CastProjectSession *);
+#endif
 uint64_t media_record_duration(Media *m)
 {
     (void)m;
@@ -174,6 +178,36 @@ int main(void)
     const char *redo[] = {"timeline", "redo"};
     assert(!command(a, 2, redo));
     assert(snapshot(a).clip_count == 1);
+#ifdef CAST_TEST
+    /* Automatic recovery writes a sibling and never marks the main project saved. */
+    char recovery[PATH_MAX];
+    snprintf(recovery, sizeof recovery, "%s/test.cast.autosave", folder);
+    project_session_test_autosave_due(a->project);
+    project_session_tick(a);
+    assert(snapshot(a).busy);
+    wait_done(a);
+    s = snapshot(a);
+    assert(s.dirty && !strcmp(s.path, project));
+    struct stat recovery_st;
+    assert(!stat(recovery, &recovery_st));
+    assert((recovery_st.st_mode & 0777) == 0600);
+    assert(!unlink(recovery));
+    assert(!symlink(project, recovery));
+    project_session_test_autosave_due(a->project);
+    project_session_tick(a);
+    wait_done(a);
+    assert(*snapshot(a).error && snapshot(a).dirty && !strcmp(snapshot(a).path, project));
+    assert(!lstat(recovery, &recovery_st) && S_ISLNK(recovery_st.st_mode));
+    assert(!unlink(recovery));
+    project_session_test_autosave_due(a->project);
+    project_session_tick(a);
+    wait_done(a);
+    const char *recover[] = {"project", "recover", recovery};
+    assert(!command(a, 3, recover));
+    wait_done(a);
+    assert(!snapshot(a).dirty && !strcmp(snapshot(a).path, recovery));
+    assert(!unlink(recovery));
+#endif
     project_session_close(a->project);
     free(a);
     assert(!unlink(project));

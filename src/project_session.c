@@ -20,6 +20,7 @@
 typedef enum {
     JOB_NONE,
     JOB_SAVE,
+    JOB_AUTOSAVE,
     JOB_OPEN,
     JOB_IMPORT
 } JobKind;
@@ -44,7 +45,7 @@ struct CastProjectSession {
     CastTimelineHistory *history;
     Config observed;
     bool observed_valid;
-    uint64_t revision, playhead_ns, capture_clip, capture_start;
+    uint64_t revision, playhead_ns, capture_clip, capture_start, next_autosave_ns;
     char path[PATH_MAX], cwd[PATH_MAX], status[256], error[256];
 };
 static int fail(char *error, size_t size, const char *format, ...)
@@ -239,7 +240,7 @@ static void *worker(void *opaque)
         s->pending = false;
         ProjectJob *job = &s->job;
         pthread_mutex_unlock(&s->mutex);
-        if (job->kind == JOB_SAVE) {
+        if (job->kind == JOB_SAVE || job->kind == JOB_AUTOSAVE) {
             job->result = cast_project_save(job->path, &job->config, &job->timeline, job->error,
                                             sizeof job->error);
         } else if (job->kind == JOB_OPEN) {
@@ -271,6 +272,7 @@ CastProjectSession *project_session_open(void)
         free(s);
         return NULL;
     }
+    s->next_autosave_ns = cast_now_ns() + UINT64_C(30000000000);
     timeline_init(&s->timeline);
     s->history = timeline_history_open(8);
     if (!s->history) {
@@ -328,7 +330,8 @@ static int queue(App *a, JobKind kind, const char *path, unsigned track, char *o
     s->job.kind = kind;
     strcpy(s->job.path, path);
     s->job.config = s->job.original_config = a->config;
-    if (kind == JOB_SAVE && *s->job.config.logo_path && s->job.config.logo_path[0] != '/') {
+    if ((kind == JOB_SAVE || kind == JOB_AUTOSAVE) && *s->job.config.logo_path &&
+        s->job.config.logo_path[0] != '/') {
         char resolved[PATH_MAX];
         int count = snprintf(resolved, sizeof resolved, "%s/%s", s->cwd, s->job.config.logo_path);
         if (count < 0 || (size_t)count >= sizeof resolved) {
@@ -347,9 +350,10 @@ static int queue(App *a, JobKind kind, const char *path, unsigned track, char *o
     pthread_mutex_unlock(&s->mutex);
     s->error[0] = 0;
     snprintf(s->status, sizeof s->status, "%s queued",
-             kind == JOB_SAVE   ? "Project save"
-             : kind == JOB_OPEN ? "Project open"
-                                : "Media import");
+             kind == JOB_SAVE       ? "Project save"
+             : kind == JOB_AUTOSAVE ? "Recovery autosave"
+             : kind == JOB_OPEN     ? "Project open"
+                                    : "Media import");
     snprintf(out, size, "OK %s", s->status);
     return 0;
 }
@@ -372,7 +376,11 @@ static void complete(App *a)
     ProjectJob *job = &s->job;
     if (job->result) {
         snprintf(s->error, sizeof s->error, "%.255s", job->error);
+    } else if (job->kind == JOB_AUTOSAVE) {
+        snprintf(s->status, sizeof s->status,
+                 "Recovery snapshot saved; main project remains unsaved");
     } else if (job->kind == JOB_SAVE) {
+        s->next_autosave_ns = cast_now_ns() + UINT64_C(30000000000);
         strcpy(s->path, job->path);
         s->open = true;
         if (s->revision == job->source_revision &&
@@ -547,6 +555,17 @@ void project_session_tick(App *a)
     }
     complete(a);
     recording(a);
+    uint64_t now = cast_now_ns();
+    if (!s->busy && s->dirty && *s->path && now >= s->next_autosave_ns) {
+        s->next_autosave_ns = now + UINT64_C(30000000000);
+        char recovery[PATH_MAX], reply[CAST_ERR];
+        int count = snprintf(recovery, sizeof recovery, "%s.autosave", s->path);
+        if (count >= 0 && (size_t)count < sizeof recovery) {
+            (void)queue(a, JOB_AUTOSAVE, recovery, 0, reply, sizeof reply);
+        } else {
+            snprintf(s->error, sizeof s->error, "Project path too long for recovery sibling");
+        }
+    }
 }
 void project_session_snapshot(CastProjectSession *s, CastProjectSnapshot *out)
 {
@@ -649,7 +668,7 @@ int project_session_command(App *a, int argc, char **argv, char *out, size_t siz
     if (strcmp(argv[0], "timeline")) {
         return fail(out, size, "unknown project command");
     }
-    if (s->busy && s->job.kind != JOB_SAVE) {
+    if (s->busy && s->job.kind != JOB_SAVE && s->job.kind != JOB_AUTOSAVE) {
         return fail(out, size, "timeline changes wait for project open/import completion");
     }
     if (!strcmp(argv[1], "import") && (argc == 3 || argc == 4)) {
@@ -739,3 +758,13 @@ finished:
     free(candidate);
     return result;
 }
+
+#ifdef CAST_TEST
+void project_session_test_autosave_due(CastProjectSession *);
+void project_session_test_autosave_due(CastProjectSession *s)
+{
+    if (s) {
+        s->next_autosave_ns = 0;
+    }
+}
+#endif

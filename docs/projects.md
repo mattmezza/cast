@@ -69,9 +69,11 @@ streaming to be idle. Completion checks that outputs, configuration and project
 revision did not change during loading, then uses `app_apply_candidate`; stale
 results are discarded. Saving snapshots document/configuration for the worker.
 Edits can continue during saving, and a completion only clears dirty state when
-that exact revision/configuration remains current. This module does not currently
-schedule periodic autosaves; an explicit recovery file uses the same validated
-project container.
+that exact revision/configuration remains current. A saved project with unsaved changes receives a sibling `.autosave` snapshot
+every thirty seconds through the same bounded worker. This never changes the main
+project path or clears dirty state. Unnamed projects need an initial Save As to
+establish a recovery location. Symlink/unowned/nonregular recovery destinations
+are refused by the same atomic writer. Recovery remains an explicit command.
 
 `timeline import PATH [TRACK]` probes an already-opened local regular file through
 custom AVIO, with a ten-second interrupt deadline, bounded probing/analysis, file
