@@ -16,7 +16,7 @@ Import video or audio through the timeline footer. Select a clip to split at the
 playhead, remove or mute it. The left panel exposes start, source in and duration
 in seconds, track and audio gain. Conflicting spans on one track and edits to an
 active recording are rejected by the controller. Undo/redo apply to document
-edits when recording is idle. Timeline ruler buttons seek an idle montage review;
+edits when recording is idle. Play/Pause controls provide silent video review. Timeline ruler buttons seek an idle montage review;
 Live returns to the current composition. Review decoding runs on an independent
 worker and never activates an output or opens an audio playback device.
 
@@ -24,7 +24,7 @@ Export writes a new Matroska montage using the existing native FFmpeg libraries;
 it reports progress and supports cancellation. Existing destinations are never
 overwritten. Preview and export include imported video audio and audio-only
 clips with their gain/mute settings. The timeline currently has coarse ruler
-seeking and numeric editing; continuous transport, drag editing, waveform/thumbnail
+seeking and numeric editing; audio playback, drag editing, waveform/thumbnail
 caches and live clip insertion/mixing during capture remain separate work.
 
 Streaming destination and encoding settings now use the existing backend,

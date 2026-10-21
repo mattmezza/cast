@@ -171,6 +171,8 @@ void app_timeline_dock(cui_context *ui, const cui_theme *t, const CastProjectSna
     cui_begin_box(ui, cui_id_from(ui, "timeline-transport"), (cui_box){.width = -1,
         .height = 43, .row = true, .padding = 7, .gap = 8, .align_y = CUI_ALIGN_CENTER,
         .border = tokens.hair, .custom_border_edges = true, .border_edges = {.bottom = 1}});
+    if(button(ui,t,"timeline-play",p->playing?"Pause":"Play","film",blocked || p->recording || !p->clip_count || p->missing_count))
+        send(submit,user,"timeline",p->playing?"pause":"play",NULL,NULL);
     if (button(ui, t, "timeline-record", o.recording ? "Stop" : o.countdown ? "Cancel" : "Record",
                "cast-rec", blocked || o.finalizing))
         send(submit, user, "record", o.countdown ? "cancel" : o.recording ? "stop" : "start", NULL, NULL);
