@@ -98,7 +98,7 @@ int audio_monitor_session_start(CastMonitorSession *s,char *error,size_t size)
     if(audio_monitor_start(s->monitor,error,size))return -1;
     pthread_mutex_lock(&s->lock);s->stop=false;s->observed_epoch=0;s->error[0]=0;barrier(s);pthread_mutex_unlock(&s->lock);
     if(pthread_create(&s->thread,NULL,produce,s)){audio_monitor_stop(s->monitor);if(error&&size)snprintf(error,size,"Cannot start monitoring producer");return -1;}
-    s->running=true;return 0;
+    pthread_mutex_lock(&s->lock);s->running=true;pthread_mutex_unlock(&s->lock);return 0;
 }
 void audio_monitor_session_update(CastMonitorSession *s,CastMonitorSessionState state)
 {
@@ -111,7 +111,7 @@ void audio_monitor_session_stop(CastMonitorSession *s)
 {
     if(!s)return;
     pthread_mutex_lock(&s->lock);s->stop=true;barrier(s);pthread_cond_signal(&s->wake);pthread_mutex_unlock(&s->lock);
-    if(s->running){pthread_join(s->thread,NULL);s->running=false;}
+    if(s->running){pthread_join(s->thread,NULL);pthread_mutex_lock(&s->lock);s->running=false;pthread_mutex_unlock(&s->lock);}
     audio_monitor_stop(s->monitor);
 }
 void audio_monitor_session_status(CastMonitorSession *s,CastMonitorSessionStatus *out)
