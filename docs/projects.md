@@ -148,9 +148,12 @@ while the previous worker finishes cancellation. `check-timeline-preview` tests
 real generated video, generation coalescing, color/position, capture-lock refusal,
 missing media and shutdown. Session tests cover review/live and privacy barriers.
 
-`timeline play` starts silent video review from the document playhead (or restarts
+`timeline play` starts video review from the document playhead (or restarts
 at zero after the end); `timeline pause` retains its current frame and playhead.
-There is no audio playback or monitoring device in this transport. The controller
+Explicit play also requests bounded timeline audio playback on the default output;
+seek alone does not open an output. `timeline play silent` explicitly retains
+video-only review and immediately retires any previously queued audio. Audio failure leaves video review active and
+is reported separately. No live microphone monitoring is implied. The controller
 uses monotonic elapsed time and requests at most the configured frame rate capped
 at 30 fps. It waits for each decoder generation to complete before requesting the
 latest clock position, skipping late frames instead of creating a decode backlog
@@ -177,9 +180,33 @@ rejection, stale-generation rejection, successful relink and undo/redo.
 private socket/configuration/HOME with synthetic 640×360 video at 10 fps, camera
 and virtual output disabled, and microphone/desktop/virtual audio disabled. It
 records a short flattened take, saves/reopens a project, imports that actual movie,
-exercises seek/play/pause/live and invalid relink, then exports and fully decodes
+exercises seek/silent-play/pause/live and invalid relink, then exports and fully decodes
 the exported video. It also checks no-overwrite behavior. FFmpeg/FFprobe programs
 are test inspection dependencies only; the application export uses linked
 libraries. The test terminates only its owned daemon and removes all temporary
 media. It verifies CLI/socket routing and export progress, without opening a UI,
 requesting device permissions, or claiming UI snapshot/visual integration.
+
+Timeline audio review decodes the immutable project mix on a dedicated worker via
+`timeline_renderer_audio`, including embedded video audio and audio-only clips,
+trim offsets, clip gain and mute. It reuses the bounded 48 kHz stereo monitor sink
+with 10 ms chunks, approximately 20 ms scheduling lead and a 100 ms maximum queue.
+Default-output opening, decoding, health checks and route closing stay off the
+controller thread. Late decode skips to current transport time rather than
+replaying an accumulated backlog. A failed route is not retried automatically.
+
+Pause, seek, live, global privacy, edits, replacement and cancellation retire the
+PCM epoch immediately. Global privacy does not resume audio when released;
+another explicit play is required. Native buffers already handed to hardware
+cannot be retracted, and output latency depends on the host. Service retirement
+and route close happen asynchronously; session shutdown joins owned workers.
+Snapshot fields `playback_audio_requested`, `playback_audio_running` and
+`playback_audio_error` distinguish a request from an acknowledged output route.
+No output picker, headphone detection, live clip insertion into recording, or
+live microphone/desktop mixing is implemented by timeline review.
+
+`check-timeline-audio` uses actual generated WAV media with a fake output backend,
+including gain, source seek, rapid play/pause/seek, immediate epoch silence, pause
+during slow startup, failure/no-retry and asynchronous cancellation. It opens no
+real output device. Linux and macOS native playback, route changes, audible A/V
+sync and device permissions still require hardware acceptance.

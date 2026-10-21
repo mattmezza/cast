@@ -349,3 +349,6 @@ for cast_completion_command in cast cast-pro
     complete -c $cast_completion_command -n '__cast_setting_value transcription.model_path notes.file' -F
     complete -c $cast_completion_command -n '__cast_setting_value zoom.avoid_camera zoom.motion_blur cursor.smooth transcription.enabled transcription.show_partial transcription.auto_finalize subtitles.virtual subtitles.record subtitles.stream subtitles.background notes.always_on_top notes.allow_backward_reacquire notes.exclude_from_capture notes.match_code_blocks' -a 'true false'
 end
+
+complete -c cast -n "__cast_at timeline play" -a silent
+complete -c cast-pro -n "__cast_at timeline play" -a silent

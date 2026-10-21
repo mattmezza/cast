@@ -1,6 +1,7 @@
 #include "project_session.h"
 #include "app_internal.h"
 #include "project.h"
+#include "timeline_audio.h"
 #include "timeline_preview.h"
 #include "timeline_render.h"
 #include <errno.h>
@@ -40,6 +41,9 @@ typedef struct {
 } ProjectJob;
 struct CastProjectSession {
     CastTimelinePreview *preview, *retired_preview;
+    CastTimelineAudio *audio, *retired_audio;
+    bool audio_requested, audio_running;
+    char audio_error[256];
     Frame review_frame;
     bool reviewing, preview_busy, playing, transport_pending;
     uint64_t play_started_ns, play_started_position, next_video_ns;
@@ -82,11 +86,26 @@ void project_session_test_clock(CastProjectSession *s, uint64_t now)
     s->test_clock_set = true;
 }
 #endif
+void project_session_silence(CastProjectSession *s)
+{
+    if (!s) {
+        return;
+    }
+    timeline_audio_pause(s->audio);
+    s->audio_requested = s->audio_running = false;
+}
 static void review_clear(CastProjectSession *s)
 {
     s->reviewing = s->preview_busy = s->playing = s->transport_pending = false;
     s->play_started_ns = s->play_started_position = s->next_video_ns = 0;
     s->preview_error[0] = 0;
+    s->audio_requested = s->audio_running = false;
+    s->audio_error[0] = 0;
+    if (s->audio) {
+        timeline_audio_cancel(s->audio);
+        s->retired_audio = s->audio;
+        s->audio = NULL;
+    }
     frame_free(&s->review_frame);
     if (s->preview) {
         timeline_preview_cancel(s->preview);
@@ -359,6 +378,7 @@ void project_session_close(CastProjectSession *s)
     }
     review_clear(s);
     timeline_preview_close(s->retired_preview);
+    timeline_audio_close(s->retired_audio);
     timeline_export_close(s->export);
     pthread_mutex_lock(&s->mutex);
     s->stop = true;
@@ -651,6 +671,20 @@ void project_session_tick(App *a)
         timeline_preview_close(s->retired_preview);
         s->retired_preview = NULL;
     }
+    if (s->retired_audio && timeline_audio_finished(s->retired_audio)) {
+        timeline_audio_close(s->retired_audio);
+        s->retired_audio = NULL;
+    }
+    if (a->state.group_paused && s->audio_requested) {
+        project_session_silence(s);
+    }
+    if (s->audio && s->audio_requested) {
+        CastTimelineAudioStatus audio;
+        timeline_audio_status(s->audio, &audio);
+        s->audio_running = audio.running;
+        snprintf(s->audio_error, sizeof s->audio_error, "%s", audio.error);
+        s->audio_requested = audio.requested;
+    }
     if (!s->observed_valid) {
         s->observed = a->config;
         s->observed_valid = true;
@@ -674,6 +708,7 @@ void project_session_tick(App *a)
             s->transport_pending = true;
             if (s->playhead_ns == duration) {
                 s->playing = false;
+                project_session_silence(s);
             }
         }
         CastTimelinePreviewSnapshot view;
@@ -735,6 +770,9 @@ void project_session_snapshot(CastProjectSession *s, CastProjectSnapshot *out)
     }
     out->export = s->export_snapshot;
     out->exporting = s->export && s->export_snapshot.state < CAST_TIMELINE_EXPORT_COMPLETE;
+    out->playback_audio_requested = s->audio_requested;
+    out->playback_audio_running = s->audio_running;
+    snprintf(out->playback_audio_error, sizeof out->playback_audio_error, "%s", s->audio_error);
     out->playing = s->playing;
     out->reviewing = s->reviewing;
     out->preview_busy = s->preview_busy;
@@ -909,10 +947,15 @@ int project_session_command(App *a, int argc, char **argv, char *out, size_t siz
     }
     if (!strcmp(argv[1], "pause") && argc == 2) {
         s->playing = false;
-        snprintf(out, size, "OK silent review paused");
+        project_session_silence(s);
+        snprintf(out, size, "OK review paused");
         return 0;
     }
-    if (!strcmp(argv[1], "play") && argc == 2) {
+    if (!strcmp(argv[1], "play") && (argc == 2 || argc == 3)) {
+        bool silent = argc == 3;
+        if (silent && strcmp(argv[2], "silent")) {
+            return fail(out, size, "timeline play [silent]");
+        }
         if (!idle(a) || s->capture_clip) {
             return fail(out, size, "timeline playback requires idle outputs");
         }
@@ -934,7 +977,32 @@ int project_session_command(App *a, int argc, char **argv, char *out, size_t siz
         s->play_started_ns = transport_now(s);
         s->play_started_position = position;
         s->next_video_ns = s->play_started_ns;
-        snprintf(out, size, "OK silent video review playing");
+        if (silent) {
+            project_session_silence(s);
+            s->audio_error[0] = 0;
+        } else if (!a->state.group_paused) {
+            if (!s->audio && s->retired_audio && timeline_audio_finished(s->retired_audio)) {
+                timeline_audio_close(s->retired_audio);
+                s->retired_audio = NULL;
+            }
+            if (!s->audio && !s->retired_audio) {
+                s->audio = timeline_audio_native_open(&s->timeline, &a->config);
+            }
+            s->audio_error[0] = 0;
+            if (s->audio) {
+                timeline_audio_play(s->audio, position, s->play_started_ns);
+                s->audio_requested = true;
+            } else {
+                snprintf(s->audio_error, sizeof s->audio_error,
+                         "Playback audio unavailable; video review continues");
+            }
+        } else {
+            project_session_silence(s);
+            snprintf(s->audio_error, sizeof s->audio_error,
+                     "Playback audio blocked by global privacy; use play after resuming");
+        }
+        snprintf(out, size, "OK video review playing%s",
+                 silent ? " silently" : "; audio output requested");
         return 0;
     }
     if (!strcmp(argv[1], "live") && argc == 2) {
@@ -986,6 +1054,7 @@ int project_session_command(App *a, int argc, char **argv, char *out, size_t siz
         s->preview_busy = true;
         s->preview_error[0] = 0;
         s->playing = s->transport_pending = false;
+        project_session_silence(s);
         s->playhead_ns = position;
         snprintf(out, size, "OK playhead=%" PRIu64, position);
         return 0;

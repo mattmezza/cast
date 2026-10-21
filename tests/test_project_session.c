@@ -1,5 +1,6 @@
 #include "app_internal.h"
 #include "project_session.h"
+#include "timeline_audio.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,6 +9,13 @@
 #include <unistd.h>
 
 /* Real codec/FFmpeg probe/worker with isolated application handoff stubs. */
+/* Session integration never opens a native output in unit tests. */
+CastTimelineAudio *timeline_audio_native_open(const CastTimeline *timeline, const Config *config)
+{
+    (void)timeline;
+    (void)config;
+    return NULL;
+}
 static uint64_t duration;
 static bool finalizing;
 static unsigned applied;
@@ -174,6 +182,12 @@ int main(void)
     project_session_test_clock(a->project, UINT64_C(1000000000));
     assert(!command(a, 2, play));
     assert(snapshot(a).playing);
+    assert(!snapshot(a).playback_audio_running && *snapshot(a).playback_audio_error);
+    const char *silent[] = {"timeline", "play", "silent"},
+               *bad_mode[] = {"timeline", "play", "loud"};
+    assert(command(a, 3, bad_mode));
+    assert(!command(a, 3, silent));
+    assert(!snapshot(a).playback_audio_requested && !*snapshot(a).playback_audio_error);
     project_session_test_clock(a->project, UINT64_C(1250000000));
     project_session_tick(a);
     assert(snapshot(a).playhead_ns == UINT64_C(350000000));

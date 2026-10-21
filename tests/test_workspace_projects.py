@@ -105,7 +105,7 @@ def main():
                         return False
                     return True
                 wait(seek, "timeline seek failed")
-                command("timeline", "play")
+                command("timeline", "play", "silent")
                 time.sleep(.2)
                 command("timeline", "pause")
                 command("timeline", "live")

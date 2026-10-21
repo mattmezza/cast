@@ -90,6 +90,12 @@ static const char help[] =
     "  record start [PATH]; record stop|pause|resume|toggle|freeze|unfreeze|cut|cancel\n"
     "  record blur on|off|toggle; cut resume reuses the file with the configured countdown\n"
     "  monitor on|off|status (microphone only; default audio output)\n"
+    "  project new|open PATH|save [PATH]|recover PATH|status\n"
+    "  timeline import PATH [TRACK]; timeline seek NS; timeline play|pause|live\n"
+    "  timeline move ID TRACK,START_NS; timeline trim ID IN_NS,DURATION_NS\n"
+    "  timeline split ID POSITION_NS; timeline remove ID; timeline gain ID GAIN,MUTED\n"
+    "  timeline undo|redo; timeline relink MEDIA_ID PATH\n"
+    "  timeline export PATH|status|cancel (new destination; never overwrites)\n"
     "  audio list; audio mic|desktop|virtual on|off|toggle\n"
     "  audio mic|desktop source NAME; audio mic|desktop gain PERCENT%\n"
     "  preset NAME|next|prev; preview on|off|toggle; preview target "
@@ -497,7 +503,8 @@ int app_shutdown_privacy(App *a, char *e, size_t n)
     }
     return result;
 }
-static void monitor_sync(App *a) {
+static void audio_sync(App *a) {
+    if (a->state.group_paused) project_session_silence(a->project);
     if(!a->monitor)return;
     AudioLevels levels;media_audio_levels(a->media,&levels);
     audio_monitor_controller_update(a->monitor,(CastMonitorSessionState){
@@ -516,7 +523,7 @@ static int monitor_command(App *a,int argc,char **argv,char *out,size_t size) {
     if(a->state.group_paused)return app_error(out,size,"resume global privacy before monitoring");
     if(!a->monitor)a->monitor=audio_monitor_controller_create(a->media);
     if(!a->monitor)return app_error(out,size,"cannot allocate microphone monitor");
-    monitor_sync(a);audio_monitor_controller_request_start(a->monitor);
+    audio_sync(a);audio_monitor_controller_request_start(a->monitor);
     snprintf(out,size,"microphone monitoring start queued on default audio output");return 0;
 }
 static void tick(App *a)
@@ -551,7 +558,7 @@ static void tick(App *a)
         }
     }
     a->record_finalizing = finalizing;
-    monitor_sync(a);
+    audio_sync(a);
     project_session_tick(a);
     app_runtime_sync(a);
     a->state.dropped_frames = dropped + a->loop_drops;
@@ -852,7 +859,7 @@ static void drain_peers(App *a, Peer *peers, int *count)
                 if (rc) {
                     remember_error(a, out);
                 }
-                monitor_sync(a);
+                audio_sync(a);
                 panel_transport_barrier(a->panel, a, false);
             }
         }

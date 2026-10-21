@@ -14,6 +14,8 @@ typedef struct {
     bool open, busy, dirty, recording;
     bool exporting, reviewing, preview_busy, playing;
     char preview_error[1024];
+    bool playback_audio_requested, playback_audio_running;
+    char playback_audio_error[256];
     CastTimelineExportSnapshot export;
     uint64_t revision, duration_ns, playhead_ns;
     unsigned clip_count, media_count, missing_count;
@@ -23,6 +25,8 @@ typedef struct {
 } CastProjectSnapshot;
 CastProjectSession *project_session_open(void);
 void project_session_close(CastProjectSession *);
+/* Bounded immediate PCM epoch barrier; resuming requires explicit play. */
+void project_session_silence(CastProjectSession *);
 /* Main-thread borrowed view; invalidated by tick/command/close. */
 struct CastFrame;
 const struct CastFrame *project_session_review_frame(CastProjectSession *);

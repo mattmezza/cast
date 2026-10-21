@@ -131,7 +131,7 @@ _cast() {
         project:1) offer='new open save recover status' ;;
         project:2) case $first in open|save|recover) mode=file ;; esac ;;
         timeline:1) offer='import move trim split remove gain undo redo seek play pause live relink export' ;;
-        timeline:2) case $first in import|export) mode=file ;; esac ;;
+        timeline:2) case $first in import|export) mode=file ;; play) offer='silent' ;; esac ;;
         timeline:3) [[ $first == relink ]] && mode=file ;;
         audio:1) offer='list mic desktop virtual' ;;
         audio:2)
