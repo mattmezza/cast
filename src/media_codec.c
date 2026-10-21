@@ -4,6 +4,7 @@
 #include "media_codec.h"
 #include <dlfcn.h>
 #include <libavformat/avformat.h>
+#include <libavutil/cpu.h>
 #include <libavutil/opt.h>
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
@@ -11,6 +12,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* A measured 4K worker budget; never change dimensions, chroma, rate control or
+ * frame skipping to satisfy throughput. HD retains its existing four workers. */
+static int cpu_video_workers(int width, int height)
+{
+    return (int64_t)width * height >= 3840 * 2160 && av_cpu_count() >= 8 ? 8 : 4;
+}
 
 struct MediaVideoConverter {
     struct SwsContext *scale;
@@ -60,7 +68,7 @@ int media_video_converter_prepare(MediaVideoConverter **converter, int source_wi
      * slice workers, rather than changing resolution, chroma or scaler quality.
      * System Community keeps its existing single-threaded conversion path. */
     if ((int64_t)next->width * next->height >= 1280 * 720) {
-        next->threads = 4;
+        next->threads = cpu_video_workers(next->width, next->height);
     }
 #endif
     int result = 0;
@@ -258,8 +266,8 @@ static int encoder_open(const Config *cfg, bool stream, bool header, const char 
         /* OpenH264 requires multiple slices to use encoder threads effectively.
          * Bound CPU parallelism while preserving a headless software baseline. */
         if ((int64_t)v->width * v->height >= 1280 * 720) {
-            v->thread_count = 4;
-            v->slices = 4;
+            v->thread_count = cpu_video_workers(v->width, v->height);
+            v->slices = v->thread_count;
         }
         av_dict_set(&options, "rc_mode", "bitrate", 0);
         /* A target, not a hard cap: OpenH264 can only enforce a bitrate by
@@ -298,7 +306,8 @@ static int encoder_open(const Config *cfg, bool stream, bool header, const char 
     if (!strcmp(name, "libopenh264")) {
         size_t used = strlen(selection->detail);
         snprintf(selection->detail + used, sizeof(selection->detail) - used,
-                 "; OpenH264 bitrate may vary; codec frame skipping disabled");
+                 "; OpenH264 bitrate may vary; codec frame skipping disabled; workers=%d slices=%d",
+                 v->thread_count, v->slices);
     }
     *result = v;
     return 0;

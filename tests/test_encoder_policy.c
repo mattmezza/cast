@@ -4,6 +4,7 @@
 #include "media_codec.h"
 #include <assert.h>
 #include <libavutil/opt.h>
+#include <libavutil/cpu.h>
 #include <libswscale/swscale.h>
 #include <stdio.h>
 #include <string.h>
@@ -79,6 +80,23 @@ static void colorspace(void)
     sws_freeContext(scale);av_frame_free(&in);av_frame_free(&out);
     puts("YUV422P -> RGBA CPU fallback: correct complete output");
 }
+static void worker_budget(void)
+{
+    Config cfg={.width=3840,.height=2160,.fps=30,.record_bitrate_kbps=6000};
+    strcpy(cfg.video_codec,"libopenh264");strcpy(cfg.record_rate_control,"bitrate");
+    char error[CAST_ERR];MediaCodecSelection selection;AVCodecContext *codec=NULL;
+    av_cpu_force_count(4);
+    assert(!media_video_open(&cfg,false,false,&codec,&selection,error,sizeof error));
+    assert(codec->thread_count==4&&codec->slices==4);avcodec_free_context(&codec);
+    av_cpu_force_count(8);
+    assert(!media_video_open(&cfg,false,false,&codec,&selection,error,sizeof error));
+    assert(codec->thread_count==8&&codec->slices==8);avcodec_free_context(&codec);
+    cfg.width=1920;cfg.height=1080;
+    assert(!media_video_open(&cfg,false,false,&codec,&selection,error,sizeof error));
+    assert(codec->thread_count==4&&codec->slices==4);avcodec_free_context(&codec);
+    av_cpu_force_count(0);
+    puts("CPU worker policy: guarded 4K eight workers; HD unchanged");
+}
 int main(void)
 {
     colorspace();
@@ -88,6 +106,7 @@ int main(void)
         return 0;
     }
 #endif
+    worker_budget();
     double easy=encode(false,false),hard=encode(true,false);
     assert(easy<500&&hard>500); /* Best-effort target, never a hard-cap claim. */
     encode(true,true);puts("encoder policy PASS: High profile, bitrate mode, all frames retained");

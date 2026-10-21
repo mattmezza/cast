@@ -181,3 +181,35 @@ an official release. The sanitizer run used address/undefined sanitizers with
 `ASAN_OPTIONS=detect_leaks=0` because the existing full media harness loads PipeWire
 modules with external exit allocations; a complete dependency leak check is not
 claimed.
+
+### Guarded 4K CPU parallelism
+
+On the same optimized NASM-enabled SDK and 14-logical-CPU Linux host, the 4K
+software path now uses eight converter workers and eight OpenH264 threads/slices
+when `av_cpu_count()` reports at least eight CPUs. HD retains four workers; a
+smaller CPU count retains the prior four-worker 4K policy. Resolution, YUV420P,
+High profile, the 6000 kbit/s target and disabled codec frame skipping are
+unchanged. Encoder diagnostics report the selected workers and slices.
+
+The isolated 60-second moving-gradient 3840×2160@30 trial improved from
+1370/1800 encoded frames with 430 queue drops (23.9%) to 1593/1800 with 207 queue
+drops (11.5%). Conversion averaged 6.217 ms and encode/mux 30.325 ms per encoded
+frame, versus 11.48 ms and 31.22 ms with four workers. Total child CPU was 400.1%
+and peak RSS 499.8 MiB. Full decode confirmed 1593 frames at the original 4K
+resolution, strictly increasing packet timestamps and a maximum 76 ms video PTS
+gap. **This still fails 4K30 sustained acceptance.** These measurements cover
+synthetic low-motion pixels; they do not establish capture/composition throughput,
+complex-motion performance, low CPU use or a hardware encoder result. More worker
+threads consume additional CPU resources and do not make throughput independent
+of the host's available CPU budget.
+
+Fixed-threshold 4K detail acceptance passed all 90 submitted frames without queue
+drops: minimum Y/U/V PSNR 35.927/42.324/42.646 dB, stripe contrast 0.9516, text luma
+MAE 3.8248 and measured video bitrate 2.414 Mbit/s. The deliberate 720p-downscale
+negative control failed as intended. The bitrate remains a content-dependent
+target. Policy tests force four/eight reported CPUs to check the guard and HD
+behavior, and verify High profile, disabled frame skipping and complete decoded
+frame counts for the existing record/stream encoder fixtures. Logs are under
+`build/community-roadmap-simd/eight-workers-*`; the 4K sustained movie SHA256 was
+`420b0d74e9876528cb090a36a70957b642684c5e73e80e549583607c129aa170` before cleanup.
+The existing SDK default was not replaced by this comparison.
