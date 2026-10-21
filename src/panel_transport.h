@@ -10,7 +10,7 @@
 #include <sys/types.h>
 
 /* Private protocol: both ends must come from the same build and struct layout. */
-#define PANEL_PROTOCOL_VERSION 9u
+#define PANEL_PROTOCOL_VERSION 10u
 #define PANEL_PREVIEW_COUNT 4
 /* Private composition is independent of the three outgoing privacy-gated lanes. */
 #define PANEL_PREVIEW_COMPOSITION 3

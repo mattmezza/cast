@@ -10,6 +10,18 @@ typedef struct {
     CastTimelineKind kind;
     bool missing;
 } CastProjectMediaView;
+#define CAST_PROJECT_ASSET_MAX 4
+#define CAST_PROJECT_ASSET_WIDTH 80
+#define CAST_PROJECT_ASSET_HEIGHT 45
+#define CAST_PROJECT_ASSET_BINS 256
+typedef struct {
+    uint64_t clip_id, media_id, revision, generation, source_start_ns, span_ns;
+    bool pending, thumbnail_ready, waveform_ready, missing;
+    unsigned bins;
+    unsigned char rgba[CAST_PROJECT_ASSET_WIDTH * CAST_PROJECT_ASSET_HEIGHT * 4];
+    float peak[CAST_PROJECT_ASSET_BINS];
+    char thumbnail_error[256], waveform_error[256];
+} CastProjectAssetView;
 typedef struct {
     bool open, busy, dirty, recording;
     bool exporting, reviewing, preview_busy, playing;
@@ -22,6 +34,8 @@ typedef struct {
     char path[4096], name[128], status[256], error[256];
     CastProjectMediaView media[CAST_TIMELINE_MEDIA_MAX];
     CastTimelineClip clips[CAST_TIMELINE_CLIP_MAX];
+    unsigned asset_count;
+    CastProjectAssetView assets[CAST_PROJECT_ASSET_MAX];
 } CastProjectSnapshot;
 CastProjectSession *project_session_open(void);
 void project_session_close(CastProjectSession *);

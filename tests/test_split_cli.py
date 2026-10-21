@@ -331,8 +331,9 @@ class CompletionTests(unittest.TestCase):
                                  {'on', 'off', 'status'})
                 self.assertTrue({'new', 'open', 'save', 'recover', 'status'} <=
                                 self.complete(shell, name, 'project', ''))
-                self.assertTrue({'play', 'pause', 'live', 'relink', 'export'} <=
+                self.assertTrue({'play', 'pause', 'live', 'relink', 'export', 'trim-left'} <=
                                 self.complete(shell, name, 'timeline', ''))
+                self.assertEqual(self.complete(shell, name, 'timeline', 'play', ''), {'silent'})
                 self.assertIn('migrate', self.complete(shell, name, 'config', ''))
                 self.assertIn('--availability', self.complete(shell, name, 'config', 'check', '--'))
                 self.assertTrue({'--edition', '--write', '--backup'} <=

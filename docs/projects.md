@@ -217,3 +217,18 @@ the right edge fixed. Extending requires available source material; zero-length
 clips, track collisions and capture-locked clips are rejected without changes.
 The complete trim is one undoable edit. `timeline trim` continues to set the
 source offset and duration directly.
+
+Project snapshots expose up to four decoded asset views for the first four
+non-capture-locked document clips. Each carries clip/media IDs, document revision,
+generation and exact source span. Video thumbnails are box-filtered to 80×45 RGBA;
+waveforms contain up to 256 mono peaks (maximum of the decoded stereo peaks),
+covering at most the first thirty seconds of that clip's source range. Images
+have no waveform; unsupported, missing and audio-absent inputs report errors
+instead of invented content. Remaining clips have no asset view yet; selection
+and visible-window prioritization are future work.
+
+A bounded persistent worker owns all asset probing and decoding. Document edits,
+new/open and source replacement immediately invalidate old views. Active outputs
+cancel pending work and defer new decoding while retaining already decoded views
+for unchanged clips; idle resumes requests. Snapshot publication only copies
+bounded memory and never probes files or opens audio devices.

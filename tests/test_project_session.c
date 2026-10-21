@@ -97,8 +97,8 @@ static void wav(const char *path)
     little(f, 16, 2);
     fputs("data", f);
     little(f, 32000, 4);
-    for (unsigned i = 0; i < 32000; ++i) {
-        fputc(0, f);
+    for (unsigned i = 0; i < 16000; ++i) {
+        little(f, i % 32 < 16 ? 10000 : (unsigned)(uint16_t)-10000, 2);
     }
     assert(!fclose(f));
 }
@@ -133,6 +133,24 @@ int main(void)
     CastProjectSnapshot s = snapshot(a);
     assert(s.clip_count == 1 && s.media_count == 1 && !*s.error);
     assert(s.clips[0].track == 1 && s.clips[0].duration_ns == UINT64_C(1000000000));
+    /* Published assets come from actual worker-decoded PCM, never controller I/O. */
+    for (unsigned i = 0; i < 5000; ++i) {
+        project_session_tick(a);
+        if (snapshot(a).asset_count && !snapshot(a).assets[0].pending) break;
+        usleep(1000);
+    }
+    s = snapshot(a);
+    assert(s.asset_count == 1 && s.assets[0].clip_id == s.clips[0].id);
+    assert(s.assets[0].revision == s.revision && s.assets[0].waveform_ready);
+    assert(!s.assets[0].thumbnail_ready && s.assets[0].bins == 256);
+    assert(s.assets[0].source_start_ns == 0 && s.assets[0].span_ns == UINT64_C(1000000000));
+    assert(s.assets[0].peak[0] > 0 && s.assets[0].peak[0] <= 1);
+    uint64_t asset_generation = s.assets[0].generation;
+    a->state.stream_active = true;
+    project_session_tick(a);
+    assert(snapshot(a).assets[0].waveform_ready && !snapshot(a).assets[0].pending);
+    assert(snapshot(a).assets[0].generation > asset_generation);
+    a->state.stream_active = false;
     a->config.width = 64;
     a->config.height = 64;
     a->config.fps = 10;
@@ -231,6 +249,7 @@ int main(void)
     const char *trim_undo[] = {"timeline", "undo"};
     const char *trim_redo[] = {"timeline", "redo"};
     assert(!command(a, 4, trim_left));
+    assert(snapshot(a).asset_count == 0); /* no stale source span after editing */
     assert(snapshot(a).clips[0].start_ns == UINT64_C(100000000));
     assert(snapshot(a).clips[0].source_in_ns == UINT64_C(100000000));
     assert(snapshot(a).clips[0].duration_ns == UINT64_C(900000000));
@@ -384,6 +403,15 @@ int main(void)
     a->state.stream_active = false;
     assert(!rename(moved, audio));
     assert(!unlink(short_media));
+    assert(!command(a, 2, new_project));
+    assert(!snapshot(a).asset_count);
+    for (unsigned i = 0; i < 5; ++i) {
+        assert(!command(a, 4, import));
+        wait_done(a);
+    }
+    assert(snapshot(a).clip_count == 5 && snapshot(a).asset_count == CAST_PROJECT_ASSET_MAX);
+    for (unsigned i = 0; i < CAST_PROJECT_ASSET_MAX; ++i)
+        assert(snapshot(a).assets[i].clip_id == snapshot(a).clips[i].id);
     project_session_close(a->project);
     free(a);
     assert(!unlink(project));

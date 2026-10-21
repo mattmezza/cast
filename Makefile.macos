@@ -134,7 +134,7 @@ LDFLAGS += -Wl,-headerpad_max_install_names
 LDLIBS = -lm -lpthread -framework Foundation -framework AVFoundation \
  -framework ScreenCaptureKit -framework CoreMedia -framework CoreVideo \
  -framework CoreGraphics -framework AudioToolbox -framework CoreAudio -framework AppKit
-SOURCES = src/timeline.c src/project.c src/project_session.c src/timeline_render.c src/timeline_preview.c src/timeline_audio.c src/timeline_audio_native.c src/encoder_capabilities.c src/audio_monitor.c src/audio_monitor_session.c src/audio_monitor_session_media.c src/audio_monitor_controller.c src/audio_monitor_controller_media.c src/main.c src/commands.c src/config.c src/config_migrate.c src/state.c \
+SOURCES = src/timeline.c src/project.c src/project_session.c src/timeline_assets.c src/timeline_render.c src/timeline_preview.c src/timeline_audio.c src/timeline_audio_native.c src/encoder_capabilities.c src/audio_monitor.c src/audio_monitor_session.c src/audio_monitor_session_media.c src/audio_monitor_controller.c src/audio_monitor_controller_media.c src/main.c src/commands.c src/config.c src/config_migrate.c src/state.c \
  src/compositor.c src/composition_assets.c src/presentation_text.c src/platform.c \
  src/media.c src/record.c src/stream.c src/panel_transport.c src/panel_lifecycle.c \
  src/help_commands.c src/update.c src/desktop_update.c src/desktop_update_ui.c src/edition.c src/license_store.c src/edition_extensions.c \
@@ -311,7 +311,7 @@ $(BUILD)/test_timeline: tests/test_timeline.c src/timeline.c src/timeline.h
 $(BUILD)/test_project: tests/test_project.c $(PROJECT_TEST_SOURCES)
 	@mkdir -p $(BUILD)
 	$(CC) $(PROJECT_TEST_FLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -ffunction-sections -fdata-sections -o $@ $^ $(LDFLAGS) -Wl,-dead_strip $(PKG_LIBS) -lpthread -lm
-$(BUILD)/test_project_session: tests/test_project_session.c src/project_session.c src/timeline_audio.c src/audio_monitor.c $(PROJECT_TEST_SOURCES) $(PROJECT_RENDER_TEST_SOURCES)
+$(BUILD)/test_project_session: tests/test_project_session.c src/project_session.c src/timeline_assets.c src/timeline_audio.c src/audio_monitor.c $(PROJECT_TEST_SOURCES) $(PROJECT_RENDER_TEST_SOURCES)
 	@mkdir -p $(BUILD)
 	$(CC) $(PROJECT_TEST_FLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -ffunction-sections -fdata-sections -o $@ $^ $(LDFLAGS) -Wl,-dead_strip $(PKG_LIBS) -lpthread -lm
 $(BUILD)/test_timeline_render: tests/test_timeline_render.c $(PROJECT_TEST_SOURCES) $(PROJECT_RENDER_TEST_SOURCES)
@@ -386,3 +386,10 @@ $(BUILD)/test_videotoolbox_policy: tests/test_videotoolbox_policy.c src/media_co
 .PHONY: check-videotoolbox-policy
 check-videotoolbox-policy: $(BUILD)/test_videotoolbox_policy
 	$(BUILD)/test_videotoolbox_policy
+
+$(BUILD)/test_timeline_assets: tests/test_timeline_assets.c src/timeline_assets.c $(PROJECT_TEST_SOURCES) $(PROJECT_RENDER_TEST_SOURCES)
+	@mkdir -p $(BUILD)
+	$(CC) $(PROJECT_TEST_FLAGS) $(PKG_CFLAGS) $(CFLAGS) $(WARN) -Werror -std=gnu11 -ffunction-sections -fdata-sections -o $@ $^ $(LDFLAGS) -Wl,-dead_strip $(PKG_LIBS) -lpthread -lm
+.PHONY: check-timeline-assets
+check-timeline-assets: $(BUILD)/test_timeline_assets
+	$(BUILD)/test_timeline_assets

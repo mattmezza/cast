@@ -705,6 +705,21 @@ int timeline_renderer_audio(CastTimelineRenderer *r, uint64_t position, unsigned
     return 0;
 }
 
+int timeline_renderer_audio_present(CastTimelineRenderer *r, uint64_t media_id, bool *present,
+                                    char *error, size_t size)
+{
+    if (error && size) *error = 0;
+    if (present) *present = false;
+    if (!r || !present || !timeline_media(&r->timeline, media_id))
+        return fail(error, size, "invalid media audio metadata request");
+    r->deadline = cast_now_ns() + OPERATION_NS;
+    if (cancelled(r)) return fail(error, size, "timeline metadata cancelled");
+    TimelineReader *reader = get_reader(r, media_id, true, error, size);
+    if (!reader) return -1;
+    *present = !reader->empty;
+    return 0;
+}
+
 struct CastTimelineExport {
     pthread_t thread;
     pthread_mutex_t mutex;

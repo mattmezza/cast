@@ -31,8 +31,9 @@ Export writes a new montage using the current recording container and encoder
 settings through the existing native FFmpeg libraries;
 it reports progress and supports cancellation. Existing destinations are never
 overwritten. Preview and export include imported video audio and audio-only
-clips with their gain/mute settings. The timeline currently has coarse ruler
-seeking and numeric editing; drag editing, waveform/thumbnail
+clips with their gain/mute settings. The timeline supports ruler seeking, Fit/± zoom, horizontal navigation and
+clip move/edge-trim gestures, with numeric editing also available. Each gesture
+submits one validated edit on release and has one undo step. Waveform/thumbnail
 caches and live clip insertion/mixing during capture remain separate work.
 
 Streaming destination and encoding settings now use the existing backend,

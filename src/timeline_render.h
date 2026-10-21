@@ -17,6 +17,9 @@ int timeline_renderer_frame(CastTimelineRenderer *, uint64_t time_ns, Frame *, c
  * The caller owns interleaved stereo output (2*count floats). */
 int timeline_renderer_audio(CastTimelineRenderer *, uint64_t sample_position, unsigned count,
                             float *, char *, size_t);
+/* Worker-only metadata query using the same safe local decoder; distinguishes
+ * a missing audio stream from decoded silence. May open/probe the input. */
+int timeline_renderer_audio_present(CastTimelineRenderer *, uint64_t media_id, bool *, char *, size_t);
 typedef struct CastTimelineExport CastTimelineExport;
 /* Start copies the timeline/configuration and queues an owned worker. Inputs and
  * destination are opened there. Final output replaces an owned regular destination
