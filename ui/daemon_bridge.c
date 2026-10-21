@@ -1,4 +1,5 @@
 #include "daemon_bridge.h"
+#include "workspace_extension.h"
 #include "../src/panel_transport.h"
 #include <ctype.h>
 #include <math.h>
@@ -486,7 +487,18 @@ static void source_label(char *out, size_t size, const char *text)
 static void copy_config(AppLive *out, const PanelSnapshot *snapshot, const DaemonBridge *bridge)
 {
     const Config *config = &snapshot->config;
+    out->project=snapshot->project;
     const State *state = &snapshot->state;
+    out->setting_count=config->extension_setting_count;
+    if(out->setting_count>APP_SETTING_MAX)out->setting_count=APP_SETTING_MAX;
+    for(unsigned i=0;i<out->setting_count;++i) {
+        snprintf(out->settings[i].section,sizeof out->settings[i].section,"%s",config->extension_settings[i].section);
+        snprintf(out->settings[i].key,sizeof out->settings[i].key,"%s",config->extension_settings[i].key);
+        snprintf(out->settings[i].value,sizeof out->settings[i].value,"%s",config->extension_settings[i].value);
+    }
+#if defined(WITH_PRO) && defined(WITH_CUI)
+    cast_workspace_snapshot(out,snapshot);
+#endif
     snprintf(out->background_source, sizeof out->background_source, "%.*s", 15, config->background_source);
     snprintf(out->screen_background, sizeof out->screen_background, "%.*s", 15, config->screen_background);
     snprintf(out->camera_background, sizeof out->camera_background, "%.*s", 15, config->camera_background);
@@ -707,4 +719,20 @@ void bridge_poll(DaemonBridge *bridge, int target, AppLive *out)
             (unsigned)bridge->frame.height, (size_t)bridge->frame.stride, bridge->revision};
     }
     remember_metadata(bridge, out);
+}
+
+int bridge_session(DaemonBridge *b,bool command,uint64_t generation,unsigned argc,const char *const *argv,char *error,size_t size) {
+    if(!b || b->pending || !argc || argc>4 || (!command && argc!=2))return refuse_edit(b,error,size,"Session edit unavailable");
+    size_t bytes=64;
+    for(unsigned i=0;i<argc;++i){if(!argv[i] || strlen(argv[i])>=4096)return refuse_edit(b,error,size,"Session edit is too long");bytes+=strlen(argv[i])+1;}
+    if(bytes>=CAST_IPC_MAX)return refuse_edit(b,error,size,"Session edit exceeds transport limit");
+    PanelSnapshot snapshot;
+    if(!panel_client_snapshot(b->client,&snapshot) || !snapshot.connected || snapshot.daemon_generation!=generation || snapshot.command_queued!=snapshot.command_completed || snapshot.command_queued==UINT64_MAX)
+        return refuse_edit(b,error,size,"Daemon changed or is busy; edit was not queued");
+    char detail[CAST_ERR];
+    int result=command ? panel_client_command(b->client,(int)argc,argv,detail,sizeof detail) : panel_client_setting(b->client,argv[0],argv[1],detail,sizeof detail);
+    if(result)return refuse_edit(b,error,size,"Session edit could not be queued");
+    b->edit_generation=snapshot.daemon_generation;b->edit_ack=snapshot.command_queued+1;b->pending=true;b->edit_error[0]=0;
+    if(error&&size)error[0]=0;
+    return 0;
 }

@@ -401,5 +401,19 @@ int main(void)
  ++snap.daemon_generation;bridge_poll(b,0,&live);assert(!live.pending && !live.devices.count);
  snap.command_completed=snap.command_queued;
  assert(bridge_source(b,APP_DEVICE_MIC,"default",error,sizeof error)<0);
+ /* Generic session transport preserves generation and acknowledgment boundaries. */
+ const char *session_setting[]={"notes.font_size","21"};
+ int before_session=settings;
+ assert(bridge_session(b,false,snap.daemon_generation-1,2,session_setting,error,sizeof error)<0 && settings==before_session);
+ assert(!bridge_session(b,false,snap.daemon_generation,2,session_setting,error,sizeof error));
+ assert(!strcmp(setting_key,"notes.font_size") && !strcmp(setting_value,"21"));
+ assert(bridge_session(b,false,snap.daemon_generation,2,session_setting,error,sizeof error)<0);
+ snap.command_completed=snap.command_queued;bridge_poll(b,0,&live);assert(!live.pending);
+ const char *session_command[]={"notes","open"};
+ assert(!bridge_session(b,true,snap.daemon_generation,2,session_command,error,sizeof error));
+ assert(!strcmp(setting_key,"notes open"));
+ snap.command_completed=snap.command_queued;bridge_poll(b,0,&live);
+ snap.connected=false;
+ assert(bridge_session(b,false,snap.daemon_generation,2,session_setting,error,sizeof error)<0);
  bridge_close(b);bridge_poll(NULL,0,&live);assert(live.enabled && !live.connected && !live.has_frame);
 }

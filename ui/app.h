@@ -16,6 +16,10 @@ typedef struct AppState {
     bool source_choice_requested;
     AppDeviceKind source_choice_kind;
     char source_choice_value[APP_DEVICE_ID_MAX];
+    bool extension_requested, extension_command;
+    unsigned extension_argc;
+    char extension_args[4][4096];
+    uint64_t extension_generation;
     bool edit_requested;
     AppEdit edit;
     char edit_value[4096];
@@ -48,6 +52,10 @@ typedef struct AppState {
 void app_init(AppState *);
 /* One validated intent; host submits it once and clears edit_requested. */
 bool app_request_edit(AppState *, AppEdit, const char *);
+/* Bounded session intents. Values remain acknowledged snapshot data until daemon acceptance. */
+bool app_request_setting(AppState *, const char *key, const char *value);
+bool app_request_command(AppState *, unsigned argc, const char *const *argv);
+const char *app_setting(const AppState *, const char *section, const char *key);
 bool app_is_dark(const AppState *);
 const char *app_workspace_name(AppWorkspace);
 const char *app_layout_name(AppLayout);

@@ -471,6 +471,14 @@ int main(int argc, char **argv) {
             next_poll = 0;
             cui_invalidate(ui);
         }
+        if(app.extension_requested) {
+            const char *args[4];for(unsigned i=0;i<app.extension_argc;++i)args[i]=app.extension_args[i];
+            char error[CAST_ERR]={0};
+            int queued=bridge_session(bridge,app.extension_command,app.extension_generation,app.extension_argc,args,error,sizeof error);
+            app.live.pending=queued==0;
+            if(queued<0)snprintf(app.live.edit_error,sizeof app.live.edit_error,"%.*s",(int)sizeof app.live.edit_error-1,error);
+            app.extension_requested=false;app.extension_argc=0;memset(app.extension_args,0,sizeof app.extension_args);next_poll=0;cui_invalidate(ui);
+        }
         if (app.edit_requested) {
             char edit_error[CAST_ERR] = {0};
             int queued = bridge_edit(bridge, app.edit, app.edit_value, edit_error, sizeof edit_error);

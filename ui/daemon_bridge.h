@@ -14,5 +14,6 @@ int bridge_devices(DaemonBridge *, AppDeviceKind, char *error, size_t);
 /* Empty camera ID disables it; empty portal screen ID opens desktop consent.
  * Audio source IDs must come from a current acknowledged discovery list. */
 int bridge_source(DaemonBridge *, AppDeviceKind, const char *id, char *error, size_t);
+int bridge_session(DaemonBridge *, bool command, uint64_t generation, unsigned argc, const char *const *argv, char *error, size_t);
 void bridge_close(DaemonBridge *);
 #endif

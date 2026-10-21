@@ -5,7 +5,7 @@ AR ?= ar
 PKG_CONFIG ?= pkg-config
 CFLAGS ?= -O2 -g
 # Consumer sources may live in subdirectories; target stays beside bundled assets.
-APP_SOURCES ?= main.c app.c menus.c cast_theme.c brand.c settings.c source_picker.c
+APP_SOURCES ?= main.c app.c menus.c cast_theme.c brand.c settings.c source_picker.c timeline_controls.c stream_controls.c
 TARGET ?= build/cast-ui-preview
 APP_OBJECTS := $(APP_SOURCES:%.c=build/%.o)
 CPPFLAGS += -Ivendor/include -Ivendor/third_party/clay

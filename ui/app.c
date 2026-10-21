@@ -53,7 +53,7 @@ static bool composition_disabled(const AppState *s) {
     return s->edit_requested || s->live.pending || s->live.snapshot_busy || (s->live.enabled && !s->live.connected);
 }
 bool app_request_edit(AppState *s, AppEdit edit, const char *value) {
-    if (!s || !value || !value[0] || strlen(value) >= sizeof s->edit_value || composition_disabled(s)) return false;
+    if (!s || !value || !value[0] || strlen(value) >= sizeof s->edit_value || s->extension_requested || composition_disabled(s)) return false;
     int index = -1;
     float size = 0;
     if (edit == APP_EDIT_LAYOUT) {
@@ -1252,4 +1252,22 @@ void app_frame(cui_context *ui, AppState *s, float width, float height) {
         app_source_picker_close(ui, s);
     zoom_popup(ui,s,&t,width,height);
     app_settings_frame(ui, s, &t, width, height);
+}
+
+const char *app_setting(const AppState *a,const char *section,const char *key) {
+    for(unsigned i=0;i<a->live.setting_count && i<APP_SETTING_MAX;++i)
+        if(!strcmp(a->live.settings[i].section,section)&&!strcmp(a->live.settings[i].key,key))return a->live.settings[i].value;
+    return "";
+}
+static bool extension_request(AppState *a,bool command,unsigned argc,const char *const *argv) {
+    if(!a || !a->live.connected || a->live.pending || a->live.snapshot_busy || a->edit_requested || a->extension_requested || !argc || argc>4)return false;
+    for(unsigned i=0;i<argc;++i)if(!argv[i] || strlen(argv[i])>=sizeof a->extension_args[i])return false;
+    for(unsigned i=0;i<argc;++i)snprintf(a->extension_args[i],sizeof a->extension_args[i],"%s",argv[i]);
+    a->extension_argc=argc;a->extension_command=command;a->extension_generation=a->live.generation;a->extension_requested=true;return true;
+}
+bool app_request_setting(AppState *a,const char *key,const char *value) {
+    const char *args[]={key,value};return extension_request(a,false,2,args);
+}
+bool app_request_command(AppState *a,unsigned argc,const char *const *argv) {
+    return extension_request(a,true,argc,argv);
 }

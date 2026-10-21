@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "app.h"
 #include "brand.h"
+#include "workspace_extension.h"
 #include "cui/cui_styled_slider_events.h"
 #include <math.h>
 #include <stdio.h>
@@ -320,6 +321,9 @@ static void content(cui_context *ui,AppState *a,const cui_theme *t,bool narrow) 
         group(ui,t,"SAFETY");FIELD("Start paused","Not a preference. Revealing is always separate.","Required",'t');
         FIELD("Reconnect attempts","0 means never retry automatically.","—",'r');group_end(ui);break;
     case 4:
+#if defined(WITH_PRO) && defined(WITH_CUI)
+        if(cast_workspace_settings(ui,a,t,4,narrow))break;
+#endif
         txt(ui,a->live.notes_available?"Available · entitled by the connected daemon":"Requires a connected daemon with a teleprompter entitlement",11,t->primary);
         group(ui,t,"PROMPTER");
         if(cui_button_ex(ui,cui_id_from(ui,"settings-prompter-open"),t,
@@ -339,6 +343,9 @@ static void content(cui_context *ui,AppState *a,const cui_theme *t,bool narrow) 
         FIELD("Apply preset",NULL,"Apply",'b');FIELD("Delete preset",NULL,"Delete",'b');group_end(ui);
         disabled_button(ui,t,"Save current look…",false);break;
     case 6:
+#if defined(WITH_PRO) && defined(WITH_CUI)
+        if(cast_workspace_settings(ui,a,t,6,narrow))break;
+#endif
         group(ui,t,"PRO");txt(ui,"Cinematic zoom, teleprompter, subtitles.",17,t->text);
         txt(ui,"Licence status comes from the connected daemon. Features also depend on build and platform support.",12,t->muted);group_end(ui);
         group(ui,t,"THIS MACHINE");FIELD("Edition",NULL,connected?(a->live.pro?"Pro build":"Community"):"Not connected",'t');FIELD("Licence",NULL,connected?(a->live.license_valid?"Valid":"Not valid"):"Not connected",'t');FIELD("Key",NULL,connected&&a->live.license_id[0]?a->live.license_id:"—",'t');
@@ -374,6 +381,9 @@ static void content(cui_context *ui,AppState *a,const cui_theme *t,bool narrow) 
 }
 void app_settings_frame(cui_context *ui,AppState *a,const cui_theme *t,float width,float height) {
     init(ui,a);
+#if defined(WITH_PRO) && defined(WITH_CUI)
+    cast_workspace_settings_sync(ui,a);
+#endif
     if(!a->settings.overlay.open||!a->live.connected||a->recording_select_generation!=a->live.generation||a->settings_category!=2)
         for(unsigned i=0;i<3;++i)if(a->recording_select_initialized[i])cui_overlay_close(ui,&a->recording_selects[i].overlay);
     a->recording_select_generation=a->live.generation;
