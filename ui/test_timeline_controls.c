@@ -25,9 +25,9 @@ static void frame(Fixture *f)
     if(f->page)app_project_controls(f->ui,&f->theme,&f->project,f->blocked,submit,f);
     else app_timeline_dock(f->ui,&f->theme,&f->project,
         (AppTimelineOptions){.connected=true,.blocked=f->blocked,.width=f->width,.height=262},submit,f);
-    cui_end_box(f->ui);cui_draw_list draw=cui_end_frame(f->ui);assert(draw.count>0);
+    cui_end_box(f->ui);cui_draw_list draw=cui_end_frame(f->ui);
     if(cui_last_error(f->ui)!=CUI_OK){cui_diagnostic d;if(cui_first_diagnostic(f->ui,&d))fprintf(stderr,"%s %s\n",d.operation,d.message);}
-    assert(cui_last_error(f->ui)==CUI_OK);
+    assert(cui_last_error(f->ui)==CUI_OK);assert(draw.count>0);
 }
 static void settle(Fixture *f){frame(f);frame(f);}
 static void event(Fixture *f,cui_event e){assert(cui_queue_event(f->ui,e));frame(f);}
@@ -52,6 +52,8 @@ int main(void)
     f.project.playhead_ns=UINT64_C(5000000000);
     f.project.media_count=1;f.project.media[0].id=1;strcpy(f.project.media[0].label,"Interview.mp4");
     f.project.clip_count=1;f.project.clips[0]=(CastTimelineClip){.id=2,.media_id=1,.gain=1,.duration_ns=UINT64_C(10000000000)};
+    f.project.asset_count=1;f.project.assets[0]=(CastProjectAssetView){.clip_id=2,.media_id=1,
+        .generation=1,.span_ns=UINT64_C(10000000000),.pending=true};
     settle(&f);click(&f,"timeline-clip-2");click(&f,"timeline-split");
     assert(f.calls==1&&!strcmp(f.verb,"timeline")&&!strcmp(f.action,"split")&&!strcmp(f.value,"2"));
     assert(f.project.clip_count==1);
@@ -111,5 +113,37 @@ int main(void)
     event(&f,(cui_event){.type=CUI_EVENT_POINTER_MOVE,.x=x+60,.y=y});
     ++f.project.revision;settle(&f);
     event(&f,(cui_event){.type=CUI_EVENT_POINTER_UP,.x=x+60,.y=y});assert(f.calls==before+3);
+    f.project.media[0].kind=CAST_TIMELINE_AUDIO;settle(&f);
+    assert(cui_bounds(f.ui,cui_id_from(f.ui,"timeline-track-0")).h==34);
+    assert(cui_bounds(f.ui,cui_id_from(f.ui,"timeline-clip-2")).h==24);
+    clip_bounds=cui_bounds(f.ui,cui_id_from(f.ui,"timeline-clip-2"));x=clip_bounds.x+30;y=clip_bounds.y+12;
+    unsigned audio_before=f.calls;
+    event(&f,(cui_event){.type=CUI_EVENT_POINTER_DOWN,.x=x,.y=y});
+    event(&f,(cui_event){.type=CUI_EVENT_POINTER_MOVE,.x=x,.y=y+34});assert(f.calls==audio_before);
+    event(&f,(cui_event){.type=CUI_EVENT_POINTER_UP,.x=x,.y=y+34});settle(&f);
+    assert(f.calls==audio_before+1&&!strcmp(f.action,"move")&&!strncmp(f.parameter,"1,",2));
+    for(unsigned width=260;width<=1040;width*=2){f.width=(float)width;settle(&f);}
+    f.width=800;f.project.asset_count=1;
+    CastProjectAssetView *asset=&f.project.assets[0];
+    *asset=(CastProjectAssetView){.clip_id=2,.media_id=1,.revision=f.project.revision,
+        .generation=1,.span_ns=UINT64_C(10000000000),.thumbnail_ready=true,.waveform_ready=true,.bins=256};
+    for(unsigned i=0;i<sizeof asset->rgba;i+=4){asset->rgba[i]=255;asset->rgba[i+3]=255;}
+    for(unsigned i=0;i<256;++i)asset->peak[i]=i/255.f;
+    unsigned asset_before=f.calls;settle(&f);
+    assert(cui_bounds(f.ui,cui_id_from(f.ui,"timeline-thumbnail-2")).w>0);
+    assert(cui_bounds(f.ui,cui_id_from(f.ui,"timeline-waveform-2")).w>0);
+    assert(f.calls==asset_before);
+    ++asset->revision;settle(&f);
+    assert(!cui_bounds(f.ui,cui_id_from(f.ui,"timeline-thumbnail-2")).w);
+    asset->revision=f.project.revision;f.project.clips[0].capture_locked=true;settle(&f);
+    assert(!cui_bounds(f.ui,cui_id_from(f.ui,"timeline-waveform-2")).w);
+    f.project.clips[0].capture_locked=false;asset->waveform_ready=false;asset->thumbnail_ready=false;asset->pending=true;settle(&f);
+    assert(!cui_bounds(f.ui,cui_id_from(f.ui,"timeline-thumbnail-2")).w);
+    assert(f.calls==asset_before);
+    f.project.asset_count=0;settle(&f);
+    if(cui_bounds(f.ui,cui_id_from(f.ui,"timeline-trim-end-2")).w)click(&f,"timeline-clip-2");
+    unsigned focus_before=f.calls;click(&f,"timeline-clip-2");
+    assert(f.calls==focus_before+1&&!strcmp(f.action,"assets")&&!strcmp(f.value,"focus")&&!strcmp(f.parameter,"2"));
+    settle(&f);settle(&f);assert(f.calls==focus_before+1);
     cui_destroy(f.ui);puts("Timeline UI: clip selection, split, import, acknowledgement, capture locks and project controls passed");
 }

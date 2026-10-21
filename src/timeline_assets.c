@@ -142,7 +142,9 @@ int timeline_assets_request(CastTimelineAssets *s,const CastTimelineAssetRequest
        !memchr(q->media.path,0,sizeof q->media.path)||q->media.path[0]!='/'||q->media.missing||
        q->media.kind<CAST_TIMELINE_VIDEO||q->media.kind>CAST_TIMELINE_IMAGE||!q->span_ns||q->span_ns>CAST_ASSET_SPAN_MAX_NS||
        q->span_ns<20834||q->media.duration_ns>CAST_TIMELINE_LIMIT_NS||
-       q->source_start_ns>=q->media.duration_ns||q->span_ns>q->media.duration_ns-q->source_start_ns||
+       q->source_start_ns>CAST_TIMELINE_LIMIT_NS-q->span_ns||
+       (q->media.kind!=CAST_TIMELINE_IMAGE &&
+        (q->source_start_ns>=q->media.duration_ns||q->span_ns>q->media.duration_ns-q->source_start_ns))||
        (!q->thumbnail&&!q->waveform))return -1;
     pthread_mutex_lock(&s->mutex);
     if(q->generation<atomic_load(&s->generation)){pthread_mutex_unlock(&s->mutex);return -1;}

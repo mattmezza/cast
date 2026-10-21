@@ -172,9 +172,8 @@ CastTimelineAudio *timeline_audio_open(const CastTimeline *t, const Config *c, C
         return NULL;
     }
     char error[256];
-    Config validated = *c;
     if (timeline_validate(t, error, sizeof error) ||
-        config_validate(&validated, error, sizeof error)) {
+        config_validate(c, error, sizeof error)) {
         return NULL;
     }
     for (unsigned i = 0; i < t->clip_count; ++i) {

@@ -1,4 +1,5 @@
 #include "timeline_render.h"
+#include "local_image_input.h"
 #include "media_codec.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -23,8 +24,8 @@
 #define RATE 48000
 #define READER_COUNT 8
 #define OPERATION_NS UINT64_C(10000000000)
-#define PIXEL_LIMIT (7680 * 4320)
-#define INPUT_FORMATS "mov,matroska,webm,wav,mp3,flac,ogg,aac,png_pipe,jpeg_pipe"
+#define PIXEL_LIMIT CAST_LOCAL_IMAGE_PIXELS_MAX
+#define INPUT_FORMATS "mov,matroska,webm,wav,mp3,flac,ogg,aac,png_pipe,jpeg_pipe,image2pipe"
 typedef struct TimelineReader TimelineReader;
 struct CastTimelineRenderer {
     CastTimeline timeline;
@@ -185,9 +186,13 @@ static int reader_open(TimelineReader *reader, CastTimelineRenderer *owner,
     av_dict_set(&options, "format_whitelist", INPUT_FORMATS, 0);
     av_dict_set(&options, "probesize", "1048576", 0);
     av_dict_set(&options, "analyzeduration", "2000000", 0);
-    int result = avformat_open_input(&reader->format, media->path, NULL, &options);
+    const AVInputFormat *forced = NULL;
+    int image = local_image_input(reader->fd, reader->format, &forced, error, size);
+    if (image < 0) { av_dict_free(&options); return -1; }
+    int result = avformat_open_input(&reader->format, image ? NULL : media->path, forced, &options);
     av_dict_free(&options);
-    if (result < 0 || (result = avformat_find_stream_info(reader->format, NULL)) < 0) {
+    if (result < 0 || (result = image ? local_image_stream_info(reader->format) :
+                       avformat_find_stream_info(reader->format, NULL)) < 0) {
         return fail(error, size, "media %" PRIu64 " unsupported or unreadable local source",
                     media->id);
     }
@@ -484,7 +489,8 @@ int timeline_renderer_frame(CastTimelineRenderer *r, uint64_t time, Frame *out, 
                 return -1;
             }
             AVFrame *frame =
-                video_frame(reader, clip->source_in_ns + time - clip->start_ns, error, size);
+                video_frame(reader, media->kind == CAST_TIMELINE_IMAGE ? 0 :
+                            clip->source_in_ns + time - clip->start_ns, error, size);
             if (!frame) {
                 if (error && size && *error) {
                     return -1;
@@ -1132,22 +1138,22 @@ static CastTimelineExport *export_start(const CastTimeline *timeline, const Conf
         fail(error, size, "invalid timeline export request");
         return NULL;
     }
-    CastTimeline copy = *timeline;
-    Config cfg = *config;
-    if (timeline_validate(&copy, error, size) || config_validate(&cfg, error, size)) {
-        return NULL;
-    }
     CastTimelineExport *job = calloc(1, sizeof *job);
     if (!job) {
         fail(error, size, "export allocation failed");
         return NULL;
     }
-    job->timeline = copy;
-    job->config = cfg;
+    job->timeline = *timeline;
+    job->config = *config;
+    if (timeline_validate(&job->timeline, error, size) ||
+        config_validate(&job->config, error, size)) {
+        free(job);
+        return NULL;
+    }
     job->no_replace = no_replace;
     job->filter = filter;
     job->filter_user = user;
-    job->snapshot.duration_ns = timeline_duration(&copy);
+    job->snapshot.duration_ns = timeline_duration(&job->timeline);
     snprintf(job->snapshot.path, sizeof job->snapshot.path, "%s", path);
     pthread_mutex_init(&job->mutex, NULL);
     atomic_init(&job->cancelled, false);

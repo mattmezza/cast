@@ -55,3 +55,11 @@ macOS runtime qualification still requires a macOS host.
 Pro settings, speech extraction, cue correction and subtitle rendering live only
 in the private companion repository. Public code contains generic transport and
 export hooks, not those implementations.
+
+Advanced settings and `status --json` expose measured daemon timing after the
+first complete one-second window: tick cadence, average/maximum tick cost and
+separate loop/recorder drop counts. Cadence measures completed daemon ticks;
+it does not claim camera freshness, encoded output FPS or display presentation
+rate. Tick cost includes capture, composition and publication on that thread;
+independent encoder/decoder workers are outside that cost. Recorder drops describe
+the recorder's current/most recent take, while loop misses span the daemon run.

@@ -1,3 +1,4 @@
+#include "local_image_input.h"
 #include "project_session.h"
 #include "app_internal.h"
 #include "project.h"
@@ -44,7 +45,7 @@ struct CastProjectSession {
     CastTimelineAssets *assets;
     CastTimelineAssetResult asset_result;
     CastProjectAssetView asset_views[CAST_PROJECT_ASSET_MAX];
-    uint64_t asset_ids[CAST_PROJECT_ASSET_MAX], asset_generation;
+    uint64_t asset_ids[CAST_PROJECT_ASSET_MAX], asset_generation, asset_focus;
     unsigned asset_count;
     bool assets_prepared, assets_suspended;
     CastTimelinePreview *preview, *retired_preview;
@@ -132,9 +133,13 @@ static void assets_tick(CastProjectSession *s, bool outputs_idle)
     if (!s->assets_prepared) {
         s->assets_prepared = true;
         s->asset_count = 0;
-        for (unsigned i = 0; i < s->timeline.clip_count && s->asset_count < CAST_PROJECT_ASSET_MAX;
-             ++i) {
-            const CastTimelineClip *clip = &s->timeline.clips[i];
+        const CastTimelineClip *focus = timeline_clip(&s->timeline, s->asset_focus);
+        if (focus && focus->capture_locked) focus = NULL;
+        unsigned extra = focus != NULL;
+        for (unsigned i = 0; i < s->timeline.clip_count + extra &&
+                             s->asset_count < CAST_PROJECT_ASSET_MAX; ++i) {
+            const CastTimelineClip *clip = focus && i == 0 ? focus : &s->timeline.clips[i - extra];
+            if (focus && i != 0 && clip == focus) continue;
             const CastTimelineMedia *media = timeline_media(&s->timeline, clip->media_id);
             if (clip->capture_locked || !media) {
                 continue;
@@ -358,11 +363,14 @@ static int probe(ProjectJob *job)
     format->interrupt_callback = (AVIOInterruptCB){probe_interrupt, &io};
     av_dict_set(&options, "protocol_whitelist", "file", 0);
     av_dict_set(&options, "format_whitelist",
-                "mov,matroska,webm,wav,mp3,flac,ogg,aac,png_pipe,jpeg_pipe", 0);
+                "mov,matroska,webm,wav,mp3,flac,ogg,aac,png_pipe,jpeg_pipe,image2pipe", 0);
     av_dict_set(&options, "probesize", "1048576", 0);
     av_dict_set(&options, "analyzeduration", "2000000", 0);
-    if (avformat_open_input(&format, job->path, NULL, &options) < 0 ||
-        avformat_find_stream_info(format, NULL) < 0) {
+    const AVInputFormat *forced = NULL;
+    int image_input = local_image_input(fd, format, &forced, job->error, sizeof job->error);
+    if (image_input < 0) goto finish;
+    if (avformat_open_input(&format, image_input ? NULL : job->path, forced, &options) < 0 ||
+        (image_input ? local_image_stream_info(format) : avformat_find_stream_info(format, NULL)) < 0) {
         fail(job->error, sizeof job->error, "unsupported or unreadable local media");
         goto finish;
     }
@@ -379,10 +387,10 @@ static int probe(ProjectJob *job)
         fail(job->error, sizeof job->error, "media contains no supported audio/video stream");
         goto finish;
     }
-    job->media_kind = image && !audio ? CAST_TIMELINE_IMAGE
+    job->media_kind = image_input && image && !audio ? CAST_TIMELINE_IMAGE
                       : video         ? CAST_TIMELINE_VIDEO
                                       : CAST_TIMELINE_AUDIO;
-    if (format->duration > 0) {
+    if (job->media_kind != CAST_TIMELINE_IMAGE && format->duration > 0) {
         job->duration_ns =
             (uint64_t)av_rescale_q(format->duration, AV_TIME_BASE_Q, (AVRational){1, 1000000000});
     }
@@ -601,6 +609,7 @@ static void complete(App *a)
             snprintf(s->error, sizeof s->error, "%.255s", job->error);
         } else {
             assets_clear(s);
+            s->asset_focus = 0;
             review_clear(s);
             s->timeline = job->timeline;
             strcpy(s->path, job->path);
@@ -985,6 +994,7 @@ int project_session_command(App *a, int argc, char **argv, char *out, size_t siz
                 return fail(out, size, "new project requires idle outputs and worker");
             }
             timeline_init(&s->timeline);
+            s->asset_focus = 0;
             CastTimelineHistory *fresh = timeline_history_open(8);
             timeline_history_close(s->history);
             s->history = fresh;
@@ -1000,6 +1010,20 @@ int project_session_command(App *a, int argc, char **argv, char *out, size_t siz
     }
     if (strcmp(argv[0], "timeline")) {
         return fail(out, size, "unknown project command");
+    }
+    if (!strcmp(argv[1], "assets")) {
+        uint64_t id;
+        if (argc != 4 || strcmp(argv[2], "focus") || unsigned_number(argv[3], &id))
+            return fail(out, size, "timeline assets focus CLIP_ID");
+        const CastTimelineClip *clip = timeline_clip(&s->timeline, id);
+        if (!clip || clip->capture_locked)
+            return fail(out, size, "asset focus requires a finalized clip");
+        if (s->asset_focus != id) {
+            assets_clear(s);
+            s->asset_focus = id;
+        }
+        snprintf(out, size, "OK asset focus clip=%" PRIu64, id);
+        return 0;
     }
     if (!strcmp(argv[1], "export")) {
         if (s->export) {

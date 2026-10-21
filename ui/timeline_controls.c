@@ -12,7 +12,7 @@ typedef struct {
     bool disabled, focused;
 } TimelineField;
 typedef struct {
-    uint64_t selected, revision, generation;
+    uint64_t selected, revision, generation, cancelled_drag;
     cui_scroll_state scroll, pan;
     float zoom;
     struct {uint64_t id, revision, generation; float x,y; unsigned mode; bool moved;} drag;
@@ -29,6 +29,35 @@ static bool paint_playhead(const cui_prepaint_info *info, const void *payload, c
     cui_draw_command line = {.type = CUI_DRAW_RECT, .color = p->color,
         .bounds = {x, info->visible_bounds.y, 1, info->visible_bounds.h}};
     return cui_prepaint_emit(writer, &line, true);
+}
+typedef struct {unsigned bins;float peak[CAST_PROJECT_ASSET_BINS];cui_color color;} WavePaint;
+static bool paint_wave(const cui_prepaint_info *info,const void *payload,cui_prepaint_writer *writer)
+{
+    const WavePaint *wave=payload;
+    if(info->inert||!info->modal_allowed||!wave->bins||info->visible_bounds.w<=0)return true;
+    unsigned bars=wave->bins<64?wave->bins:64;
+    for(unsigned i=0;i<bars;++i) {
+        float peak=0;
+        for(unsigned bin=i*wave->bins/bars;bin<(i+1)*wave->bins/bars;++bin)
+            if(isfinite(wave->peak[bin])&&wave->peak[bin]>peak)peak=wave->peak[bin];
+        if(peak<=0)continue;
+        if(peak>1)peak=1;
+        float height=peak*info->bounds.h;
+        cui_draw_command bar={.type=CUI_DRAW_RECT,.color=wave->color,
+            .bounds={info->bounds.x+(float)i/bars*info->bounds.w,
+                info->bounds.y+(info->bounds.h-height)/2,fmaxf(1,info->bounds.w/bars),height}};
+        if(!cui_prepaint_emit(writer,&bar,true))return false;
+    }
+    return true;
+}
+static const CastProjectAssetView *clip_asset(const CastProjectSnapshot *p,const CastTimelineClip *clip)
+{
+    for(unsigned i=0;i<p->asset_count&&i<CAST_PROJECT_ASSET_MAX;++i) {
+        const CastProjectAssetView *a=&p->assets[i];
+        if(a->clip_id==clip->id&&a->media_id==clip->media_id&&a->revision==p->revision&&
+            a->source_start_ns==clip->source_in_ns&&a->generation&&!a->missing)return a;
+    }
+    return NULL;
 }
 static void destroy_field(void *user) { cui_edit_destroy(((TimelineField *)user)->edit); }
 static bool send(AppTimelineSubmit submit, void *user, const char *domain, const char *action,
@@ -171,6 +200,44 @@ static const CastProjectMediaView *media(const CastProjectSnapshot *p, uint64_t 
     for (unsigned i = 0; i < p->media_count; ++i) if (p->media[i].id == id) return &p->media[i];
     return NULL;
 }
+static bool ruler_button(cui_context *ui,const cui_theme *t,const char *name,const char *label,
+                         float width,bool disabled,bool mono)
+{
+    cui_id id=cui_id_from(ui,name);
+    cui_interaction interaction=cui_base_button(ui,id,cui_string(label),disabled);
+    cui_begin_box(ui,id,(cui_box){.width=width,.fixed_width=true,.height=22,.fixed_height=true,
+        .row=true,.align_x=CUI_ALIGN_CENTER,.align_y=CUI_ALIGN_CENTER,
+        .background=interaction.hovered&&!disabled?cast_design_tokens(t->dark).control:t->surface,
+        .border=interaction.focus_visible?t->primary:cast_design_tokens(t->dark).hair,
+        .custom_border_edges=true,.border_edges={.left=1}});
+    cui_text_ex(ui,cui_string(label),mono?9.5f:10,disabled?t->muted:t->text,0,
+        (cui_text_style){.family=mono?1:0,.monospace=mono});
+    cui_end_box(ui);
+    return interaction.activated;
+}
+static float lane_height(const CastProjectSnapshot *p,unsigned track)
+{
+    bool audio=false;
+    for(unsigned i=0;i<p->clip_count;++i) {
+        if(p->clips[i].track!=track)continue;
+        const CastProjectMediaView *m=media(p,p->clips[i].media_id);
+        if(!m||m->kind!=CAST_TIMELINE_AUDIO)return 40;
+        audio=true;
+    }
+    return audio?34:40;
+}
+static unsigned moved_track(const CastProjectSnapshot *p,unsigned original,float dy)
+{
+    float center=0;
+    for(unsigned i=0;i<original;++i)center+=lane_height(p,i);
+    center+=lane_height(p,original)/2+dy;
+    float bottom=0;
+    for(unsigned i=0;i<CAST_TIMELINE_TRACK_MAX;++i) {
+        bottom+=lane_height(p,i);
+        if(center<bottom)return i;
+    }
+    return CAST_TIMELINE_TRACK_MAX-1;
+}
 void app_timeline_dock(cui_context *ui, const cui_theme *t, const CastProjectSnapshot *p,
                        AppTimelineOptions o, AppTimelineSubmit submit, void *user)
 {
@@ -182,7 +249,7 @@ void app_timeline_dock(cui_context *ui, const cui_theme *t, const CastProjectSna
     if(v->zoom<1)v->zoom=1;
     const bool editing_locked=blocked||p->recording||o.recording||o.countdown||o.finalizing||p->playing||p->exporting;
     if(editing_locked||v->generation!=o.generation||!selected(p,v->drag.id)||v->drag.revision!=p->revision)
-        v->drag.id=0;
+        {if(v->drag.id)v->cancelled_drag=v->drag.id;v->drag.id=0;}
     v->generation=o.generation;
     CastDesignTokens tokens = cast_design_tokens(t->dark);
     cui_begin_box(ui, cui_id_from(ui, "timeline-dock"), (cui_box){.width = -1,
@@ -235,11 +302,17 @@ void app_timeline_dock(cui_context *ui, const cui_theme *t, const CastProjectSna
     uint64_t completed_drag=0;
     float pointer_x=0,pointer_y=0;
     bool pointer_valid=cui_pointer_position(ui,&pointer_x,&pointer_y);
+    if(v->cancelled_drag) {
+        size_t count=0;const cui_event *events=cui_frame_events(ui,&count);
+        for(size_t e=0;e<count;++e)if(events[e].type==CUI_EVENT_POINTER_UP) {
+            completed_drag=v->cancelled_drag;v->cancelled_drag=0;cui_cancel_event_activation(ui,e);break;
+        }
+    }
     if(v->drag.id&&pointer_valid) {
         if(fabsf(pointer_x-v->drag.x)>4||fabsf(pointer_y-v->drag.y)>4)v->drag.moved=true;
         size_t event_count=0;const cui_event *events=cui_frame_events(ui,&event_count);
         for(size_t e=0;e<event_count;++e) {
-            if(events[e].type==CUI_EVENT_CANCEL||(events[e].type==CUI_EVENT_KEY_DOWN&&events[e].key==CUI_KEY_ESCAPE)) {v->drag.id=0;break;}
+            if(events[e].type==CUI_EVENT_CANCEL||(events[e].type==CUI_EVENT_KEY_DOWN&&events[e].key==CUI_KEY_ESCAPE)) {v->cancelled_drag=v->drag.id;v->drag.id=0;break;}
             if(events[e].type!=CUI_EVENT_POINTER_UP||events[e].pointer_button!=CUI_POINTER_PRIMARY)continue;
             const CastTimelineClip *c=selected(p,v->drag.id);
             if(v->drag.moved) {
@@ -259,10 +332,8 @@ void app_timeline_dock(cui_context *ui, const cui_theme *t, const CastProjectSna
                         send(submit,user,"timeline","trim",id,value);
                     } else {
                         uint64_t start=(uint64_t)fmax(0,fmin((double)CAST_TIMELINE_LIMIT_NS-c->duration_ns,(double)c->start_ns+delta));
-                        int track=(int)c->track+(int)roundf((pointer_y-v->drag.y)/40);
-                        if(track<0)track=0;
-                        if(track>=CAST_TIMELINE_TRACK_MAX)track=CAST_TIMELINE_TRACK_MAX-1;
-                        snprintf(value,sizeof value,"%d,%llu",track,(unsigned long long)start);
+                        unsigned track=moved_track(p,c->track,pointer_y-v->drag.y);
+                        snprintf(value,sizeof value,"%u,%llu",track,(unsigned long long)start);
                         send(submit,user,"timeline","move",id,value);
                     }
                 }
@@ -273,17 +344,15 @@ void app_timeline_dock(cui_context *ui, const cui_theme *t, const CastProjectSna
     cui_begin_box(ui, cui_id_from(ui, "timeline-ruler"), (cui_box){.width = -1,
         .height = 22, .row = true, .border = tokens.hair, .border_width = 1});
     cui_begin_box(ui, 0, (cui_box){.width=74,.fixed_width=true,.row=true,.gap=1});
-    if(cui_button_ex(ui,cui_id_from(ui,"timeline-zoom-fit"),t,cui_string("Fit"),(cui_button_options){.width=28,.height=22,.font_size=9,.disabled=editing_locked})) {v->zoom=1;v->pan.x=0;cui_invalidate(ui);}
-    if(cui_button_ex(ui,cui_id_from(ui,"timeline-zoom-out"),t,cui_string("−"),(cui_button_options){.width=21,.height=22,.font_size=10,.disabled=editing_locked||v->zoom<=1})) {v->zoom=fmaxf(1,v->zoom/2);cui_invalidate(ui);}
-    if(cui_button_ex(ui,cui_id_from(ui,"timeline-zoom-in"),t,cui_string("+"),(cui_button_options){.width=21,.height=22,.font_size=10,.disabled=editing_locked||v->zoom>=32})) {v->zoom=fminf(32,v->zoom*2);cui_invalidate(ui);}
+    if(ruler_button(ui,t,"timeline-zoom-fit","Fit",28,editing_locked,false)) {v->zoom=1;v->pan.x=0;cui_invalidate(ui);}
+    if(ruler_button(ui,t,"timeline-zoom-out","−",21,editing_locked||v->zoom<=1,false)) {v->zoom=fmaxf(1,v->zoom/2);cui_invalidate(ui);}
+    if(ruler_button(ui,t,"timeline-zoom-in","+",21,editing_locked||v->zoom>=32,false)) {v->zoom=fminf(32,v->zoom*2);cui_invalidate(ui);}
     cui_end_box(ui);
     unsigned tick_count=o.width<500?3:6;
     for (unsigned i = 0; i < tick_count; ++i) {
         char label[32], id[32]; timecode(label, sizeof label, (uint64_t)(origin+visible*i/(tick_count-1)));
         snprintf(id, sizeof id, "timeline-tick-%u", i);
-        if (cui_button_ex(ui, cui_id_from(ui, id), t, cui_string(label),
-            (cui_button_options){.height = 22, .width = track_width / tick_count, .font_size = 9.5f,
-                .variant = CUI_BUTTON_GHOST, .disabled = blocked || !p->open})) {
+        if (ruler_button(ui,t,id,label,track_width/tick_count,blocked||!p->open,true)) {
             uint64_t position_ns=(uint64_t)(origin+visible*i/(tick_count-1));if(position_ns>p->duration_ns)position_ns=p->duration_ns;
             char position[32]; snprintf(position, sizeof position, "%llu", (unsigned long long)position_ns);
             send(submit, user, "timeline", "seek", position, NULL);
@@ -300,21 +369,23 @@ void app_timeline_dock(cui_context *ui, const cui_theme *t, const CastProjectSna
     unsigned tracks = 3;
     for (unsigned i = 0; i < p->clip_count; ++i) if (p->clips[i].track > tracks) tracks = p->clips[i].track;
     float lanes_height = fmaxf(40, o.height - 113 - (audio_status_visible?16:0));
+    float content_height=0;for(unsigned i=0;i<=tracks;++i)content_height+=lane_height(p,i);
     cui_id scroll_id = cui_id_from(ui, "timeline-tracks");
     cui_scroll_options scroll_options = {.width = o.width, .height = lanes_height,
-        .content_height = (tracks + 1) * 40, .content_width = o.width,
+        .content_height = content_height, .content_width = o.width,
         .vertical = true, .hide_scrollbars = false};
     if (cui_scrollable_begin(ui, scroll_id, t, &v->scroll, scroll_options)) {
         for (unsigned track = 0; track <= tracks; ++track) {
+            float height=lane_height(p,track),clip_height=height-10;
             char lane_id[40], label[32]; snprintf(lane_id, sizeof lane_id, "timeline-track-%u", track);
             snprintf(label, sizeof label, "%s %u", track == 0 ? "TAKES" : "TRACK", track == 0 ? 1 : track);
-            cui_begin_box(ui, cui_id_from(ui, lane_id), (cui_box){.width = -1, .height = 40, .row = true,
+            cui_begin_box(ui, cui_id_from(ui, lane_id), (cui_box){.width = -1, .height = height, .row = true,
                 .border = tokens.hair, .custom_border_edges = true, .border_edges = {.bottom = 1}});
-            cui_begin_box(ui, 0, (cui_box){.width = 74, .fixed_width = true, .height = 40,
+            cui_begin_box(ui, 0, (cui_box){.width = 74, .fixed_width = true, .height = height,
                 .padding = 8, .align_y = CUI_ALIGN_CENTER, .border = tokens.hair,
                 .custom_border_edges = true, .border_edges = {.right = 1}});
             cui_text(ui, cui_string(label), 10, t->muted); cui_end_box(ui);
-            cui_begin_box(ui, cui_id_from(ui,lane_id)^UINT64_C(0x6c616e65), (cui_box){.width = -1, .height = 40, .clip = true});
+            cui_begin_box(ui, cui_id_from(ui,lane_id)^UINT64_C(0x6c616e65), (cui_box){.width = -1, .height = height, .clip = true});
             Playhead head = {.fraction = (float)(((double)p->playhead_ns-origin) / visible), .color = t->primary};
             cui_set_prepaint(ui,(cui_prepaint_options){.callback=paint_playhead,.payload=&head,
                 .payload_bytes=sizeof head,.command_budget=3,.deferred_layer=20,.hover_hitbox=false});
@@ -329,13 +400,41 @@ void app_timeline_dock(cui_context *ui, const cui_theme *t, const CastProjectSna
                 cui_theme colors = *t;
                 colors.secondary = chosen ? tokens.selected : tokens.control;
                 colors.border = chosen ? tokens.selected_line : t->border;
-                cui_begin_absolute_box(ui, cui_id_from(ui, id) ^ 1, (cui_box){.clip = true}, (cui_rect){x, 5, width, 30});
-                if (cui_button_ex(ui, cui_id_from(ui, id), &colors,
-                    cui_string(m ? m->label : "Missing media"), (cui_button_options){.width = width,
-                        .height = 30, .font_size = 9.5f, .variant = CUI_BUTTON_OUTLINE,
-                        .disabled = !o.connected, .toggle_semantics = true, .toggled = chosen}) && completed_drag!=c->id) {
-                    v->selected = chosen ? 0 : c->id;
-                    cui_invalidate(ui);
+                cui_begin_absolute_box(ui, cui_id_from(ui, id) ^ 1, (cui_box){.clip = true}, (cui_rect){x, 5, width, clip_height});
+                cui_interaction body=cui_base_button(ui,cui_id_from(ui,id),
+                    cui_string(m?m->label:"Missing media"),!o.connected);
+                cui_update_semantic(ui,cui_id_from(ui,id),chosen,0);
+                cui_begin_box(ui,cui_id_from(ui,id),(cui_box){.width=width,.height=clip_height,
+                    .background=body.hovered?cui_color_mix_oklab(colors.secondary,t->text,.06f):colors.secondary,
+                    .border=colors.border,.border_width=1,.clip=true});
+                const CastProjectAssetView *asset=o.connected&&!c->capture_locked?clip_asset(p,c):NULL;
+                if(asset&&asset->thumbnail_ready&&width>=4) {
+                    char name[56];snprintf(name,sizeof name,"timeline-thumbnail-%llu",(unsigned long long)c->id);
+                    cui_begin_absolute_box(ui,cui_id_from(ui,name)^1,(cui_box){.clip=true},(cui_rect){1,1,fminf(width-2,clip_height*80.f/45),clip_height-2});
+                    cui_paint_bitmap(ui,cui_id_from(ui,name),(cui_bitmap_paint){.bitmap={
+                        .pixels=asset->rgba,.width=80,.height=45,.stride=80*4,.revision=asset->generation^asset->clip_id},.opacity=.8f},
+                        (cui_box){.width=fminf(width-2,clip_height*80.f/45),.height=clip_height-2});
+                    cui_end_box(ui);
+                }
+                if(asset&&asset->waveform_ready&&asset->bins&&asset->bins<=CAST_PROJECT_ASSET_BINS&&asset->span_ns) {
+                    char name[56];snprintf(name,sizeof name,"timeline-waveform-%llu",(unsigned long long)c->id);
+                    WavePaint wave={.bins=asset->bins,.color=t->secondary};wave.color.a=140;
+                    memcpy(wave.peak,asset->peak,sizeof wave.peak);
+                    float span=fminf(1,(float)((double)asset->span_ns/c->duration_ns));
+                    cui_begin_absolute_box(ui,cui_id_from(ui,name),(cui_box){.clip=true},(cui_rect){6,4,fmaxf(1,(width-12)*span),clip_height-8});
+                    cui_set_prepaint(ui,(cui_prepaint_options){.callback=paint_wave,.payload=&wave,.payload_bytes=sizeof wave,.command_budget=192,.deferred_layer=1});
+                    cui_end_box(ui);
+                }
+                cui_begin_absolute_box(ui,cui_id_from(ui,id)^UINT64_C(0x6c6162656c),(cui_box){.clip=true},(cui_rect){6,clip_height-13,fmaxf(1,width-12),12});
+                cui_text_ellipsis(ui,cui_id_from(ui,id)^UINT64_C(0x74657874),cui_string(m?m->label:"Missing media"),
+                    (cui_text_ellipsis_options){.width=fmaxf(1,width-12),.font_size=9.5f,.color=t->text});
+                cui_end_box(ui);cui_end_box(ui);
+                if(body.activated&&completed_drag!=c->id) {
+                    v->selected=chosen?0:c->id;cui_invalidate(ui);
+                    if(v->selected&&!blocked&&!c->capture_locked&&!clip_asset(p,c)) {
+                        char selected_id[32];snprintf(selected_id,sizeof selected_id,"%llu",(unsigned long long)c->id);
+                        send(submit,user,"timeline","assets","focus",selected_id);
+                    }
                 }
                 if(!editing_locked&&!c->capture_locked&&cui_pressed(ui,cui_id_from(ui,id))&&!v->drag.id&&pointer_valid) {
                     v->drag.id=c->id;v->drag.revision=p->revision;v->drag.generation=o.generation;
@@ -343,8 +442,8 @@ void app_timeline_dock(cui_context *ui, const cui_theme *t, const CastProjectSna
                 }
                 if(chosen&&width>=20) {
                     char handle[48];snprintf(handle,sizeof handle,"timeline-trim-end-%llu",(unsigned long long)c->id);
-                    cui_begin_absolute_box(ui,cui_id_from(ui,handle)^1,(cui_box){.background=t->primary},(cui_rect){width-6,0,6,30});
-                    cui_button_ex(ui,cui_id_from(ui,handle),t,cui_string(""),(cui_button_options){.width=6,.height=30,.disabled=editing_locked||c->capture_locked,.accessibility_label=cui_string("Drag clip end to trim")});
+                    cui_begin_absolute_box(ui,cui_id_from(ui,handle)^1,(cui_box){.background=t->primary},(cui_rect){width-6,0,6,clip_height});
+                    cui_button_ex(ui,cui_id_from(ui,handle),t,cui_string(""),(cui_button_options){.width=6,.height=clip_height,.disabled=editing_locked||c->capture_locked,.accessibility_label=cui_string("Drag clip end to trim")});
                     if(cui_pressed(ui,cui_id_from(ui,handle))&&!v->drag.id&&pointer_valid) {
                         v->drag.id=c->id;v->drag.revision=p->revision;v->drag.generation=o.generation;
                         v->drag.x=pointer_x;v->drag.y=pointer_y;v->drag.mode=1;v->drag.moved=false;
@@ -353,8 +452,8 @@ void app_timeline_dock(cui_context *ui, const cui_theme *t, const CastProjectSna
                 }
                 if(chosen&&width>=20) {
                     char handle[48];snprintf(handle,sizeof handle,"timeline-trim-start-%llu",(unsigned long long)c->id);
-                    cui_begin_absolute_box(ui,cui_id_from(ui,handle)^1,(cui_box){.background=t->primary},(cui_rect){0,0,6,30});
-                    cui_button_ex(ui,cui_id_from(ui,handle),t,cui_string(""),(cui_button_options){.width=6,.height=30,.disabled=editing_locked||c->capture_locked,.accessibility_label=cui_string("Drag clip start to trim")});
+                    cui_begin_absolute_box(ui,cui_id_from(ui,handle)^1,(cui_box){.background=t->primary},(cui_rect){0,0,6,clip_height});
+                    cui_button_ex(ui,cui_id_from(ui,handle),t,cui_string(""),(cui_button_options){.width=6,.height=clip_height,.disabled=editing_locked||c->capture_locked,.accessibility_label=cui_string("Drag clip start to trim")});
                     if(cui_pressed(ui,cui_id_from(ui,handle))&&!v->drag.id&&pointer_valid) {
                         v->drag.id=c->id;v->drag.revision=p->revision;v->drag.generation=o.generation;
                         v->drag.x=pointer_x;v->drag.y=pointer_y;v->drag.mode=2;v->drag.moved=false;
@@ -367,7 +466,7 @@ void app_timeline_dock(cui_context *ui, const cui_theme *t, const CastProjectSna
                     cui_color ghost=t->primary;ghost.a=60;
                     cui_begin_absolute_box(ui,cui_id_from(ui,id)^UINT64_C(0x64726166),
                         (cui_box){.background=ghost,.border=t->primary,.border_width=1},
-                        (cui_rect){v->drag.mode==1?x:x+delta,5,v->drag.mode==1?fmaxf(1,width+delta):v->drag.mode==2?fmaxf(1,width-delta):width,30});
+                        (cui_rect){v->drag.mode==1?x:x+delta,5,v->drag.mode==1?fmaxf(1,width+delta):v->drag.mode==2?fmaxf(1,width-delta):width,clip_height});
                     cui_end_box(ui);
                 }
             }

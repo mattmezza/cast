@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Production daemon CLI/socket project smoke; synthetic pixels, no UI/devices."""
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -87,6 +88,12 @@ def main():
                 command("record", "stop")
                 wait(lambda: not status()["record"]["finalizing"], "recording finalization timed out")
                 assert take.is_file() and take.stat().st_size > 0
+                metrics = wait(lambda: (value if (value := status()["performance"])["ready"] else None),
+                               "daemon timing window not published")
+                assert math.isfinite(metrics["tick_hz"]) and metrics["tick_hz"] > 0
+                assert metrics["maximum_tick_ms"] >= metrics["average_tick_ms"] >= 0
+                assert metrics["window_ns"] >= 1_000_000_000
+                assert metrics["loop_drops"] >= 0 and metrics["recording_drops"] >= 0
                 wait(lambda: "clips=1" in command("project", "status"), "captured take missing from project")
                 command("project", "save", str(project))
                 assert "failed" not in wait(project_done, "project save timed out").lower()

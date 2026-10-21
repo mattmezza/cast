@@ -420,6 +420,22 @@ static void content(cui_context *ui,AppState *a,const cui_theme *t,bool narrow) 
         group(ui,t,"DAEMON");FIELD("Connection",NULL,connected?"Connected · read only":"Not connected",'t');FIELD("Binary",NULL,"Unavailable",'b');
         FIELD("Disconnect","The panel closes nothing; outputs keep running.","Disconnect",'b');group_end(ui);
         group(ui,t,"CAPTURE BACKEND");FIELD("Backend",NULL,connected?a->live.backend:"Unavailable",'c');FIELD("Log level",NULL,"Unavailable",'c');group_end(ui);
+        group(ui,t,"PERFORMANCE");
+        char cadence[64], average[64], maximum[64], dropped[96];
+        if (connected && a->live.metrics.ready) {
+            snprintf(cadence,sizeof cadence,"%.1f ticks/s",a->live.metrics.tick_hz);
+            snprintf(average,sizeof average,"%.2f ms",a->live.metrics.average_tick_ms);
+            snprintf(maximum,sizeof maximum,"%.2f ms",a->live.metrics.maximum_tick_ms);
+        } else {
+            snprintf(cadence,sizeof cadence,"%s",connected?"Measuring…":"Unavailable");
+            snprintf(average,sizeof average,"%s",cadence);
+            snprintf(maximum,sizeof maximum,"%s",cadence);
+        }
+        snprintf(dropped,sizeof dropped,"%llu loop · %llu recorder",(unsigned long long)a->live.metrics.loop_drops,(unsigned long long)a->live.metrics.recording_drops);
+        FIELD("Daemon cadence","Measured tick rate, distinct from the configured frame rate.",cadence,'t');
+        FIELD("Average tick","Capture, composition and publication on the daemon thread.",average,'t');
+        FIELD("Slowest tick","Maximum in the most recent complete measurement window.",maximum,'t');
+        FIELD("Dropped frames","Scheduling misses and recorder queue drops are counted separately.",connected?dropped:"Unavailable",'t');group_end(ui);
         group(ui,t,"DIAGNOSTICS");FIELD("Copy diagnostics","Versions, backends and recent logs. No content.","Copy",'b');
         FIELD("Open config file",NULL,"Open",'b');group_end(ui);break;
     default:

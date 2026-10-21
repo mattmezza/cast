@@ -224,8 +224,11 @@ generation and exact source span. Video thumbnails are box-filtered to 80×45 RG
 waveforms contain up to 256 mono peaks (maximum of the decoded stereo peaks),
 covering at most the first thirty seconds of that clip's source range. Images
 have no waveform; unsupported, missing and audio-absent inputs report errors
-instead of invented content. Remaining clips have no asset view yet; selection
-and visible-window prioritization are future work.
+instead of invented content. `timeline assets focus CLIP_ID` prioritizes a selected finalized clip in the first
+slot, followed by up to three other clips in document order. This read-only
+request changes no document revision, dirty state or undo history. Repeating the
+same focus is inert; interfaces should request once per selection change rather
+than retry each frame. Visible-window prioritization remains future work.
 
 A bounded persistent worker owns all asset probing and decoding. Document edits,
 new/open and source replacement immediately invalidate old views. Active outputs

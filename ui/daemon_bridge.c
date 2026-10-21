@@ -545,6 +545,7 @@ static void copy_config(AppLive *out, const PanelSnapshot *snapshot, const Daemo
         snprintf(out->stream.error, sizeof out->stream.error, "Stream failed. Check the destination, key file and connection, then retry.");
     out->encoders = snapshot->encoders;
     out->monitor = snapshot->monitor;
+    out->metrics = snapshot->metrics;
     out->audio_levels_supported = snapshot->audio_levels.supported;
     out->mic_level = (AppAudioLevel){.peak = snapshot->audio_levels.mic.peak,
         .rms = snapshot->audio_levels.mic.rms, .fresh = snapshot->audio_levels.mic.fresh,

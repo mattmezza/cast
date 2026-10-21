@@ -412,6 +412,43 @@ int main(void)
     assert(snapshot(a).clip_count == 5 && snapshot(a).asset_count == CAST_PROJECT_ASSET_MAX);
     for (unsigned i = 0; i < CAST_PROJECT_ASSET_MAX; ++i)
         assert(snapshot(a).assets[i].clip_id == snapshot(a).clips[i].id);
+    s = snapshot(a);
+    char focus_id[32];
+    snprintf(focus_id, sizeof focus_id, "%llu", (unsigned long long)s.clips[4].id);
+    const char *focus_asset[] = {"timeline", "assets", "focus", focus_id};
+    assert(!command(a, 4, focus_asset));
+    assert(snapshot(a).revision == s.revision && snapshot(a).dirty == s.dirty);
+    assert(!snapshot(a).asset_count); /* retire prior selection immediately */
+    for (unsigned i = 0; i < 5000; ++i) {
+        project_session_tick(a);
+        if (snapshot(a).asset_count && !snapshot(a).assets[0].pending) break;
+        usleep(1000);
+    }
+    CastProjectSnapshot focused = snapshot(a);
+    assert(focused.asset_count == 4 && focused.assets[0].clip_id == s.clips[4].id);
+    assert(focused.assets[0].waveform_ready && focused.assets[0].peak[0] > 0);
+    assert(focused.assets[1].clip_id == s.clips[0].id);
+    assert(!memcmp(focused.clips, s.clips, sizeof s.clips));
+    assert(!command(a, 4, focus_asset));
+    assert(snapshot(a).assets[0].generation == focused.assets[0].generation);
+    focus_asset[3] = "18446744073709551615";
+    assert(command(a, 4, focus_asset));
+    assert(snapshot(a).assets[0].generation == focused.assets[0].generation);
+    assert(snapshot(a).revision == s.revision);
+    assert(!command(a, 2, undo)); /* focus did not consume a history entry */
+    assert(snapshot(a).clip_count == 4);
+    assert(!command(a, 2, redo));
+    assert(snapshot(a).clip_count == 5);
+    /* Magic-based still import uses the already validated descriptor even when
+     * the filename has an unrelated extension; duration stays a bounded 5s. */
+    static const unsigned char still_png[]={137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,0,4,0,0,0,4,8,2,0,0,0,38,147,9,41,0,0,0,16,73,68,65,84,120,156,99,248,207,192,0,71,12,196,113,0,174,147,15,241,208,95,35,158,0,0,0,0,73,69,78,68,174,66,96,130};
+    FILE *still_file=fopen(bad,"wb");assert(still_file);
+    assert(fwrite(still_png,1,sizeof still_png,still_file)==sizeof still_png);
+    assert(!fclose(still_file));assert(!command(a,2,new_project));
+    const char *image_import[]={"timeline","import",bad,"0"};
+    assert(!command(a,4,image_import));wait_done(a);
+    assert(snapshot(a).clip_count==1 && snapshot(a).media[0].kind==CAST_TIMELINE_IMAGE);
+    assert(snapshot(a).clips[0].duration_ns==UINT64_C(5000000000));
     project_session_close(a->project);
     free(a);
     assert(!unlink(project));

@@ -1067,7 +1067,11 @@ static int run_daemon(Config config, Startup startup)
         }
         panel_transport_check(a->panel, a);
         if (now >= next) {
+            uint64_t tick_started = cast_now_ns();
             tick(a);
+            uint64_t record_drops = a->state.dropped_frames >= a->loop_drops ?
+                a->state.dropped_frames - a->loop_drops : 0;
+            runtime_metrics_tick(&a->metrics, tick_started, cast_now_ns(), a->loop_drops, record_drops);
             next += interval;
             if (next < now) {
                 uint64_t missed = (now - next) / interval + 1;

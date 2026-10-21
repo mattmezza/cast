@@ -277,7 +277,9 @@ static int status(App *a, bool json, char *out, size_t n)
             "\"desktop\":{\"enabled\":%s,\"source\":%s,\"gain\":%.3f},"
             "\"virtual\":{\"enabled\":%s,\"name\":%s},\"readiness\":%s},"
             "\"edition\":\"%s\",\"build_id\":\"%s\",\"workflows\":%s,\"motion\":%s,\"last_error\":%"
-            "s,\"dropped_frames\":%llu}",
+            "s,\"dropped_frames\":%llu,\"performance\":{\"ready\":%s,"
+            "\"tick_hz\":%.3f,\"average_tick_ms\":%.3f,\"maximum_tick_ms\":%.3f,"
+            "\"window_ns\":%llu,\"loop_drops\":%llu,\"recording_drops\":%llu}}",
             CAST_VERSION, backend, cap.capture ? "true" : "false",
             cap.cursor_metadata ? "true" : "false", cap.embedded_cursor ? "true" : "false",
             cap.input ? "true" : "false", cap.region_selection ? "true" : "false",
@@ -309,7 +311,11 @@ static int status(App *a, bool json, char *out, size_t n)
             mic_source, c->mic_gain, c->desktop ? "true" : "false", desktop_source, c->desktop_gain,
             c->virtual_audio ? "true" : "false", virtual_name, audio[0] ? audio : "{}",
             cast_edition_identity()->edition, cast_edition_identity()->build_id, workflows, motion,
-            err, (unsigned long long)s->dropped_frames);
+            err, (unsigned long long)s->dropped_frames, a->metrics.view.ready ? "true" : "false",
+            a->metrics.view.tick_hz, a->metrics.view.average_tick_ms, a->metrics.view.maximum_tick_ms,
+            (unsigned long long)a->metrics.view.window_ns,
+            (unsigned long long)a->metrics.view.loop_drops,
+            (unsigned long long)a->metrics.view.recording_drops);
     } else {
         length = snprintf(
             out, n,

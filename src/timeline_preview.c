@@ -83,13 +83,11 @@ CastTimelinePreview *timeline_preview_open(const CastTimeline *timeline, const C
     if (!timeline || !config) {
         return NULL;
     }
-    CastTimeline t = *timeline;
-    Config c = *config;
-    if (timeline_validate(&t, error, size) || config_validate(&c, error, size)) {
+    if (timeline_validate(timeline, error, size) || config_validate(config, error, size)) {
         return NULL;
     }
-    for (unsigned i = 0; i < t.clip_count; ++i) {
-        if (t.clips[i].capture_locked) {
+    for (unsigned i = 0; i < timeline->clip_count; ++i) {
+        if (timeline->clips[i].capture_locked) {
             if (size) {
                 snprintf(error, size, "preview requires finalized clips");
             }
@@ -103,9 +101,9 @@ CastTimelinePreview *timeline_preview_open(const CastTimeline *timeline, const C
         }
         return NULL;
     }
-    p->timeline = t;
-    p->config = c;
-    p->snapshot.revision = t.revision;
+    p->timeline = *timeline;
+    p->config = *config;
+    p->snapshot.revision = timeline->revision;
     atomic_init(&p->stop, false);
     atomic_init(&p->finished, false);
     atomic_init(&p->serial, 0);
