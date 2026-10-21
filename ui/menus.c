@@ -54,7 +54,12 @@ static void menu_row(cui_context *ui, void *user) {
         .gap = 12, .align_y = CUI_ALIGN_CENTER});
     cui_text(ui, cui_string(row->def->label), 12, fg);
     cui_begin_box(ui, 0, (cui_box){.width = -1, .height = 1}); cui_end_box(ui);
-    cui_text_ex(ui, cui_string(row->def->shortcut), 10, muted, 0, (cui_text_style){.family=1,.monospace=true});
+    const char *shortcut=row->def->shortcut;
+#ifdef __APPLE__
+    char platform_shortcut[64];
+    if(!strncmp(shortcut,"Ctrl+",5)) {snprintf(platform_shortcut,sizeof platform_shortcut,"Cmd+%s",shortcut+5);shortcut=platform_shortcut;}
+#endif
+    cui_text_ex(ui, cui_string(shortcut), 10, muted, 0, (cui_text_style){.family=1,.monospace=true});
     cui_end_box(ui);
 }
 static void dispatch(cui_context *ui, AppState *app, const MenuDef *def, cui_id trigger) {

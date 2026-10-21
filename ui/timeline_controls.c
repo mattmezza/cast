@@ -98,6 +98,16 @@ void app_project_controls(cui_context *ui, const cui_theme *t, const CastProject
     if(button(ui,t,"project-browse","Browse…","cast-folder",blocked || p->busy || p->recording))send(submit,user,"file","open",NULL,NULL);
     if(button(ui,t,"project-save-as","Save as…","cast-save",blocked || p->busy || !p->open))send(submit,user,"file","save",NULL,NULL);
     cui_end_box(ui);
+    if(p->missing_count) {
+        cui_text(ui,cui_string("Missing media"),12,t->danger);
+        for(unsigned i=0;i<p->media_count && i<CAST_TIMELINE_MEDIA_MAX;++i)if(p->media[i].missing) {
+            char media_id[32],button_id[64];snprintf(media_id,sizeof media_id,"%llu",(unsigned long long)p->media[i].id);
+            snprintf(button_id,sizeof button_id,"project-relink-%s",media_id);
+            cui_text(ui,cui_string(p->media[i].label),11,t->muted);
+            if(button(ui,t,button_id,"Locate file…","cast-folder",blocked || p->busy || p->recording))
+                send(submit,user,"file","relink",media_id,NULL);
+        }
+    }
     TimelineView *view=cui_resource_find(ui,cui_id_from(ui,"timeline-view-state"),UINT64_C(0x74696d656c696e65));
     const CastTimelineClip *clip=view?selected(p,view->selected):NULL;
     if(clip) {
@@ -207,7 +217,8 @@ void app_timeline_dock(cui_context *ui, const cui_theme *t, const CastProjectSna
         if (cui_button_ex(ui, cui_id_from(ui, id), t, cui_string(label),
             (cui_button_options){.height = 22, .width = track_width / 6, .font_size = 9.5f,
                 .variant = CUI_BUTTON_GHOST, .disabled = blocked || !p->open})) {
-            char position[32]; snprintf(position, sizeof position, "%llu", (unsigned long long)(extent * i / 5));
+            uint64_t position_ns=extent*i/5;if(position_ns>p->duration_ns)position_ns=p->duration_ns;
+            char position[32]; snprintf(position, sizeof position, "%llu", (unsigned long long)position_ns);
             send(submit, user, "timeline", "seek", position, NULL);
         }
     }

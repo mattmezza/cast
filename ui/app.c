@@ -301,7 +301,7 @@ static void toggle_panel(cui_context *ui, AppState *s, unsigned kind, float widt
     cui_invalidate(ui);
 }
 static void shortcuts(cui_context *ui, AppState *s, float width) {
-    if(s->text_input_owner && cui_focused(ui)==s->text_input_owner)return;
+    bool text_focused=s->text_input_owner && cui_focused(ui)==s->text_input_owner;
     /* Bare character shortcuts must yield to the focused text editor. Semantics
      * are rebuilt later in this frame, so use these stable editor identities. */
     const char *editors[]={"background-from","background-via","background-to","background-fill"};
@@ -315,7 +315,22 @@ static void shortcuts(cui_context *ui, AppState *s, float width) {
             e->ime_composing || e->prefer_character_input) continue;
         if (s->settings.overlay.open || s->panel_sheet.overlay.open || s->source_picker.popup.overlay.open || s->zoom_popup.open || s->discard_requested || s->discard_dialog.overlay.open) continue;
         bool handled = true;
-        if (e->modifiers) continue;
+        unsigned primary=e->modifiers & (CUI_MOD_CTRL|CUI_MOD_META);
+        if(primary && !(e->modifiers & CUI_MOD_ALT)) {
+            bool submitted=false;
+            if(e->key==CUI_KEY_N && !(e->modifiers&CUI_MOD_SHIFT)) {
+                const char *args[]={"project","new"};submitted=app_timeline_submit(s,2,args);
+            } else if(e->key==CUI_KEY_O && !(e->modifiers&CUI_MOD_SHIFT)) {
+                const char *args[]={"file","open"};submitted=app_timeline_submit(s,2,args);
+            } else if(e->key==CUI_KEY_S && !(e->modifiers&CUI_MOD_SHIFT)) {
+                const char *args[]={s->live.project.path[0]?"project":"file","save"};submitted=app_timeline_submit(s,2,args);
+            } else if(e->key==CUI_KEY_Z && !text_focused) {
+                const char *args[]={"timeline",e->modifiers&CUI_MOD_SHIFT?"redo":"undo"};submitted=app_timeline_submit(s,2,args);
+            }
+            if(submitted){cui_consume_event(ui,i);cui_invalidate(ui);}
+            continue;
+        }
+        if (e->modifiers || text_focused) continue;
         if(e->key==CUI_KEY_T) {
             if(!app_request_edit(s,APP_EDIT_NOTES_ACTION,s->live.notes_window_open?"close":"open"))continue;
         } else if(e->key==CUI_KEY_R) {
@@ -1348,6 +1363,15 @@ bool app_timeline_submit(void *user,unsigned argc,const char *const *argv) {
         for(unsigned i=0;i<argc;++i)if(!argv[i] || strlen(argv[i])>=sizeof a->discard_args[i])return false;
         for(unsigned i=0;i<argc;++i)snprintf(a->discard_args[i],sizeof a->discard_args[i],"%s",argv[i]);
         a->discard_argc=argc;a->discard_generation=a->live.generation;a->discard_requested=true;return true;
+    }
+    if(argc==3 && !strcmp(argv[0],"file") && !strcmp(argv[1],"relink")) {
+        FileDialogRequest r={.argc=4,.path_index=3,.filter_count=1};
+        snprintf(r.args[0],sizeof r.args[0],"timeline");snprintf(r.args[1],sizeof r.args[1],"relink");
+        snprintf(r.args[2],sizeof r.args[2],"%s",argv[2]);
+        snprintf(r.title,sizeof r.title,"Locate replacement media");
+        snprintf(r.filters[0].name,sizeof r.filters[0].name,"Video and audio");
+        snprintf(r.filters[0].extensions,sizeof r.filters[0].extensions,"mp4;mkv;mov;webm;wav;flac;mp3;ogg;m4a");
+        return app_request_file(a,&r);
     }
     if(argc==2 && !strcmp(argv[0],"file")) {
         FileDialogRequest r={.argc=3,.path_index=2,.filter_count=1};

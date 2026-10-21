@@ -888,7 +888,7 @@ static void project_discard(void) {
     p.app.live.enabled=true;p.app.live.connected=true;p.app.live.generation=7;
     p.app.live.project.open=true;p.app.live.project.dirty=true;
     const char *args[]={"project","new"};
-    assert(app_timeline_submit(&p.app,2,args));
+    key(&p,CUI_KEY_N,CUI_MOD_CTRL);
     assert(!p.app.extension_requested);settle(&p);
     assert(p.app.discard_dialog.overlay.open);
     click(&p,"project-discard-cancel");assert(!p.app.extension_requested && !p.app.discard_dialog.overlay.open);

@@ -12,6 +12,11 @@ Known project paths autosave to a sibling `.autosave` file; explicit recovery is
 available through `project recover PATH`. Project containers exclude output
 activation, device routing, licensing identity and streaming credentials.
 
+Missing media are listed in the project panel with Locate file controls. Relinking
+probes the replacement asynchronously and rejects incompatible or too-short media
+without changing the project. Project New/Open/Save use Ctrl shortcuts on Linux
+and Command shortcuts on macOS; undo/redo yield to focused text editors.
+
 Import video or audio through the timeline footer. Select a clip to split at the
 playhead, remove or mute it. The left panel exposes start, source in and duration
 in seconds, track and audio gain. Conflicting spans on one track and edits to an
